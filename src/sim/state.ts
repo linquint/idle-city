@@ -158,6 +158,11 @@ export interface GameState {
   schools: number;
   universities: number;
   /**
+   * Transit depots. The fifth type on the 2x2 interleave, and the only civic
+   * building that earns rather than gates — see SERVICES.
+   */
+  depots: number;
+  /**
    * Share of each type's buildings that are actually staffed, in [0, 1].
    *
    * In the save because it is integrated, not derived: a hospital opened ten
@@ -170,6 +175,7 @@ export interface GameState {
   fireStaff: number;
   schoolStaff: number;
   universityStaff: number;
+  depotStaff: number;
   /**
    * Happiness, lagged behind the coverage it is chasing. Same reasoning as the
    * demand signals: the lag is the mechanic, so it has to survive a reload.
@@ -226,6 +232,13 @@ export interface GameState {
    * left on would earn a different amount for reasons the player never chose.
    */
   taxRate: number;
+  /**
+   * Fares off, coverage up, mood up. Persisted policy for the same reason the
+   * tax rate is: it moves income and happiness, so a city reopened on a
+   * different setting from the one it was left on would earn a different amount
+   * for reasons the player never chose.
+   */
+  freeTransport: boolean;
   /** When on, surplus cash is spent on the cheapest available plot, awake or away. */
   autoDevelop: boolean;
   /** Epoch ms of the last save, used to compute time away. */
@@ -267,11 +280,13 @@ export function createState(now = Date.now()): GameState {
     fire: 0,
     schools: 0,
     universities: 0,
+    depots: 0,
     hospitalStaff: 0,
     policeStaff: 0,
     fireStaff: 0,
     schoolStaff: 0,
     universityStaff: 0,
+    depotStaff: 0,
     // An empty city has nobody to be unhappy: coverage is a share of residents,
     // and the share of nobody is everybody. It lags down as the first homes fill.
     happiness: 1,
@@ -284,6 +299,7 @@ export function createState(now = Date.now()): GameState {
     districts: 1,
     earned: 0,
     taxRate: TAX_NEUTRAL,
+    freeTransport: false,
     autoDevelop: false,
     savedAt: now,
   };

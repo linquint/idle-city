@@ -49,6 +49,14 @@ export const PALETTE = {
   schoolRoof: 0x8d7f63,
   university: 0xd6c9a8,
   universityRoof: 0x9a7f4e,
+  // Transport. The depot is a shed and an apron rather than a civic slab, and
+  // the buses that leave it wear the same colour so the two read as one system.
+  depot: 0x3d5a52,
+  // Not another teal: the hospital's roof is mint and the two 2x2 sheds would
+  // read as the same building from the play camera. A transport livery instead
+  // — the one hue nothing else in the city wears.
+  depotRoof: 0xc2d24f,
+  bus: 0x5f8f5a,
   // Zoned land nobody will ever build on: the interior of a deep block, and the
   // civic sites still standing empty. Drawn, or the blocks read as holes.
   courtyard: 0x5b7f57,

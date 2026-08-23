@@ -400,11 +400,12 @@ describe("a building's level is a function of its slot", () => {
     }
   });
 
-  it('is the same city whatever order the operations arrive in', { timeout: 30_000 }, () => {
-    // Every path that reaches the same counts has to reach the same city. Ten
-    // runs, each shuffling how the ticks and the purchases interleave.
-    const skyline = (s: Readonly<GameState>): string =>
-      `${s.homes}/${s.mergedR}/${s.homeLevels.join(',')}`;
+  it('is the same city whatever order the operations arrive in', { timeout: 60_000 }, () => {
+    // A thousand runs, each interleaving its purchases and its ticks
+    // differently, grouped by the counts they land on. Two runs that reached
+    // the same counts by different routes must have built the same city — that
+    // is the whole of what "positions are derived" means, and it is the
+    // property a stored coordinate would break without any other test noticing.
     const layout = new CityLayout().ensure(2);
     const out = createPlacement();
 
@@ -412,27 +413,32 @@ describe("a building's level is a function of its slot", () => {
       const parts: string[] = [];
       for (let slot = 0; slot < s.homes; slot++) {
         const place = layout.place(ZONE.residential, slot, s.mergedR, out);
-        parts.push(`${place.plot}:${place.plots}`);
+        parts.push(`${place.plot}:${place.plots}:${levelAt(s.homeLevels, slot)}`);
       }
       return parts.join('|');
     };
 
-    let reference: string | null = null;
-    for (let seed = 0; seed < 10; seed++) {
-      const game = at({ ...climbing(), districts: 2 });
-      for (let i = 0; i < 3_000; i++) {
-        // A different interleave each run, deterministic per seed.
-        if ((i * 7 + seed * 13) % 5 === 0) game.buildHome();
-        game.advance(0.1);
+    const cities = new Map<string, string>();
+    for (let seed = 0; seed < 1_000; seed++) {
+      const game = at({ ...climbing({ cash: 1e9 }), districts: 2 });
+      // A different interleave per seed, deterministic and cheap: sixty
+      // operations, each either a purchase or a slice of time.
+      let roll = seed * 2_654_435_761;
+      for (let i = 0; i < 60; i++) {
+        roll = (roll * 1_664_525 + 1_013_904_223) >>> 0;
+        if (roll % 3 === 0) game.buildHome();
+        else game.catchUp(30);
+        Object.assign(game.state, { cash: 1e9 });
       }
-      // Then drive every run to the same finished state.
-      for (let i = 0; i < 400; i++) {
-        game.buildHome();
-        game.catchUp(60);
-      }
-      const shape = `${skyline(game.state)} ${positions(game.state)}`;
-      if (reference === null) reference = shape;
-      else expect(shape).toBe(reference);
+      const s = game.state;
+      const key = `${s.homes}/${s.mergedR}/${s.homeLevels.join(',')}`;
+      const shape = positions(s);
+      const seen = cities.get(key);
+      if (seen === undefined) cities.set(key, shape);
+      else expect(shape).toBe(seen);
     }
+    // And the runs really did land on more than one city, or this proves
+    // nothing at all.
+    expect(cities.size).toBeGreaterThan(1);
   });
 });

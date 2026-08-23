@@ -1,16 +1,36 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { Cars } from '../src/render/cars';
+import { CityLayout } from '../src/sim/layout';
 import {
+  CIVIC_SERVICES,
+  FREE_TRANSPORT_REACH,
   HAPPINESS_TAU,
   LEVELS,
   MAX_DISTRICTS,
+  SERVICES,
   TAX_NEUTRAL,
   TAX_STEPS,
 } from '../src/sim/config';
-import { happinessTarget, income, taxStep } from '../src/sim/economy';
+import {
+  civicSiteCapacity,
+  demandTargets,
+  fareIncome,
+  happinessTarget,
+  happinessTerms,
+  homeCapacity,
+  income,
+  labourReach,
+  residents,
+  riders,
+  siteCapacity,
+  taxStep,
+  transitCoverage,
+} from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { migrate } from '../src/sim/save';
 import { createState, type GameState } from '../src/sim/state';
-import { housed, served, trading } from './levels';
+import { housed, making, served, trading } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game(state(patch));
@@ -118,5 +138,229 @@ describe('the tax rate', () => {
     }
     expect(high.state.happiness).toBeLessThan(low.state.happiness);
     expect(income(high.state)).toBeGreaterThan(income(low.state));
+  });
+});
+
+/**
+ * Transport: the first civic building in the game that earns.
+ */
+describe('the transit depot', () => {
+  const transit = SERVICES.find((s) => s.key === 'transit');
+
+  /**
+   * A city big enough for its network to be short of it.
+   *
+   * 40 towers is 5,600 people against a depot's 2,200, so coverage has room to
+   * move — a district that is already covered outright would hide both of the
+   * things transport does behind a cap at 1.
+   */
+  const withDepot = (patch: Partial<GameState> = {}): GameState =>
+    state({
+      ...housed(40, 2),
+      ...trading(10),
+      ...served(),
+      districts: 5,
+      depots: 1,
+      depotStaff: 1,
+      happiness: 1,
+      occupancyR: 1,
+      occupancyC: 1,
+      ...patch,
+    });
+
+  it('joins the 2x2 pool as a fifth type, and the interleave follows', () => {
+    expect(CIVIC_SERVICES.map((s) => s.key)).toContain('transit');
+    expect(CIVIC_SERVICES.length).toBe(5);
+    for (const districts of [1, 2, 5, 9, MAX_DISTRICTS]) {
+      const s = state({ districts });
+      const shared = CIVIC_SERVICES.reduce((sum, svc) => sum + siteCapacity(s, svc.key), 0);
+      // Nothing stranded and nothing double-counted: the five divide the list.
+      expect(shared).toBe(civicSiteCapacity(s));
+    }
+  });
+
+  it('leaves a young city able to open one of everything', () => {
+    // Six sites in the first district against five types. The gate that has to
+    // stay open is the *land* one — the population gate is the pacing lever and
+    // is supposed to bite — so this asks whether a district has room, not
+    // whether a city can afford it.
+    const one = state({ districts: 1 });
+    for (const service of CIVIC_SERVICES) {
+      expect(siteCapacity(one, service.key)).toBeGreaterThanOrEqual(1);
+    }
+    // And the spare site goes to the type a young city needs most of.
+    expect(siteCapacity(one, 'hospital')).toBe(2);
+  });
+
+  it('earns fares, which no other civic building does', () => {
+    const s = withDepot();
+    expect(fareIncome(s)).toBeGreaterThan(0);
+    // Scaled by covered riders, and capped at the people who actually live there.
+    expect(riders(s)).toBeLessThanOrEqual(residents(s));
+    const bigger = withDepot({ depots: 2 });
+    expect(fareIncome(bigger)).toBeGreaterThan(fareIncome(s));
+    // The rest of the civic list earns nothing at all, which is the rule this
+    // one breaks: with no depot there are no fares.
+    expect(fareIncome(withDepot({ depots: 0, depotStaff: 0 }))).toBe(0);
+    expect(income(s)).toBeGreaterThan(income(withDepot({ depots: 0, depotStaff: 0 })));
+  });
+
+  it('carries no happiness weight at all', () => {
+    expect(transit?.weight).toBe(0);
+    expect(happinessTerms(withDepot()).some((t) => t.key === 'transit')).toBe(false);
+    // The four weights still sum to exactly one.
+    const total = happinessTerms(withDepot()).reduce((sum, t) => sum + t.weight, 0);
+    expect(total).toBeCloseTo(1, 12);
+    // And opening one changes happiness by nothing.
+    const bare = withDepot({ depots: 0, depotStaff: 0 });
+    expect(happinessTarget(withDepot())).toBeCloseTo(happinessTarget(bare), 12);
+  });
+
+  it('lifts commercial and industrial demand rather than income', () => {
+    // A worker-rich city: plenty of people, not enough jobs. That is when a
+    // network is worth having, and it is the only time the term is non-zero.
+    const rich = { ...housed(20, LEVELS - 1), ...trading(2), ...making(1) };
+    const without = state({ ...rich, ...served(), districts: 3, occupancyR: 1, occupancyC: 1, occupancyI: 1, happiness: 1 });
+    const with_ = state({ ...without, depots: 3, depotStaff: 1 });
+    expect(labourReach(without)).toBe(0);
+    expect(labourReach(with_)).toBeGreaterThan(0);
+
+    const before = demandTargets(without);
+    const after = demandTargets(with_);
+    expect(after.c).toBeGreaterThan(before.c);
+    expect(after.i).toBeGreaterThan(before.i);
+    // And residential is the one it does *not* lift: the same people now fill
+    // more jobs, so another house is a slightly weaker argument.
+    expect(after.r).toBeLessThanOrEqual(before.r);
+  });
+});
+
+describe('free transport', () => {
+  const running2 = (patch: Partial<GameState> = {}): GameState =>
+    state({
+      ...housed(40, 2),
+      ...trading(10),
+      ...served(),
+      districts: 5,
+      depots: 1,
+      depotStaff: 1,
+      happiness: 1,
+      occupancyR: 1,
+      occupancyC: 1,
+      ...patch,
+    });
+
+  it('takes fares to exactly zero and strictly raises coverage', () => {
+    const paid = running2({ freeTransport: false });
+    const free = running2({ freeTransport: true });
+    expect(fareIncome(paid)).toBeGreaterThan(0);
+    expect(fareIncome(free)).toBe(0);
+    expect(transitCoverage(free)).toBeGreaterThan(transitCoverage(paid));
+    expect(transitCoverage(free)).toBeCloseTo(
+      Math.min(1, transitCoverage(paid) * (1 + FREE_TRANSPORT_REACH)),
+      9,
+    );
+  });
+
+  it('is a trade rather than an upgrade', () => {
+    // Short of its services, so the mood term has somewhere to go: a city
+    // already sitting at 1 cannot be made happier by anything.
+    const short = { hospitals: 1, police: 1, fire: 1, parks: 2 };
+    const paid = running2({ ...short, freeTransport: false });
+    const free = running2({ ...short, freeTransport: true });
+    // Bought: mood, and the labour a wider network reaches.
+    expect(happinessTarget(free)).toBeGreaterThan(happinessTarget(paid));
+    expect(labourReach(free)).toBeGreaterThanOrEqual(labourReach(paid));
+    // Paid for: every penny of the fares, at the same happiness.
+    const level = { ...short, happiness: 0.8 };
+    expect(income(running2({ ...level, freeTransport: true }))).toBeLessThan(
+      income(running2({ ...level, freeTransport: false })),
+    );
+  });
+
+  it('applies identically in one long step and in many short ones', () => {
+    for (const free of [false, true]) {
+      const patch = {
+        ...housed(6, LEVELS - 1),
+        ...trading(6, LEVELS - 1),
+        ...served(),
+        districts: MAX_DISTRICTS,
+        depots: 4,
+        depotStaff: 1,
+        freeTransport: free,
+        cash: 0,
+        happiness: 0.5,
+      };
+      const away = at(patch);
+      const watched = at(patch);
+      away.catchUp(3_600);
+      for (let i = 0; i < 3_600; i++) watched.catchUp(1);
+      expect(Math.abs(away.state.cash - watched.state.cash)).toBeLessThan(
+        Math.max(1, watched.state.cash * 0.01),
+      );
+      expect(away.state.happiness).toBeCloseTo(watched.state.happiness, 6);
+    }
+  });
+
+  it('defaults off, with no depots, for a save that predates it', () => {
+    const back = migrate(
+      { version: 5, homes: 8, districts: 1, hospitals: 1, hospitalStaff: 1 },
+      0,
+    )!;
+    expect(back.freeTransport).toBe(false);
+    expect(back.depots).toBe(0);
+    expect(back.depotStaff).toBe(0);
+    expect(back.taxRate).toBe(TAX_NEUTRAL);
+    // And the counts it did carry are inside the plot capacities.
+    expect(back.homes).toBeLessThanOrEqual(homeCapacity(back));
+  });
+});
+
+/**
+ * Buses are a readout of `depots`, in exactly the way a building is a readout
+ * of `homes`. Nothing about one reaches the save.
+ */
+describe('the bus fleet', () => {
+  const drive = (patch: Partial<GameState>): Map<string, number> => {
+    const root = new THREE.Scene();
+    const cars = new Cars(root, new CityLayout(), true);
+    const s = state({ ...housed(24, 1), ...trading(12), districts: 2, occupancyR: 1, ...patch });
+    cars.sync(s);
+    // A few frames, so routing has happened and the culling has settled.
+    for (let i = 0; i < 40; i++) cars.update(0.1, new THREE.Vector3(0, 0, 0), 0);
+    const found = new Map<string, number>();
+    root.traverse((object) => {
+      if (object instanceof THREE.InstancedMesh && object.name !== '') {
+        found.set(object.name, object.count);
+      }
+    });
+    return found;
+  };
+
+  it('puts buses on the road only once a depot is staffed', () => {
+    expect(drive({ depots: 0, depotStaff: 0 }).get('traffic:bus')).toBe(0);
+    // Built but not yet staffed is a depot with no drivers, and the view has to
+    // agree with the ramp the simulation is running.
+    expect(drive({ depots: 2, depotStaff: 0 }).get('traffic:bus')).toBe(0);
+    expect(drive({ depots: 2, depotStaff: 1 }).get('traffic:bus') ?? 0).toBeGreaterThan(0);
+  });
+
+  it('takes them out of the car pool rather than adding a second fleet', () => {
+    const none = drive({ depots: 0, depotStaff: 0 });
+    const some = drive({ depots: 2, depotStaff: 1 });
+    const total = (m: Map<string, number>): number =>
+      (m.get('traffic:car') ?? 0) + (m.get('traffic:bus') ?? 0);
+    expect(total(some)).toBe(total(none));
+    expect(some.get('traffic:car') ?? 0).toBeLessThan(none.get('traffic:car') ?? 0);
+  });
+
+  it('keeps nothing about a bus in the save', () => {
+    const s = state({ ...housed(24, 1), depots: 3, depotStaff: 1, districts: 2 });
+    const before = JSON.stringify(s);
+    const cars = new Cars(new THREE.Scene(), new CityLayout(), true);
+    cars.sync(s);
+    for (let i = 0; i < 20; i++) cars.update(0.1, new THREE.Vector3(0, 0, 0), 0);
+    expect(JSON.stringify(s)).toBe(before);
+    for (const key of Object.keys(s)) expect(key.toLowerCase()).not.toContain('bus');
   });
 });

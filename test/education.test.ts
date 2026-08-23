@@ -189,16 +189,23 @@ describe('the education gate on levelling', () => {
 
 describe('education land', () => {
   it('gives schools the fourth slot of the 2x2 interleave', () => {
-    expect(CIVIC_SERVICES.map((s) => s.key)).toEqual(['hospital', 'police', 'fire', 'school']);
+    expect(CIVIC_SERVICES.map((s) => s.key)).toEqual([
+      'hospital',
+      'police',
+      'fire',
+      'school',
+      'transit',
+    ]);
     for (const districts of [1, 2, 5, 9]) {
       const s = state({ districts });
       const shared = CIVIC_SERVICES.reduce((sum, svc) => sum + siteCapacity(s, svc.key), 0);
       // Divides the shared list exactly: nothing stranded, nothing shared.
       expect(shared).toBe(civicSiteCapacity(s));
     }
-    // The first district's six sites split 2/2/1/1 across the four types.
+    // The first district's six sites split 2/1/1/1/1 across the five types, so
+    // a young city can open one of each and still have a site to spare.
     const one = state({ districts: 1 });
-    expect(CIVIC_SERVICES.map((svc) => siteCapacity(one, svc.key))).toEqual([2, 2, 1, 1]);
+    expect(CIVIC_SERVICES.map((svc) => siteCapacity(one, svc.key))).toEqual([2, 1, 1, 1, 1]);
   });
 
   it('gives the university its own list, one to a district', () => {

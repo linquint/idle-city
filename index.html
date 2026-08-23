@@ -111,6 +111,10 @@
         <span>University</span><span class="built" id="build-university-built">0/1</span>
         <span class="cost" id="build-university-cost">7.2K</span>
       </button>
+      <button class="civic transit" id="build-transit" type="button">
+        <span>Depot</span><span class="built" id="build-transit-built">0/1</span>
+        <span class="cost" id="build-transit-cost">260</span>
+      </button>
     </div>
 
     <button id="annex" class="annex" type="button">
@@ -174,6 +178,16 @@
         <span class="covers" id="svc-parks-covers">0 of 0 homes</span></div>
     </div>
 
+    <p class="cap">Transport</p>
+    <div class="services" id="transit" role="img">
+      <div class="svc"><span class="k">Depots</span>
+        <span class="built" id="svc-transit-built">0/0</span>
+        <span class="covers" id="svc-transit-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Fares</span>
+        <span class="built" id="transit-fares">0</span>
+        <span class="covers" id="transit-labour">no spare labour reached</span></div>
+    </div>
+
     <p class="cap">Education</p>
     <div class="services" id="education" role="img">
       <div class="svc"><span class="k">Schools</span>
@@ -194,6 +208,14 @@
     <div class="svc"><span class="k">Ledger</span>
       <span class="built" id="tax-income">x1.00</span>
       <span class="covers" id="tax-mood">no effect on mood</span></div>
+
+    <p class="cap">Free transport</p>
+    <button class="ghost wide" id="free-transport" type="button" aria-pressed="false">
+      Free transport · off
+    </button>
+    <div class="svc"><span class="k">Trade</span>
+      <span class="built" id="free-fares">0/s in fares</span>
+      <span class="covers" id="free-effect">reach +33%, mood +5</span></div>
   </div>
 
   </div>

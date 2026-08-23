@@ -505,6 +505,13 @@ button.civic.school { border-color: rgba(99, 198, 168, 0.4); }
 button.civic.school:hover:not(:disabled) { border-color: var(--signal); }
 button.civic.school .cost { color: var(--signal); }
 
+/* Transport is the one civic type that earns rather than gates, so it reads in
+   its own colour rather than in the civic blue the gating four share. */
+button.civic.transit { border-color: rgba(95, 191, 164, 0.4); }
+button.civic.transit:hover:not(:disabled) { border-color: #5fbfa4; }
+button.civic.transit .cost { color: #5fbfa4; }
+button.civic.transit:disabled { border-color: #1c2739; }
+
 button.civic:disabled { border-color: #1c2739; }
 button.civic:disabled .cost,
 button.civic:disabled .built { color: var(--off); }
@@ -527,6 +534,8 @@ button.ghost {
   color: var(--dim);
   justify-content: center;
 }
+/* A toggle that owns its row rather than sharing a split with another. */
+button.ghost.wide { width: 100%; margin-bottom: 10px; }
 button.ghost[aria-pressed='true'] {
   border-style: solid;
   border-color: var(--signal);

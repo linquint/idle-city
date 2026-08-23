@@ -715,7 +715,7 @@ export const PRICE_SURCHARGE_MAX = 0.6;
 
 export interface Service {
   /** Matches the GameState counter, the staffing scalar and the coverage key. */
-  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university';
+  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university' | 'transit';
   readonly name: string;
   readonly buildLabel: string;
   /** How the HUD names this service's coverage when it is the binding one. */
@@ -742,8 +742,8 @@ export interface Service {
  * outright below HAPPINESS_MIN_BUILD — or, for the two education types, it
  * decides how tall the city is allowed to build.
  *
- * Four of the five stand on a 2x2 site, of which a district has six, so those
- * types share 1.5 buildings a district. The university is the exception: its own
+ * Five of the six stand on a 2x2 site, of which a district has six, so those
+ * types share 1.2 buildings a district. The university is the exception: its own
  * 3x3 site, exactly one to a district, which is what makes it a landmark rather
  * than another row in the panel.
  *
@@ -764,6 +764,23 @@ export const SERVICES: readonly Service[] = [
    */
   { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    capacity: 700,   base: 180,    growth: 1.35, weight: 0,    span: 2 },
   /**
+   * The transit depot: the fifth 2x2 type, and the first civic building in the
+   * game that *earns*.
+   *
+   * Every other civic building gates — coverage feeds happiness, or it decides
+   * how tall the city may build — and a reader who has learned that rule will
+   * assume this one gates too. It does not: it takes fares, it raises the
+   * labour a district can reach, and it carries no happiness weight at all.
+   * See FARE_PER_RIDER and TRANSIT_WORKFORCE for the two, and the weight of 0
+   * below for the third: the four happiness weights were calibrated to sum to
+   * exactly 1 two cycles ago, and a fifth would re-open that calibration to buy
+   * something transport already has two better routes to.
+   *
+   * 2,200 against a hospital's 900: a network reaches further than a building,
+   * and a district that has bought one depot should feel covered by it.
+   */
+  { key: 'transit',    name: 'Transit',     buildLabel: 'Open depot',          coverLabel: 'Transit coverage',   capacity: 2_200, base: 260,    growth: 1.35, weight: 0,    span: 2 },
+  /**
    * Five schools' worth of teaching in one building, on nine plots, one to a
    * district, at forty times a school's opening price and compounding half again
    * as fast. Every one of those is doing the same job: making a university a
@@ -780,7 +797,7 @@ export const EDUCATION_SERVICES: readonly Service[] = SERVICES.filter(
   (s) => s.key === 'school' || s.key === 'university',
 );
 
-/** The four that share the 2x2 civic sites, in interleave order. */
+/** The five that share the 2x2 civic sites, in interleave order. */
 export const CIVIC_SERVICES: readonly Service[] = SERVICES.filter((s) => s.span === 2);
 
 /** Civic buildings compound like everything else, and faster than housing. */
@@ -886,6 +903,68 @@ export const RECREATION_WEIGHT = 0.18;
  */
 export const PARK_BASE = 45;
 export const PARK_GROWTH = 1.18;
+
+// ----------------------------------------------------------------- transport
+
+/**
+ * Cash per covered rider per second.
+ *
+ * Against RENT's 0.14 a resident: a fare is about a seventh of what the same
+ * person pays in rent, so a depot covering its own district adds roughly 14% to
+ * the ledger. Enough that the first one is worth buying for the money alone,
+ * far short of making transport the way a city earns.
+ *
+ * Riders are capped at the people who actually live there rather than at the
+ * housing stock, which is the one place transport differs from every other
+ * coverage: a hospital is sized to the houses it stands among whether or not
+ * they are full, and a bus is only paid by somebody on it.
+ */
+export const FARE_PER_RIDER = 0.02;
+
+/**
+ * How much further a fully covered workforce can reach for a job.
+ *
+ * The second thing a depot does, and the one that feeds the demand cycle rather
+ * than the ledger: a network turns residents into workers an employer can
+ * actually hire, so a covered district has a quarter more labour available than
+ * its population alone would suggest. That spare labour is then an argument for
+ * premises — see `demandTargets`, where it lifts commercial and industrial
+ * demand rather than income.
+ */
+export const TRANSIT_WORKFORCE = 0.25;
+
+/**
+ * How much of the spare labour a network reaches counts as an argument for
+ * premises.
+ *
+ * A coefficient rather than the raw pool, because the raw pool is enormous. A
+ * mature worker-rich city has thousands of workers with nowhere to work, and
+ * `demandScale` is a district's labour pool — so feeding the whole surplus in
+ * doubles commercial demand and pins it. Measured over 24 hours: at 1.0 the
+ * discount-chasing policy sat at +1 commercial for 628 minutes of the run,
+ * against a build that pinned nothing at all. At 0.35 the term is worth about
+ * 0.14 of a demand point to that same city — a lift a player can see on the
+ * bar, and nothing pins.
+ */
+export const TRANSIT_LABOUR_DRAW = 0.35;
+
+/**
+ * What free transport does, and what it costs.
+ *
+ * A policy trade, not a strict upgrade: fares fall to zero — which is most of a
+ * depot's direct return — and in exchange the same depots reach a third further
+ * because people ride when it is free, and the city is measurably happier for
+ * it. What the coverage buys is labour reach, which lifts commercial and
+ * industrial demand; what the mood buys is income through the multiplier and
+ * headroom under HAPPINESS_MIN_BUILD.
+ *
+ * The mood term is added to the happiness *target*, exactly as the tax term and
+ * the fire term are, and for the same reason: the four happiness weights sum to
+ * 1 and go on doing so. This is a modifier on the coverage a city has earned,
+ * not a fifth thing to be covered by.
+ */
+export const FREE_TRANSPORT_REACH = 0.33;
+export const FREE_TRANSPORT_MOOD = 0.05;
 
 // -------------------------------------------------------------------- policy
 

@@ -476,6 +476,7 @@ export class Game {
     s.schoolStaff = s.schools > 0 ? s.schoolStaff + (1 - s.schoolStaff) * k : 0;
     s.universityStaff =
       s.universities > 0 ? s.universityStaff + (1 - s.universityStaff) * k : 0;
+    s.depotStaff = s.depots > 0 ? s.depotStaff + (1 - s.depotStaff) * k : 0;
   }
 
   /**
@@ -820,6 +821,9 @@ export class Game {
     } else if (service.key === 'school') {
       s.schoolStaff = staffAfterBuild(s.schoolStaff, s.schools);
       s.schools++;
+    } else if (service.key === 'transit') {
+      s.depotStaff = staffAfterBuild(s.depotStaff, s.depots);
+      s.depots++;
     } else {
       s.universityStaff = staffAfterBuild(s.universityStaff, s.universities);
       s.universities++;
@@ -882,6 +886,11 @@ export class Game {
    */
   setTaxRate(step: number): void {
     this.inner.taxRate = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(step)));
+  }
+
+  /** Fares off, reach up, mood up. A trade, not an upgrade — see the constants. */
+  setFreeTransport(on: boolean): void {
+    this.inner.freeTransport = on;
   }
 
   reset(): void {

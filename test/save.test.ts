@@ -192,6 +192,7 @@ describe('migration', () => {
       fire: 1e9,
       schools: 1e9,
       universities: 1e9,
+      depots: 1e9,
       homes: 1e9,
       industry: 1e9,
     })!;

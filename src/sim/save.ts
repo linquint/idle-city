@@ -300,11 +300,15 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // built one is in.
     schools: count(version >= 5 ? r['schools'] : undefined),
     universities: count(r['universities']),
+    // A save older than v6 has no transport at all, which is the state a city
+    // that has never opened a depot is in.
+    depots: count(r['depots']),
     hospitalStaff: share(r['hospitalStaff'], 0),
     policeStaff: share(r['policeStaff'], 0),
     fireStaff: share(r['fireStaff'], 0),
     schoolStaff: share(r['schoolStaff'], 0),
     universityStaff: share(r['universityStaff'], 0),
+    depotStaff: share(r['depotStaff'], 0),
     // Filled in below, once the counts it is computed from are legal.
     happiness: 0,
     demandR: demand(r['demandR']),
@@ -325,6 +329,9 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
       0,
       Math.min(TAX_STEPS.length - 1, Math.floor(num(r['taxRate'], TAX_NEUTRAL))),
     ),
+    // Off, like every other policy a save may predate. Free transport is the
+    // one setting that would silently change what a reopened city earns.
+    freeTransport: r['freeTransport'] === true,
     autoDevelop: r['autoDevelop'] === true,
     savedAt: num(r['savedAt'], now),
   };
@@ -368,6 +375,7 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     else if (service.key === 'police') state.police = Math.min(state.police, allowed);
     else if (service.key === 'fire') state.fire = Math.min(state.fire, allowed);
     else if (service.key === 'school') state.schools = Math.min(state.schools, allowed);
+    else if (service.key === 'transit') state.depots = Math.min(state.depots, allowed);
     else state.universities = Math.min(state.universities, allowed);
   }
 

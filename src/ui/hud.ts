@@ -9,6 +9,8 @@ import {
   LEVEL_HOUSING,
   SHOP_JOBS,
   SHOP_TRIPS,
+  FREE_TRANSPORT_MOOD,
+  FREE_TRANSPORT_REACH,
   TAX_STEPS,
   ZONE_LEVEL_NAMES,
   LEVELS,
@@ -30,7 +32,9 @@ import {
   canBuildShop,
   demandTargets,
   educationCoverage,
+  fareIncome,
   homeBlocker,
+  labourReach,
   homeCapacity,
   homeCost,
   income,
@@ -44,6 +48,7 @@ import {
   plotsOf,
   promotionBlocker,
   taxStep,
+  transitCoverage,
   zoneOf,
   priceModifier,
   population,
@@ -202,6 +207,12 @@ export class Hud {
     taxSteps: el('tax-steps'),
     taxIncome: el('tax-income'),
     taxMood: el('tax-mood'),
+    freeTransport: el<HTMLButtonElement>('free-transport'),
+    freeFares: el('free-fares'),
+    freeEffect: el('free-effect'),
+    transit: el('transit'),
+    transitFares: el('transit-fares'),
+    transitLabour: el('transit-labour'),
   };
 
   /**
@@ -286,6 +297,11 @@ export class Hud {
     for (const { service, button } of this.serviceNodes) {
       button.addEventListener('click', () => this.act(() => this.game.buildService(service)));
     }
+
+    n.freeTransport.addEventListener('click', () => {
+      this.game.setFreeTransport(!this.game.state.freeTransport);
+      this.paint();
+    });
 
     n.auto.addEventListener('click', () => {
       this.game.setAutoDevelop(!this.game.state.autoDevelop);
@@ -524,6 +540,22 @@ export class Hud {
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
+    // Transport gets a block of its own for the same reason education does: it
+    // answers a different question from happiness. What it says is what the
+    // network earns and what it reaches, which are its two jobs.
+    const fares = fareIncome(s);
+    const spare = labourReach(s);
+    n.transitFares.textContent = s.freeTransport ? 'free' : `${fmt(fares)}/s`;
+    n.transitLabour.textContent =
+      spare < 1
+        ? 'no spare labour reached'
+        : `reaches ${fmtInt(spare)} spare workers`;
+    n.transit.setAttribute(
+      'aria-label',
+      `Transport: ${s.depots} depots covering ${Math.round(transitCoverage(s) * 100)} percent, ` +
+        (s.freeTransport ? 'fares free' : `${Math.round(fares * 10) / 10} per second in fares`),
+    );
+
     // Education gets its own panel because it answers a different question: not
     // "is the city happy" but "how tall is it allowed to build". The row that
     // matters is the last one — what the next level costs in coverage.
@@ -565,6 +597,17 @@ export class Hud {
       step.mood === 0
         ? 'no effect on mood'
         : `${step.mood > 0 ? '+' : '−'}${Math.round(Math.abs(step.mood) * 100)} points of mood`;
+
+    // A trade rather than an upgrade, so the panel states both sides of it: what
+    // the fares are worth is what turning them off costs.
+    n.freeTransport.textContent = `Free transport · ${s.freeTransport ? 'on' : 'off'}`;
+    n.freeTransport.setAttribute('aria-pressed', String(s.freeTransport));
+    n.freeFares.textContent = s.freeTransport
+      ? 'fares waived'
+      : `${fmt(fareIncome(s))}/s in fares`;
+    n.freeEffect.textContent = `reach +${Math.round(FREE_TRANSPORT_REACH * 100)}%, mood +${Math.round(
+      FREE_TRANSPORT_MOOD * 100,
+    )}`;
   }
 
   private paintBuild(s: Readonly<GameState>): void {

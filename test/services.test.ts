@@ -226,8 +226,14 @@ describe('the build gate', () => {
     // An arcology stands on two plots and holds both plots' worth of people.
     const people = 19 * (LEVEL_HOUSING[3] ?? 0);
     expect(residents(large)).toBe(people);
+    // One ahead of need, or the sites the land offers, whichever runs out
+    // first. With five types sharing six sites a district it is the land that
+    // does, which is the point of the second clamp rather than a bug in it.
     expect(serviceAllowed(large, hospital)).toBe(
-      Math.floor(people / hospital.capacity) + 1,
+      Math.min(
+        Math.floor(people / hospital.capacity) + 1,
+        siteCapacity(large, hospital.key),
+      ),
     );
   });
 

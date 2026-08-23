@@ -16,6 +16,9 @@ import {
   EXPORT_PER_DISTRICT,
   EXTINGUISH_MAX,
   EXTINGUISH_MIN,
+  FARE_PER_RIDER,
+  FREE_TRANSPORT_MOOD,
+  FREE_TRANSPORT_REACH,
   FIRE_SUPPRESSION,
   FIRE_UNHAPPINESS,
   HAPPINESS_FLOOR,
@@ -62,6 +65,8 @@ import {
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
   TAX_STEPS,
+  TRANSIT_LABOUR_DRAW,
+  TRANSIT_WORKFORCE,
   WORKING_SHARE,
   type Service,
 } from './config.ts';
@@ -370,7 +375,7 @@ export const promoteRate = (s: GameState, kind: ZoneKind): number =>
 /** Civic buildings, of every kind — the three that gate happiness and the two
  *  that gate levelling. */
 export const civicBuildings = (s: GameState): number =>
-  s.hospitals + s.police + s.fire + s.schools + s.universities;
+  s.hospitals + s.police + s.fire + s.schools + s.universities + s.depots;
 
 /**
  * Housing land, in *plots*. Civic buildings no longer come out of it: they stand
@@ -533,6 +538,7 @@ export const serviceCount = (s: GameState, key: ServiceKey): number =>
   : key === 'police' ? s.police
   : key === 'fire' ? s.fire
   : key === 'school' ? s.schools
+  : key === 'transit' ? s.depots
   : s.universities;
 
 /** How much of a type's payroll is actually filled, in [0, 1]. See `staffStep`. */
@@ -541,6 +547,7 @@ export const staffing = (s: GameState, key: ServiceKey): number =>
   : key === 'police' ? s.policeStaff
   : key === 'fire' ? s.fireStaff
   : key === 'school' ? s.schoolStaff
+  : key === 'transit' ? s.depotStaff
   : s.universityStaff;
 
 /**
@@ -579,9 +586,49 @@ export const serviceAllowed = (s: GameState, service: Service): number =>
 export const serviceNeeded = (s: GameState, service: Service): number =>
   Math.ceil(population(s) / service.capacity);
 
-/** Residents a service actually reaches, staffing included. */
-export const covered = (s: GameState, service: Service): number =>
-  serviceCount(s, service.key) * staffing(s, service.key) * service.capacity;
+/**
+ * Residents a service actually reaches, staffing included.
+ *
+ * One special case, and it is the free-transport policy: the same depots reach
+ * a third further when nobody has to pay to board, because people ride when it
+ * is free. It belongs here rather than in a transit-only read so that the
+ * services panel, the coverage the labour term uses and the riders the fares
+ * are taken from all say the same number.
+ */
+export const covered = (s: GameState, service: Service): number => {
+  const reach = serviceCount(s, service.key) * staffing(s, service.key) * service.capacity;
+  return service.key === 'transit' && s.freeTransport ? reach * (1 + FREE_TRANSPORT_REACH) : reach;
+};
+
+/** The transit service, or undefined if the table is ever built without one. */
+export const TRANSIT = SERVICES.find((service) => service.key === 'transit');
+
+/** Share of the city's housing stock a transit network reaches, in [0, 1]. */
+export const transitCoverage = (s: GameState): number =>
+  TRANSIT ? coverage(s, TRANSIT) : 0;
+
+/**
+ * People actually on the buses: the network's reach, capped at who lives there.
+ *
+ * The one coverage measured against `residents` rather than `population`. Every
+ * other service is sized to the housing stock it stands among whether or not it
+ * is full — see `population` — but a fare is paid by somebody on a bus, and an
+ * empty district's depot carries nobody.
+ */
+export const riders = (s: GameState): number =>
+  TRANSIT ? Math.min(covered(s, TRANSIT), residents(s)) : 0;
+
+/**
+ * Fare income, per second, before tax.
+ *
+ * The first civic building in this game that earns anything at all. Every other
+ * one gates — coverage feeds happiness, or education decides how tall the city
+ * may build — so a reader arriving here with that rule in hand will assume the
+ * depot gates too, and it does not. Free transport takes this to exactly zero,
+ * which is the whole of what the policy costs.
+ */
+export const fareIncome = (s: GameState): number =>
+  s.freeTransport ? 0 : riders(s) * FARE_PER_RIDER;
 
 /**
  * Share of the population a service reaches, capped at everybody.
@@ -684,7 +731,8 @@ export const happinessTarget = (s: GameState): number => {
   // than as a fifth weight. The four weights sum to exactly 1 and go on doing
   // so; what a tax rate changes is how the city feels about the coverage it has,
   // which is a different statement from how much that coverage is worth.
-  return Math.max(0, Math.min(1, covered + taxStep(s).mood) - FIRE_UNHAPPINESS * s.fires.length);
+  const policy = taxStep(s).mood + (s.freeTransport ? FREE_TRANSPORT_MOOD : 0);
+  return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
 
 /**
@@ -860,6 +908,34 @@ export const demandScale = (s: GameState): number => DEMAND_SCALE * cityScale(s)
 
 export const workers = (s: GameState): number => residents(s) * WORKING_SHARE;
 
+/**
+ * Workers an employer can actually hire: the labour force, plus the reach a
+ * transit network adds to it.
+ *
+ * The demand-side half of what a depot buys. A resident two districts from the
+ * nearest works is not labour that works can draw on, and a network is what
+ * turns them into it — so a covered city has up to a quarter more workers
+ * available than its population alone accounts for (TRANSIT_WORKFORCE).
+ */
+export const reachableWorkers = (s: GameState): number =>
+  workers(s) * (1 + TRANSIT_WORKFORCE * transitCoverage(s));
+
+/**
+ * Spare labour the network can deliver to a new employer.
+ *
+ * The term transport feeds into the cycle, and it is deliberately on the
+ * commercial and industrial side rather than on income: a district with people
+ * in it and nowhere for them to work is an argument for premises, and a bus
+ * route is what makes that argument reach. Zero for a job-rich city — a young
+ * one has no spare labour — and zero with no depots, so it turns on exactly
+ * when the two conditions that justify it are both true.
+ *
+ * Multiplied by the coverage as well as counted through it, because the network
+ * has to reach the *employer* too, not only the worker.
+ */
+export const labourReach = (s: GameState): number =>
+  Math.max(0, reachableWorkers(s) - jobs(s)) * transitCoverage(s) * TRANSIT_LABOUR_DRAW;
+
 export interface DemandTargets {
   readonly r: number;
   readonly c: number;
@@ -882,14 +958,21 @@ export interface DemandTargets {
 export const demandTargets = (s: GameState): DemandTargets => {
   const scale = demandScale(s);
   return {
-    r: Math.min(s.happiness, clampDemand((jobs(s) - workers(s)) / scale)),
+    // Against the workers an employer can reach rather than the raw labour
+    // force: a network that has already put people within reach of a job has
+    // met some of the demand another house would have met.
+    r: Math.min(s.happiness, clampDemand((jobs(s) - reachableWorkers(s)) / scale)),
     c: clampDemand(
-      (residents(s) * SPEND_PER_RESIDENT - openOf(s, 'shop', SHOP_TRIPS)) / scale,
+      (residents(s) * SPEND_PER_RESIDENT -
+        openOf(s, 'shop', SHOP_TRIPS) +
+        labourReach(s)) /
+        scale,
     ),
     i: clampDemand(
       (openOf(s, 'shop', SHOP_SUPPLY) +
         exportMarket(s) -
-        openOf(s, 'industry', INDUSTRY_OUTPUT)) /
+        openOf(s, 'industry', INDUSTRY_OUTPUT) +
+        labourReach(s)) /
         scale,
     ),
   };
@@ -965,10 +1048,16 @@ export const income = (s: GameState): number => {
   const shops = effectiveOf(s, 'shop') * (1 - alight(s, 'shop'));
   const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry'));
   return (
-    people *
-    RENT *
-    (1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (s.districts - 1)) *
-    incomeMultiplier(s) *
+    (people *
+      RENT *
+      (1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (s.districts - 1)) *
+      incomeMultiplier(s) +
+      // Fares. Outside the bracket above rather than inside it, because they
+      // are not rent: a fare does not scale with the shop multiplier or the
+      // district bonus, and it is taken from the people on the buses rather
+      // than from the people in the houses. It *is* taxed, like everything else
+      // the city takes in.
+      fareIncome(s)) *
     // The tax rate multiplies the whole ledger, which is why the happiness it
     // costs is worth more than it looks: happiness multiplies this same line
     // through `incomeMultiplier`, so the two terms compound against each other.

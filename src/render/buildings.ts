@@ -913,6 +913,22 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
       windows,
     );
   }
+  if (service.key === 'transit') {
+    // A depot is a long shed with a lit apron down one side: the bays the buses
+    // pull out of. Low and open where the police station is low and closed, so
+    // the two are told apart at the same footprint by what is on the ground
+    // rather than by colour.
+    const apron = new Glow(PALETTE.sodium, 0.28);
+    return new CivicMeshes(
+      scene,
+      { body: PALETTE.depot, roof: PALETTE.depotRoof, height: 1.6 },
+      new THREE.BoxGeometry(CIVIC_W, 0.16, 1.6),
+      apron.material,
+      new THREE.Vector3(0, -1.5, -CIVIC_W / 2 + 0.8),
+      capacity,
+      apron,
+    );
+  }
   // The university: three plots a side and a tower off the middle of it, taller
   // than anything else the city builds until it reaches arcologies. It is the
   // one civic building meant to be visible from across the map.
@@ -1108,6 +1124,7 @@ export class Buildings {
       : service.key === 'police' ? state.police
       : service.key === 'fire' ? state.fire
       : service.key === 'school' ? state.schools
+      : service.key === 'transit' ? state.depots
       : state.universities;
   }
 
