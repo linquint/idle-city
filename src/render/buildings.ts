@@ -374,6 +374,22 @@ const SHOP_H = 2.4;
 const SHOP_W = 3;
 
 /**
+ * Two ways to dress a shopfront, out of one unit box.
+ *
+ * A *canopy* is a wide thin skirt at street level; a *fin* is a sign board
+ * standing above the roofline. Which one a shop wears comes from its slot, so a
+ * parade reads as a parade rather than as one block repeated — and both are
+ * instances of the same 1x1x1 geometry, scaled, exactly as the roof bank does.
+ * That is the whole budget for commercial variety: one extra draw call, shared
+ * by every level and every shop in the city.
+ */
+const SHOPFRONT = { canopy: 0, fin: 1 } as const;
+
+/** Which one this shop wears. Roughly two canopies to every fin. */
+const shopfront = (slot: number): number =>
+  variety(slot, 0x61) < 0.66 ? SHOPFRONT.canopy : SHOPFRONT.fin;
+
+/**
  * Shops are a single tier: a low box wearing a lit fascia under a dark cap.
  *
  * The obvious version puts the sodium slab on top, which from an overhead
@@ -385,6 +401,8 @@ class ShopMeshes {
   private readonly body: GrowableInstancedMesh;
   private readonly fascia: GrowableInstancedMesh;
   private readonly cap: GrowableInstancedMesh;
+  /** Canopy or sign fin, one instance per shop. See SHOPFRONT. */
+  private readonly front: GrowableInstancedMesh;
   private readonly fasciaGlow = new Glow(PALETTE.sodium, 0.42);
   private overlay: number | null = null;
   /** How many of the shops written are still trading. The rest are ruins. */
@@ -412,12 +430,23 @@ class ShopMeshes {
       capacity,
       { castShadow: true },
     );
+    // A unit box, so one geometry is both a canopy and a fin. The material is
+    // the canvas colour and the instance colour is the per-shop jitter on top
+    // of it — the same setColorAt path the bodies already use.
+    this.front = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshLambertMaterial({ color: PALETTE.awning }),
+      capacity,
+      { castShadow: true, name: 'shop:front' },
+    );
   }
 
   ensure(capacity: number): void {
     this.body.ensure(capacity);
     this.fascia.ensure(capacity);
     this.cap.ensure(capacity);
+    this.front.ensure(capacity);
   }
 
   setNight(night: number): void {
@@ -450,6 +479,15 @@ class ShopMeshes {
     this.body.flush();
   }
 
+  /**
+   * The canvas shade of one shopfront. Not overlay-aware, and deliberately: the
+   * zone overlay states zoning and only the bodies carry it, which is the rule
+   * the roofs, caps and stacks already follow.
+   */
+  private frontColor(slot: number, out: THREE.Color): THREE.Color {
+    return out.setRGB(1, 1, 1).multiplyScalar(shade(slot) * tintJitter(slot));
+  }
+
   /** How many shops still trade. Everything past this is drawn shuttered. */
   setStanding(n: number): void {
     this.standing = n;
@@ -474,6 +512,32 @@ class ShopMeshes {
     dummy.position.y = (SHOP_H + 0.13) * scale;
     dummy.updateMatrix();
     this.cap.setMatrixAt(index, dummy.matrix);
+
+    // The dressing. A canopy is a skirt that overhangs the whole footprint at
+    // street level; a fin is a board standing on the roof, turned onto the long
+    // axis so a merged shop wears one long sign rather than two short ones.
+    const long = SHOP_W * (at.alongX ? sx : sz);
+    if (shopfront(index) === SHOPFRONT.canopy) {
+      const reach = 1 + variety(index, 0x6f);
+      dummy.scale.set(
+        (SHOP_W * sx + reach) * scale,
+        0.22 * scale,
+        (SHOP_W * sz + reach) * scale,
+      );
+      dummy.position.y = SHOP_H * 0.46 * scale;
+    } else {
+      const rise = 0.7 + variety(index, 0x6f) * 0.7;
+      const board = long * (0.5 + variety(index, 0x7b) * 0.35);
+      dummy.scale.set(
+        (at.alongX ? board : 0.18) * scale,
+        rise * scale,
+        (at.alongX ? 0.18 : board) * scale,
+      );
+      dummy.position.y = (SHOP_H + 0.26 + rise / 2) * scale;
+    }
+    dummy.updateMatrix();
+    this.front.setMatrixAt(index, dummy.matrix);
+    this.front.setColorAt(index, this.frontColor(index, tint));
   }
 
   setCount(n: number): void {
@@ -483,12 +547,14 @@ class ShopMeshes {
     // city in trouble.
     this.fascia.count = Math.min(n, this.standing);
     this.cap.count = n;
+    this.front.count = n;
   }
 
   flush(): void {
     this.body.flush();
     this.fascia.flush();
     this.cap.flush();
+    this.front.flush();
   }
 }
 
@@ -509,6 +575,8 @@ class IndustryMeshes {
   private readonly body: GrowableInstancedMesh;
   private readonly roof: GrowableInstancedMesh;
   private readonly stack: GrowableInstancedMesh;
+  /** Roof plant: a vent, a hopper or a low housing. One instance per works. */
+  private readonly vent: GrowableInstancedMesh;
   private overlay: number | null = null;
 
   constructor(scene: THREE.Scene, capacity: number) {
@@ -533,24 +601,42 @@ class IndustryMeshes {
       capacity,
       { castShadow: true },
     );
+    // The second and last mesh the variety budget buys: a unit box on the roof,
+    // scaled per works into anything from a low housing to a tall vent. Shared
+    // by every level, exactly as the shopfront and the roof bank are.
+    this.vent = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshLambertMaterial({ color: PALETTE.vent }),
+      capacity,
+      { castShadow: true, name: 'industry:vent' },
+    );
   }
 
   ensure(capacity: number): void {
     this.body.ensure(capacity);
     this.roof.ensure(capacity);
     this.stack.ensure(capacity);
+    this.vent.ensure(capacity);
   }
 
   setOverlay(hex: number | null): void {
     this.overlay = hex;
   }
 
-  private bodyColor(out: THREE.Color): THREE.Color {
-    return this.overlay === null ? out.setRGB(1, 1, 1) : against(this.overlay, PALETTE.industry, out);
+  /**
+   * Per-works tint. The same jitter the homes and shops have had all along —
+   * industry was the one type still drawn as one flat colour, which is what
+   * made a run of works read as a single slab from the play camera.
+   */
+  private bodyColor(slot: number, out: THREE.Color): THREE.Color {
+    const base =
+      this.overlay === null ? out.setRGB(1, 1, 1) : against(this.overlay, PALETTE.industry, out);
+    return base.multiplyScalar(shade(slot) * tintJitter(slot));
   }
 
   recolor(count: number, tint: THREE.Color): void {
-    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(tint));
+    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(i, tint));
     this.body.flush();
   }
 
@@ -558,14 +644,16 @@ class IndustryMeshes {
     const x = at.x;
     const z = at.z;
     const span = at.plots > 1 ? MERGED_SPAN / INDUSTRY_W : 1;
-    const sx = at.alongX ? span : 1;
-    const sz = at.alongX ? 1 : span;
+    // The same +-12% footprint jitter every other type has. A yard is not a
+    // stamped rectangle, and the merged span multiplies on top of it.
+    const sx = widthJitter(index) * (at.alongX ? span : 1);
+    const sz = depthJitter(index) * (at.alongX ? 1 : span);
     dummy.rotation.set(0, 0, 0);
     dummy.position.set(x, (INDUSTRY_H / 2) * scale, z);
     dummy.scale.set(sx, scale, sz);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
-    this.body.setColorAt(index, this.bodyColor(tint));
+    this.body.setColorAt(index, this.bodyColor(index, tint));
 
     dummy.scale.set(sx * scale, scale, sz * scale);
     dummy.position.y = (INDUSTRY_H + 0.1) * scale;
@@ -583,18 +671,33 @@ class IndustryMeshes {
     );
     dummy.updateMatrix();
     this.stack.setMatrixAt(index, dummy.matrix);
+
+    // Plant on the other end of the roof, so a merged works reads as one long
+    // shed with equipment down its length rather than as two sheds touching.
+    const tall = 0.4 + variety(index, 0x95) * 1.1;
+    const wide = 0.5 + variety(index, 0xa3) * 0.9;
+    dummy.scale.set(wide * scale, tall * scale, wide * scale);
+    dummy.position.set(
+      x - nudge * INDUSTRY_W * 0.3 * sx,
+      (INDUSTRY_H + 0.2 + tall / 2) * scale,
+      z + INDUSTRY_W * 0.22 * sz,
+    );
+    dummy.updateMatrix();
+    this.vent.setMatrixAt(index, dummy.matrix);
   }
 
   setCount(n: number): void {
     this.body.count = n;
     this.roof.count = n;
     this.stack.count = n;
+    this.vent.count = n;
   }
 
   flush(): void {
     this.body.flush();
     this.roof.flush();
     this.stack.flush();
+    this.vent.flush();
   }
 }
 

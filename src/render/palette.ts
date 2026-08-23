@@ -17,6 +17,10 @@ export const PALETTE = {
   tile: 0x8b5c42,
   parapet: 0x2e3e55,
   shop: 0x27364c,
+  // Shopfront dressing: a canvas canopy at street level or a sign fin above the
+  // roofline. Warm and pale against the dark shop blue, so a parade of shops
+  // reads as a parade from the play camera rather than as one long block.
+  awning: 0xb9c2cf,
   sodium: 0xf0a64b,
   // Zone overlay (the Z key). Distinct at dusk and distinct from each other,
   // which matters more here than fitting the city's own palette.
@@ -28,6 +32,9 @@ export const PALETTE = {
   industry: 0x232d3d,
   industryRoof: 0x46566f,
   stack: 0x54637c,
+  // Plant equipment: vents, hoppers and housings on an industrial roof. A shade
+  // off the stack it stands beside, so the two read as two things.
+  vent: 0x3c4a60,
   // Civic buildings span 2x2 plots, so unlike the rest of the city they can
   // afford a silhouette each. Roof colour is the second signal, not the only one.
   hospital: 0xd8dee8,

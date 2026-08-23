@@ -4,7 +4,7 @@ import { LEVELS } from '../src/sim/config';
 import { CityLayout } from '../src/sim/layout';
 import { Buildings } from '../src/render/buildings';
 import { createState, type GameState } from '../src/sim/state';
-import { housed, trading } from './levels';
+import { housed, making, trading } from './levels';
 
 /**
  * The building layer, checked as a black box.
@@ -140,5 +140,72 @@ describe('the skyline the renderer draws', () => {
       }
     });
     expect(roofs.sort()).toEqual(['roof:flat', 'roof:parapet', 'roof:pitched']);
+  });
+});
+
+/**
+ * Variety, and what it is allowed to cost.
+ *
+ * The rule `Roofs` established and this holds commerce and industry to: shapes
+ * are unit geometries scaled per instance, so a level, a merge and a hash
+ * change the matrix rather than the mesh. Two extra draw calls for the whole
+ * city — one shopfront, one piece of roof plant — and not one per level or per
+ * zone.
+ */
+describe('commercial and industrial variety', () => {
+  const meshes = (root: THREE.Object3D, prefix: string): THREE.InstancedMesh[] => {
+    const found: THREE.InstancedMesh[] = [];
+    root.traverse((object) => {
+      if (object instanceof THREE.InstancedMesh && object.name.startsWith(prefix)) found.push(object);
+    });
+    return found;
+  };
+
+  it('costs one extra mesh for commerce and one for industry', () => {
+    const root = new THREE.Scene();
+    const buildings = new Buildings(root, new CityLayout());
+    buildings.sync(
+      state({
+        shops: 30,
+        shopLevels: [10, 10, 5, 5],
+        mergedC: 10,
+        industry: 8,
+        industryLevels: [2, 2, 2, 2],
+        mergedI: 4,
+        districts: 4,
+      }),
+      0,
+    );
+    expect(meshes(root, 'shop:front').length).toBe(1);
+    expect(meshes(root, 'industry:vent').length).toBe(1);
+  });
+
+  it('gives every shop and every works its own dressing', () => {
+    const { buildings, counts } = scene();
+    buildings.sync(state({ ...trading(12), ...making(5) }), 0);
+    expect(counts().get('shop:front')).toBe(12);
+    expect(counts().get('industry:vent')).toBe(5);
+  });
+
+  it('draws a merged building across its whole parcel', () => {
+    const root = new THREE.Scene();
+    const layout = new CityLayout();
+    const buildings = new Buildings(root, layout);
+    // Six merged shops and six single ones on the same district.
+    buildings.sync(state({ shops: 12, shopLevels: [6, 0, 6, 0], mergedC: 6, districts: 2 }), 0);
+    const body = meshes(root, 'shop:body')[0];
+    expect(body).toBeDefined();
+
+    const matrix = new THREE.Matrix4();
+    const scale = new THREE.Vector3();
+    const footprint = (i: number): number => {
+      body?.getMatrixAt(i, matrix);
+      matrix.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
+      return Math.max(scale.x, scale.z) / Math.min(scale.x, scale.z);
+    };
+    // A merged shop is oblong by roughly the parcel's two plots against one
+    // shop's width; a single one is square to within its own +-12% jitter.
+    for (let i = 0; i < 6; i++) expect(footprint(i)).toBeGreaterThan(1.8);
+    for (let i = 6; i < 12; i++) expect(footprint(i)).toBeLessThan(1.4);
   });
 });
