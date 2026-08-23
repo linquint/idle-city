@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { hash01 } from '../core/rng';
-import { CELL, CIVIC_SERVICES, LEVELS, SERVICES, type Service } from '../sim/config';
+import { hash01, mixSeed } from '../core/rng';
+import { CELL, CIVIC_SERVICES, LEVELS, SEED, SERVICES, type Service } from '../sim/config';
 import { cohortStart, cohortTotal, levelAt } from '../sim/economy';
 import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
 import type { GameState, LevelCohort, ZoneKind } from '../sim/state';
@@ -43,11 +43,63 @@ const HOME_STYLES: readonly LevelStyle[] = [
   { width: 3.0, height: 22.0, pitched: false, beacon: true },
 ];
 
+/**
+ * Everything that makes one building look unlike its neighbour, from its slot.
+ *
+ * A pure function of the slot index and the seed, and that is the whole design:
+ * nothing here is stored, so a save is still counts, a building keeps its own
+ * proportions forever, and changing SEED reshuffles the city's character along
+ * with its streets. The alternative — a variant field per building — would put
+ * the look of the city in the save file, which is the one thing this codebase
+ * will not do.
+ */
+const variety = (slot: number, salt: number): number => hash01(mixSeed(SEED, slot * 31 + salt));
+
 /** Per-building height jitter. A uniform skyline reads as a spreadsheet. */
 const heightJitter = (i: number): number => 0.82 + hash01(i ^ 0x5bf03635) * 0.42;
 
 /** Per-building concrete shade, so the mass does not flatten out. */
 const shade = (i: number): number => 0.84 + hash01(i ^ 0x2545f491) * 0.28;
+
+/**
+ * Per-building footprint jitter, +-12% on each axis independently.
+ *
+ * Independent axes rather than one scalar, so a terrace comes out of a mix of
+ * narrow-deep and wide-shallow plots rather than of big and small copies of one
+ * box. It is applied to the *scale* of an instance, which costs nothing: the
+ * geometry is shared and the matrix was being written anyway.
+ */
+const widthJitter = (slot: number): number => 0.88 + variety(slot, 0x11) * 0.24;
+const depthJitter = (slot: number): number => 0.88 + variety(slot, 0x27) * 0.24;
+
+/** A slight warm/cool tint per building, on top of the shade. */
+const tintJitter = (slot: number): number => 0.94 + variety(slot, 0x3d) * 0.12;
+
+/**
+ * Roof shapes. Three of them, shared by every level and both zones.
+ *
+ * Shared is the point. Three variants across four levels and two zones would be
+ * 24 growable meshes and 24 draw calls for what is fundamentally the same box —
+ * so instead the geometry is a *unit* shape and the level's width and height
+ * arrive as an instance scale, the same way a building's own jitter does. Three
+ * meshes total, whatever the city is made of.
+ */
+const ROOF = { pitched: 0, flat: 1, parapet: 2 } as const;
+const ROOF_VARIANTS = 3;
+
+/**
+ * Which roof a building wears, from its slot and its level.
+ *
+ * Level-aware rather than free: a pitched roof is what makes a detached house
+ * read as a house, and the same shape on an arcology reads as a mistake. So the
+ * bottom of the ladder is mostly pitched and everything above it is flat or
+ * parapeted, with the mix — not the rule — coming from the hash.
+ */
+function roofVariant(slot: number, level: number): number {
+  const roll = variety(slot, 0x53);
+  if (level <= 0) return roll < 0.72 ? ROOF.pitched : ROOF.parapet;
+  return roll < 0.55 ? ROOF.flat : ROOF.parapet;
+}
 
 const targetColor = new THREE.Color();
 const materialColor = new THREE.Color();
@@ -70,6 +122,78 @@ function against(target: number, material: number, out: THREE.Color): THREE.Colo
 }
 
 /**
+ * The city's roofs: three unit shapes, instanced, shared by every level.
+ *
+ * Instances are packed per variant rather than per building, so an instance
+ * index here has nothing to do with a slot index — `Buildings` keeps the map.
+ * Rebuilt whole whenever the skyline moves, which is the same rule the bodies
+ * follow and the reason there is nothing to keep in step.
+ */
+class Roofs {
+  private readonly meshes: readonly GrowableInstancedMesh[];
+  private readonly counts = new Int32Array(ROOF_VARIANTS);
+
+  constructor(scene: THREE.Scene, capacity: number) {
+    const material = (color: number): THREE.Material =>
+      new THREE.MeshLambertMaterial({ color });
+    // Unit shapes: 1 x 1 x 1 before the instance scale, so one geometry covers
+    // a cottage roof and an arcology parapet alike.
+    const pitched = new THREE.ConeGeometry(0.72, 1, 4);
+    // A four-sided cone is a hipped roof only once it is turned onto the grid,
+    // and baking the turn into the geometry keeps it out of every write.
+    pitched.rotateY(Math.PI / 4);
+    this.meshes = [
+      new GrowableInstancedMesh(scene, pitched, material(PALETTE.tile), capacity, {
+        castShadow: true,
+        name: 'roof:pitched',
+      }),
+      new GrowableInstancedMesh(scene, new THREE.BoxGeometry(0.62, 1, 0.62), material(PALETTE.parapet), capacity, {
+        castShadow: true,
+        name: 'roof:flat',
+      }),
+      new GrowableInstancedMesh(scene, new THREE.BoxGeometry(1.04, 1, 1.04), material(PALETTE.parapet), capacity, {
+        castShadow: true,
+        name: 'roof:parapet',
+      }),
+    ];
+  }
+
+  /** Starts a rebuild. Every variant's instance list is written from scratch. */
+  begin(): void {
+    this.counts.fill(0);
+  }
+
+  /** Appends one roof and hands back the instance index it landed on. */
+  place(variant: number, matrix: THREE.Matrix4): number {
+    const mesh = this.meshes[variant];
+    if (!mesh) return 0;
+    const index = this.counts[variant] ?? 0;
+    this.counts[variant] = index + 1;
+    mesh.ensure(index + 1);
+    mesh.setMatrixAt(index, matrix);
+    return index;
+  }
+
+  /** Rewrites one roof already placed. Used by the growth animation. */
+  move(variant: number, index: number, matrix: THREE.Matrix4): void {
+    this.meshes[variant]?.setMatrixAt(index, matrix);
+  }
+
+  end(): void {
+    for (let v = 0; v < ROOF_VARIANTS; v++) {
+      const mesh = this.meshes[v];
+      if (!mesh) continue;
+      mesh.count = this.counts[v] ?? 0;
+      mesh.flush();
+    }
+  }
+
+  flush(): void {
+    for (const mesh of this.meshes) mesh.flush();
+  }
+}
+
+/**
  * One InstancedMesh set per building level.
  *
  * A level's buildings are a *contiguous run of slots* — the oldest hold the
@@ -80,33 +204,21 @@ function against(target: number, material: number, out: THREE.Color): THREE.Colo
  */
 class LevelMeshes {
   private readonly body: GrowableInstancedMesh;
-  private readonly roof: GrowableInstancedMesh;
   private readonly beacon: GrowableInstancedMesh | null;
-  /** Only tiers tall enough to carry a warning light have one to ramp. */
+  /** Only levels tall enough to carry a warning light have one to ramp. */
   private readonly beaconGlow: Glow | null;
-  private readonly roofRise: number;
   /** Zone colour while the overlay is on, null for the city's own palette. */
   private overlay: number | null = null;
 
-  constructor(scene: THREE.Scene, readonly style: LevelStyle, capacity: number) {
+  constructor(scene: THREE.Scene, readonly style: LevelStyle, level: number, capacity: number) {
     const w = style.width;
     this.body = new GrowableInstancedMesh(
       scene,
       new THREE.BoxGeometry(w, style.height, w),
       new THREE.MeshLambertMaterial({ color: PALETTE.concrete }),
       capacity,
-      { castShadow: true, receiveShadow: true },
+      { castShadow: true, receiveShadow: true, name: `home:${level}` },
     );
-    this.roof = new GrowableInstancedMesh(
-      scene,
-      style.pitched
-        ? new THREE.ConeGeometry(w * 0.82, 1.15, 4)
-        : new THREE.BoxGeometry(w * 0.62, 0.5, w * 0.62),
-      new THREE.MeshLambertMaterial({ color: style.pitched ? PALETTE.tile : PALETTE.parapet }),
-      capacity,
-      { castShadow: true },
-    );
-    this.roofRise = style.pitched ? 0.55 : 0.25;
     // A warning light is nearly invisible at midday and the whole silhouette
     // after dark, so it gets the lowest floor of the three lit surfaces.
     this.beaconGlow = style.beacon ? new Glow(PALETTE.sodium, 0.3) : null;
@@ -126,7 +238,6 @@ class LevelMeshes {
 
   ensure(capacity: number): void {
     this.body.ensure(capacity);
-    this.roof.ensure(capacity);
     this.beacon?.ensure(capacity);
   }
 
@@ -134,66 +245,100 @@ class LevelMeshes {
     this.overlay = hex;
   }
 
-  private bodyColor(slot: number, out: THREE.Color): THREE.Color {
+  /**
+   * The colour of one building.
+   *
+   * A ruin is the one case that is not a jitter: desaturated toward the concrete
+   * it is made of and darkened well below anything a lived-in building reaches,
+   * so a boarded-up plot is legible from the play camera without opening an
+   * overlay. It keeps the plot and loses everything else.
+   */
+  private bodyColor(slot: number, level: number, out: THREE.Color): THREE.Color {
     const base =
       this.overlay === null
         ? out.setHex(PALETTE.concrete)
         : against(this.overlay, PALETTE.concrete, out);
-    // The per-building shade survives the overlay, so the plan still reads as
-    // buildings rather than as a flat sheet of one colour.
-    return base.multiplyScalar(shade(slot));
+    if (level < 0) {
+      // Toward grey, then down. The zone overlay survives it — a ruin is still
+      // standing on residential land and the overlay states zoning.
+      const grey = (base.r + base.g + base.b) / 3;
+      return base.setRGB(
+        (base.r + grey * 3) * 0.14,
+        (base.g + grey * 3) * 0.14,
+        (base.b + grey * 3) * 0.14,
+      );
+    }
+    // The per-building shade and tint survive the overlay, so the plan still
+    // reads as buildings rather than as a flat sheet of one colour.
+    return base.multiplyScalar(shade(slot) * tintJitter(slot));
   }
 
   /** Rewrites colours only. Matrices are untouched, so this is one buffer pass. */
-  recolor(from: number, count: number, tint: THREE.Color): void {
-    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(from + i, tint));
+  recolor(from: number, count: number, standing: number, tint: THREE.Color): void {
+    for (let i = 0; i < count; i++) {
+      const slot = from + i;
+      this.body.setColorAt(i, this.bodyColor(slot, slot < standing ? 0 : -1, tint));
+    }
     this.body.flush();
   }
 
+  /**
+   * Writes one building, and hands its roof to the shared bank.
+   *
+   * Returns the roof's instance index so the caller can find it again when a
+   * growth animation rewrites this slot: roofs are packed per variant, so the
+   * index has nothing to do with the slot it came from.
+   */
   write(
     index: number,
     slot: number,
+    level: number,
     cell: Coord,
     scale: number,
     dummy: THREE.Object3D,
     tint: THREE.Color,
-  ): void {
+    roofs: Roofs,
+    roofIndex: number,
+  ): number {
     const x = worldX(cell.x);
     const z = worldZ(cell.z);
     const stretch = heightJitter(slot);
     const height = this.style.height * stretch;
+    const sx = widthJitter(slot);
+    const sz = depthJitter(slot);
 
     dummy.rotation.set(0, 0, 0);
     dummy.position.set(x, (height / 2) * scale, z);
-    dummy.scale.set(1, stretch * scale, 1);
+    dummy.scale.set(sx, stretch * scale, sz);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
-    this.body.setColorAt(index, this.bodyColor(slot, tint));
+    this.body.setColorAt(index, this.bodyColor(slot, level, tint));
 
-    dummy.position.y = (height + this.roofRise) * scale;
-    dummy.scale.setScalar(scale);
-    // A four-sided cone is a hipped roof only once it is turned onto the grid.
-    if (this.style.pitched) dummy.rotation.y = Math.PI / 4;
+    // A ruin wears the flattest thing in the bank: whatever it had is gone.
+    const variant = level < 0 ? ROOF.flat : roofVariant(slot, level);
+    const rise = variant === ROOF.pitched ? 1.15 : 0.5;
+    dummy.position.y = (height + rise / 2) * scale;
+    dummy.scale.set(this.style.width * sx, rise * scale, this.style.width * sz);
     dummy.updateMatrix();
-    this.roof.setMatrixAt(index, dummy.matrix);
-    dummy.rotation.y = 0;
+    const placed = roofIndex < 0 ? roofs.place(variant, dummy.matrix) : roofIndex;
+    if (roofIndex >= 0) roofs.move(variant, roofIndex, dummy.matrix);
 
     if (this.beacon) {
-      dummy.position.y = (height + this.roofRise * 2 + 0.35) * scale;
+      dummy.position.y = (height + rise + 0.35) * scale;
+      dummy.scale.setScalar(scale);
       dummy.updateMatrix();
       this.beacon.setMatrixAt(index, dummy.matrix);
     }
+    return placed;
   }
 
   setCount(n: number): void {
     this.body.count = n;
-    this.roof.count = n;
     if (this.beacon) this.beacon.count = n;
   }
 
   flush(): void {
     this.body.flush();
-    this.roof.flush();
     this.beacon?.flush();
   }
 }
@@ -214,6 +359,8 @@ class ShopMeshes {
   private readonly cap: GrowableInstancedMesh;
   private readonly fasciaGlow = new Glow(PALETTE.sodium, 0.42);
   private overlay: number | null = null;
+  /** How many of the shops written are still trading. The rest are ruins. */
+  private standing = 0;
 
   constructor(scene: THREE.Scene, capacity: number) {
     this.body = new GrowableInstancedMesh(
@@ -221,13 +368,14 @@ class ShopMeshes {
       new THREE.BoxGeometry(3, SHOP_H, 3),
       new THREE.MeshLambertMaterial({ color: PALETTE.shop }),
       capacity,
-      { castShadow: true, receiveShadow: true },
+      { castShadow: true, receiveShadow: true, name: 'shop:body' },
     );
     this.fascia = new GrowableInstancedMesh(
       scene,
       new THREE.BoxGeometry(3.08, 0.34, 3.08),
       this.fasciaGlow.material,
       capacity,
+      { name: 'shop:fascia' },
     );
     this.cap = new GrowableInstancedMesh(
       scene,
@@ -252,30 +400,46 @@ class ShopMeshes {
     this.overlay = hex;
   }
 
-  private bodyColor(out: THREE.Color): THREE.Color {
-    // White is the identity for the shader's multiply, so with no overlay the
-    // shop renders in exactly the material colour it always has.
-    return this.overlay === null
-      ? out.setRGB(1, 1, 1)
-      : against(this.overlay, PALETTE.shop, out);
+  /**
+   * Per-shop tint, and the shuttered read for a ruin.
+   *
+   * The material is already the dark shop blue, so white is the identity for
+   * the shader's multiply and the jitter is a nudge either side of it. A closed
+   * shop goes well under that and loses its lit sign entirely — the fascia is a
+   * separate instanced mesh, so the ruins simply fall off the end of its count
+   * rather than needing a per-instance emissive the material cannot carry.
+   */
+  private bodyColor(slot: number, out: THREE.Color): THREE.Color {
+    const closed = slot >= this.standing;
+    const base =
+      this.overlay === null ? out.setRGB(1, 1, 1) : against(this.overlay, PALETTE.shop, out);
+    if (closed) return base.multiplyScalar(0.4);
+    return base.multiplyScalar(shade(slot) * tintJitter(slot));
   }
 
   recolor(count: number, tint: THREE.Color): void {
-    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(tint));
+    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(i, tint));
     this.body.flush();
+  }
+
+  /** How many shops still trade. Everything past this is drawn shuttered. */
+  setStanding(n: number): void {
+    this.standing = n;
   }
 
   write(index: number, cell: Coord, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
     const x = worldX(cell.x);
     const z = worldZ(cell.z);
+    const sx = widthJitter(index);
+    const sz = depthJitter(index);
     dummy.rotation.set(0, 0, 0);
     dummy.position.set(x, (SHOP_H / 2) * scale, z);
-    dummy.scale.set(1, scale, 1);
+    dummy.scale.set(sx, scale, sz);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
-    this.body.setColorAt(index, this.bodyColor(tint));
+    this.body.setColorAt(index, this.bodyColor(index, tint));
 
-    dummy.scale.setScalar(scale);
+    dummy.scale.set(sx * scale, scale, sz * scale);
     dummy.position.y = (SHOP_H - 0.42) * scale;
     dummy.updateMatrix();
     this.fascia.setMatrixAt(index, dummy.matrix);
@@ -287,7 +451,10 @@ class ShopMeshes {
 
   setCount(n: number): void {
     this.body.count = n;
-    this.fascia.count = n;
+    // The lit signs stop at the last trading shop. A shuttered high street with
+    // its fascias still glowing would read as a rendering bug rather than as a
+    // city in trouble.
+    this.fascia.count = Math.min(n, this.standing);
     this.cap.count = n;
   }
 
@@ -622,7 +789,8 @@ export function roofline(kind: ZoneKind, slot: number, level: number): number {
   // a roof rather than in mid-air.
   const style = HOME_STYLES[Math.max(0, level)] ?? HOME_STYLES[0];
   if (!style) return 0;
-  return style.height * heightJitter(slot) + (style.pitched ? 0.55 : 0.25);
+  const rise = roofVariant(slot, level) === ROOF.pitched ? 1.15 : 0.5;
+  return style.height * heightJitter(slot) + rise / 2;
 }
 
 /**
@@ -631,6 +799,16 @@ export function roofline(kind: ZoneKind, slot: number, level: number): number {
  */
 export class Buildings {
   private readonly levels: LevelMeshes[];
+  /** Three shapes, shared by every level. See `Roofs`. */
+  private readonly roofs: Roofs;
+  /**
+   * Which roof instance each slot's roof landed on.
+   *
+   * Roofs are packed per variant, so the index bears no relation to the slot —
+   * and the growth animation rewrites one slot at a time, long after the pack
+   * order was decided. Indexed by slot, grown with the city.
+   */
+  private roofSlot = new Int32Array(0);
   private readonly shops: ShopMeshes;
   private readonly industry: IndustryMeshes;
   /**
@@ -654,6 +832,7 @@ export class Buildings {
 
   private shownHomes = 0;
   private shownShops = 0;
+  private shownTrading = -1;
   private shownIndustry = 0;
   /**
    * The cohort the scene is currently drawing, and where each level's run of
@@ -675,7 +854,8 @@ export class Buildings {
     this.homeGrowth = new GrowthSchedule(duration);
     this.shopGrowth = new GrowthSchedule(duration);
     this.industryGrowth = new GrowthSchedule(duration);
-    this.levels = HOME_STYLES.map((style) => new LevelMeshes(scene, style, 64));
+    this.levels = HOME_STYLES.map((style, level) => new LevelMeshes(scene, style, level, 64));
+    this.roofs = new Roofs(scene, 128);
     this.shops = new ShopMeshes(scene, 32);
     this.industry = new IndustryMeshes(scene, 24);
     this.civic = SERVICES.map((service) => ({
@@ -728,15 +908,22 @@ export class Buildings {
       this.writeHomes(now);
     }
 
+    // A shop closing changes no count the loop below would notice — the plot is
+    // still there and still has a shop on it — so the ruin count is part of
+    // what "changed" means for commerce.
+    const tradingShops = state.shops - state.abandonedC;
     if (state.shops > this.shownShops) {
       const from = this.shownShops;
       this.shopGrowth.stage(from, state.shops, now, 1.4, WAVE_BUDGET);
+      this.shops.setStanding(tradingShops);
       this.writeShops(from, state.shops, now);
-    } else if (state.shops < this.shownShops) {
+    } else if (state.shops < this.shownShops || tradingShops !== this.shownTrading) {
       this.shopGrowth.clear();
+      this.shops.setStanding(tradingShops);
       this.writeShops(0, state.shops, now);
     }
     this.shownShops = state.shops;
+    this.shownTrading = tradingShops;
 
     if (state.industry > this.shownIndustry) {
       const from = this.shownIndustry;
@@ -781,6 +968,11 @@ export class Buildings {
    */
   private writeHomes(now: number): void {
     this.homeGrowth.ensure(this.shownHomes);
+    if (this.roofSlot.length < this.shownHomes) {
+      this.roofSlot = new Int32Array(Math.max(64, this.shownHomes * 2));
+    }
+    const standing = this.shownHomes - this.shownRuins;
+    this.roofs.begin();
     for (let l = 0; l < LEVELS; l++) {
       const meshes = this.levels[l];
       if (!meshes) continue;
@@ -789,18 +981,25 @@ export class Buildings {
       meshes.ensure(count);
       for (let i = 0; i < count; i++) {
         const slot = start + i;
-        meshes.write(
+        // Slots past the standing stock are the ruins. They live in the level-0
+        // set because they hold a plot and have to be drawn on it, and -1 is
+        // what tells the write they hold no level.
+        this.roofSlot[slot] = meshes.write(
           i,
           slot,
+          slot < standing ? l : -1,
           this.layout.homeCell(slot),
           this.homeGrowth.scaleAt(slot, now),
           this.dummy,
           this.tint,
+          this.roofs,
+          -1,
         );
       }
       meshes.setCount(count);
       meshes.flush();
     }
+    this.roofs.end();
   }
 
   private writeShops(from: number, to: number, now: number): void {
@@ -864,8 +1063,9 @@ export class Buildings {
     for (const set of this.civic) {
       set.meshes.setOverlay(on ? PALETTE.zoneResidential : null);
     }
+    const standing = this.shownHomes - this.shownRuins;
     for (let l = 0; l < LEVELS; l++) {
-      this.levels[l]?.recolor(this.homeStart[l] ?? 0, this.levelCount(l), this.tint);
+      this.levels[l]?.recolor(this.homeStart[l] ?? 0, this.levelCount(l), standing, this.tint);
     }
     this.shops.recolor(this.shownShops, this.tint);
     this.industry.recolor(this.shownIndustry, this.tint);
@@ -890,14 +1090,29 @@ export class Buildings {
     // Keyed by *slot*, not by instance, so an animation in flight survives a
     // promotion moving the building between two mesh sets. The level and
     // instance are recovered from the cohort the scene is drawing.
+    const standing = this.shownHomes - this.shownRuins;
     const homesMoving = this.homeGrowth.update(now, (slot, scale) => {
-      const level = Math.max(0, levelAt(this.shownHomeLevels, slot));
-      const meshes = this.levels[level];
+      const found = levelAt(this.shownHomeLevels, slot);
+      const level = slot < standing ? Math.max(0, found) : -1;
+      const meshes = this.levels[Math.max(0, level)];
       if (!meshes) return;
-      const index = slot - (this.homeStart[level] ?? 0);
-      meshes.write(index, slot, this.layout.homeCell(slot), scale, this.dummy, this.tint);
+      const index = slot - (this.homeStart[Math.max(0, level)] ?? 0);
+      meshes.write(
+        index,
+        slot,
+        level,
+        this.layout.homeCell(slot),
+        scale,
+        this.dummy,
+        this.tint,
+        this.roofs,
+        this.roofSlot[slot] ?? 0,
+      );
     });
-    if (homesMoving) for (const level of this.levels) level.flush();
+    if (homesMoving) {
+      for (const level of this.levels) level.flush();
+      this.roofs.flush();
+    }
 
     const shopsMoving = this.shopGrowth.update(now, (i, s) => {
       this.shops.write(i, this.layout.shopCell(i), s, this.dummy, this.tint);
