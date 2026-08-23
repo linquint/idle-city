@@ -31,7 +31,8 @@ import {
   SHOP_BASE,
   SHOP_BONUS,
   SHOP_GROWTH,
-  TIERS,
+  LEVEL_CAPACITY,
+  LEVEL_NAMES,
 } from '../src/sim/config.ts';
 import {
   canAnnex,
@@ -40,12 +41,13 @@ import {
   canBuildPark,
   canBuildService,
   canBuildShop,
-  canRezone,
   civicBuildings,
+  cohortTotal,
   coverage,
+  developed,
+  population,
   homeCost,
   industryCost,
-  occupancy,
   parkCost,
   priceModifier,
   recreationCoverage,
@@ -82,7 +84,6 @@ const disciplined = (game) => {
   const s = game.state;
   for (let guard = 0; guard < 64; guard++) {
     if (canAnnex(s) && game.annex()) continue;
-    if (canRezone(s) && game.rezone()) continue;
     const options = [];
     for (const service of SERVICES) {
       if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
@@ -127,7 +128,6 @@ const greedy = (game) => {
     if (s.homes > 0 && recreationCoverage(s) < 1 && canBuildPark(s)) {
       options.push([0, () => game.buildPark()]);
     }
-    if (canRezone(s)) options.push([-1, () => game.rezone()]);
     if (canAnnex(s)) options.push([-1, () => game.annex()]);
     if (options.length === 0) return;
     options.sort((a, b) => a[0] - b[0]);
@@ -179,7 +179,7 @@ class PinTracker {
 function run(policy) {
   const game = new Game(createState(0));
   const pins = { R: new PinTracker(), C: new PinTracker(), I: new PinTracker() };
-  const firsts = { rezone: null, annex: null, service: null };
+  const firsts = { level: null, top: null, annex: null, service: null };
   const happy = {};
   const share = {};
   // What the surcharge is actually doing in the first ten minutes: how long
@@ -198,7 +198,8 @@ function run(policy) {
     pins.R.sample(s.demandR, STEP);
     pins.C.sample(s.demandC, STEP);
     pins.I.sample(s.demandI, STEP);
-    if (firsts.rezone === null && s.tier > 0) firsts.rezone = t;
+    if (firsts.level === null && s.homeLevels[0] < cohortTotal(s.homeLevels)) firsts.level = t;
+    if (firsts.top === null && s.homeLevels[LEVEL_CAPACITY.length - 1] > 0) firsts.top = t;
     if (firsts.annex === null && s.districts > 1) firsts.annex = t;
     if (firsts.service === null && civicBuildings(s) > 0) firsts.service = t;
     for (const mark of [3600, 6 * 3600, 24 * 3600]) {
@@ -258,10 +259,14 @@ for (const [name, policy] of POLICIES) {
   console.log(`policy: ${name}`);
   console.log(
     `  built:          ${s.homes}R / ${s.shops}C / ${s.industry}I / ` +
-      `${civicBuildings(s)} civic, tier ${s.tier}, ${s.districts} district(s)`,
+      `${civicBuildings(s)} civic, ${s.districts} district(s)`,
   );
   console.log(
-    `  occupancy:      ${(occupancy(s) * 100).toFixed(1)}% (annex gate ${(ANNEX_MIN_OCCUPANCY * 100).toFixed(0)}%)`,
+    `  developed:      ${(developed(s) * 100).toFixed(1)}% (annex gate ${(ANNEX_MIN_OCCUPANCY * 100).toFixed(0)}%)`,
+  );
+  console.log(
+    `  home levels:    ${JSON.stringify([...s.homeLevels])} + ${s.abandonedR} abandoned, ` +
+      `occupancy R ${s.occupancyR.toFixed(2)} C ${s.occupancyC.toFixed(2)} I ${s.occupancyI.toFixed(2)}`,
   );
   console.log(`  residents:      ${Math.round(residents(s))}, treasury ${s.cash.toExponential(2)}`);
   console.log(
@@ -273,8 +278,8 @@ for (const [name, policy] of POLICIES) {
       (Math.max(pins.R.worst, pins.C.worst, pins.I.worst) > 600 ? '   <- over the 10m threshold' : ''),
   );
   console.log(
-    `  first rezone:   ${fmtTime(firsts.rezone)}   first annex: ${fmtTime(firsts.annex)}   ` +
-      `first service: ${fmtTime(firsts.service)}`,
+    `  first level-up: ${fmtTime(firsts.level)}   first top level: ${fmtTime(firsts.top)}   ` +
+      `first annex: ${fmtTime(firsts.annex)}   first service: ${fmtTime(firsts.service)}`,
   );
   console.log(
     `  happiness:      1h ${((happy[3600] ?? 0) * 100).toFixed(0)}%  ` +
@@ -359,15 +364,27 @@ for (const line of monotonic()) console.log(line.startsWith('  ') ? line : `  BR
  * what a tier can justify is a gate you can only pass by overbuilding into a
  * surcharge.
  */
-function equilibrium(tier) {
-  const game = new Game({ ...createState(0), tier, cash: 1e12 });
-  for (let step = 0; step < 300; step++) {
+function equilibrium(level) {
+  // Held at `level` rather than started there: levelling is earned now, so the
+  // only way to ask "what does a district of towers settle at" is to keep
+  // putting the cohort back where the question wants it after every purchase.
+  const game = new Game({ ...createState(0), cash: 1e12 });
+  const pin = () => {
+    const s = game.state;
+    const standing = s.homes - s.abandonedR;
+    const levels = [0, 0, 0, 0];
+    levels[level] = standing;
+    Object.assign(s, { homeLevels: levels, occupancyR: 0.92 });
+  };
+  for (let step = 0; step < 400; step++) {
+    pin();
     // ~12 tau, so the signal is at its target before the next decision.
     for (let i = 0; i < 3000; i++) game.advance(0.1);
+    pin();
     const s = game.state;
     let bought = false;
     for (const service of SERVICES) {
-      if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
+      if (population(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
         game.buildService(service);
         bought = true;
         break;
@@ -379,17 +396,19 @@ function equilibrium(tier) {
     else if (s.demandI >= 0 && canBuildIndustry(s)) bought = game.buildIndustry();
     if (!bought) break;
   }
+  pin();
   return game.state;
 }
 
-console.log('\ndemand-neutral build-out of one district, per tier');
+console.log('\ndemand-neutral build-out of one district, per level held');
 console.log(`  (the annexation gate is ${(ANNEX_MIN_OCCUPANCY * 100).toFixed(0)}%)`);
-for (let tier = 0; tier < TIERS.length; tier++) {
-  const s = equilibrium(tier);
-  const pct = occupancy(s) * 100;
+for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
+  const s = equilibrium(level);
+  const pct = developed(s) * 100;
   console.log(
-    `  ${TIERS[tier].name.padEnd(17)} ${pct.toFixed(1).padStart(5)}%  ` +
-      `${s.homes}R / ${s.shops}C / ${s.industry}I / ${civicBuildings(s)} civic` +
+    `  ${LEVEL_NAMES[level].padEnd(17)} ${pct.toFixed(1).padStart(5)}%  ` +
+      `${s.homes}R / ${s.shops}C / ${s.industry}I / ${civicBuildings(s)} civic, ` +
+      `levels ${JSON.stringify([...s.homeLevels])}` +
       (pct >= ANNEX_MIN_OCCUPANCY * 100 ? '' : '   <- under the gate'),
   );
 }

@@ -1,6 +1,9 @@
 import * as THREE from 'three';
-import { CELL, MAX_ACTIVE_FIRES } from '../sim/config';
-import { tierOf } from '../sim/economy';
+import { CELL, CIVIC_SERVICES, LEVELS, MAX_ACTIVE_FIRES } from '../sim/config';
+
+/** Where fire stations sit in the 2x2 site interleave. See `civicSiteFor`. */
+const FIRE_SITE_OFFSET = CIVIC_SERVICES.findIndex((service) => service.key === 'fire');
+import { levelAt } from '../sim/economy';
 import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
 import type { Fire, GameState } from '../sim/state';
 import { roofline } from './buildings';
@@ -88,8 +91,15 @@ export class Fires {
   private readonly blazes: Blaze[] = [];
   private readonly fleet: Truck[] = [];
   private burning = 0;
-  /** What the rooflines were last computed against. A rezone moves every one. */
-  private shownTier = -1;
+  /**
+   * What the rooflines were last computed against.
+   *
+   * The cohort's total level count — sum of level x buildings — which moves by
+   * exactly one on any single promotion or abandonment and by nothing else.
+   * Cheaper than comparing four numbers and enough to notice by, because a
+   * roofline can only change when a building's level does.
+   */
+  private shownSkyline = -1;
 
   constructor(
     scene: THREE.Scene,
@@ -160,7 +170,7 @@ export class Fires {
     let best = -1;
     let bestDistance = Infinity;
     for (let i = 0; i < built; i++) {
-      const site = this.layout.fireSite(i);
+      const site = this.layout.civicSiteFor(FIRE_SITE_OFFSET, i);
       // The site's lower-left plot; the building straddles all four.
       const sx = worldX(site.x) + CELL / 2;
       const sz = worldZ(site.z) + CELL / 2 + STATION_APRON;
@@ -171,7 +181,7 @@ export class Fires {
       }
     }
     if (best < 0) return false;
-    const site = this.layout.fireSite(best);
+    const site = this.layout.civicSiteFor(FIRE_SITE_OFFSET, best);
     truck.ax = worldX(site.x) + CELL / 2;
     truck.az = worldZ(site.z) + CELL / 2 + STATION_APRON;
     return true;
@@ -195,11 +205,14 @@ export class Fires {
    */
   sync(state: Readonly<GameState>): void {
     const fires = state.fires;
-    const tier = tierOf(state);
-    // A rezone rebuilds every roofline underneath every flame, so it invalidates
-    // the slots even though no fire changed.
-    const rezoned = state.tier !== this.shownTier;
-    this.shownTier = state.tier;
+    // A promotion rebuilds the roofline underneath a flame without the fire
+    // itself changing, so the slots have to be invalidated when the housing
+    // cohort moves. The top cohort is enough to notice by: a building can only
+    // climb, so if nothing reached a new level nothing under a flame grew.
+    let skyline = 0;
+    for (let l = 1; l < LEVELS; l++) skyline += l * (state.homeLevels[l] ?? 0);
+    const grown = skyline !== this.shownSkyline;
+    this.shownSkyline = skyline;
     this.burning = Math.min(fires.length, MAX_ACTIVE_FIRES);
 
     for (let i = 0; i < MAX_ACTIVE_FIRES; i++) {
@@ -228,13 +241,13 @@ export class Fires {
         blaze.kind === fire.kind &&
         blaze.index === fire.index &&
         blaze.startedAt === fire.startedAt;
-      if (same && !rezoned) continue;
+      if (same && !grown) continue;
 
       this.layout.ensure(state.districts);
       const plot = this.plotOf(fire);
       blaze.x = worldX(plot.x);
       blaze.z = worldZ(plot.z);
-      blaze.top = roofline(fire.kind, fire.index, tier);
+      blaze.top = roofline(fire.kind, fire.index, levelAt(state.homeLevels, fire.index));
       if (same) continue;
       blaze.kind = fire.kind;
       blaze.index = fire.index;

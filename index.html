@@ -71,6 +71,19 @@
       <span class="built" id="svc-parks-built">0/0</span>
       <span class="covers" id="svc-parks-covers">0 of 0 homes</span></div>
   </div>
+
+  <p class="cap">Education</p>
+  <div class="services" id="education" role="img">
+    <div class="svc"><span class="k">Schools</span>
+      <span class="built" id="svc-school-built">0/0</span>
+      <span class="covers" id="svc-school-covers">0 of 0</span></div>
+    <div class="svc"><span class="k">Universities</span>
+      <span class="built" id="svc-university-built">0/0</span>
+      <span class="covers" id="svc-university-covers">0 of 0</span></div>
+    <div class="svc"><span class="k">Unlocks</span>
+      <span class="built" id="education-reach">0%</span>
+      <span class="covers" id="education-next">next level needs 35%</span></div>
+  </div>
 </section>
 
 <section class="hud controls" aria-label="City controls">
@@ -113,9 +126,17 @@
     </button>
   </div>
 
-  <button id="rezone" class="rezone" type="button">
-    <span id="rezone-label">Rezone to apartments</span><span class="cost" id="rezone-cost">3.0K</span>
-  </button>
+  <div class="civic-row">
+    <button class="civic school" id="build-school" type="button">
+      <span>School</span><span class="built" id="build-school-built">0/1</span>
+      <span class="cost" id="build-school-cost">180</span>
+    </button>
+    <button class="civic school" id="build-university" type="button">
+      <span>University</span><span class="built" id="build-university-built">0/1</span>
+      <span class="cost" id="build-university-cost">7.2K</span>
+    </button>
+  </div>
+
   <button id="annex" class="annex" type="button">
     <span id="annex-label">Annex district</span><span class="cost" id="annex-cost">60.0K</span>
   </button>

@@ -2,10 +2,13 @@ import {
   ANNEX_BASE,
   ANNEX_GROWTH,
   ANNEX_MIN_OCCUPANCY,
+  AUTO_ANNEX_RESERVE,
   BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
-  CIVIC_GROWTH,
   CIVIC_RAMP_SECONDS,
+  CIVIC_SERVICES,
+  ABANDON_SECONDS,
+  ABANDON_SPREAD_SECONDS,
   DEMAND_SCALE,
   DEMAND_TAU,
   DISTRICT_BONUS,
@@ -27,16 +30,27 @@ import {
   INDUSTRY_GROWTH,
   JOBS_PER_COMMERCIAL,
   JOBS_PER_INDUSTRIAL,
+  LEVEL_CAPACITY,
+  LEVEL_SCALE,
+  LEVEL_UP_HAPPINESS,
+  LEVEL_UP_OCCUPANCY,
+  LEVEL_UP_SECONDS,
+  LEVELS,
   MAX_DISTRICTS,
+  OCCUPANCY_DEMAND,
+  OCCUPANCY_EMPTY,
+  OCCUPANCY_FLOOR,
+  OCCUPANCY_FULL,
+  OCCUPANCY_TAU,
   PARK_BASE,
   PARK_GROWTH,
   PRICE_DISCOUNT_MAX,
   PRICE_SURCHARGE_MAX,
+  RECOVER_SPREAD_SECONDS,
+  EDUCATION_SERVICES,
+  HAPPINESS_SERVICES,
   RECREATION_WEIGHT,
   RENT,
-  REZONE_BASE,
-  REZONE_GROWTH,
-  REZONE_MIN_HOMES,
   SERVICES,
   SHOP_BASE,
   SHOP_BONUS,
@@ -44,7 +58,6 @@ import {
   SHOP_THROUGHPUT,
   SPEND_PER_RESIDENT,
   SUPPLY_DRAW,
-  TIERS,
   WORKING_SHARE,
   type Service,
 } from './config.ts';
@@ -54,12 +67,11 @@ import {
   BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
+  UNIVERSITY_SITES_PER_DISTRICT,
 } from './layout.ts';
-import type { FireKind, GameState } from './state.ts';
+import type { GameState, LevelCohort, ZoneKind } from './state.ts';
 
 /** Pure reads over a state. No mutation lives in this file. */
-
-export const tierOf = (s: GameState) => TIERS[Math.min(s.tier, TIERS.length - 1)]!;
 
 /**
  * The band every demand signal lives in. Exported because three places have to
@@ -67,10 +79,212 @@ export const tierOf = (s: GameState) => TIERS[Math.min(s.tier, TIERS.length - 1)
  */
 export const clampDemand = (n: number): number => Math.max(-1, Math.min(1, n));
 
+// -------------------------------------------------------------------- levels
+
+/** Every zone read through one key, so nothing needs a lookup table per caller. */
+export const countOf = (s: GameState, kind: ZoneKind): number =>
+  kind === 'home' ? s.homes : kind === 'shop' ? s.shops : s.industry;
+
+export const levelsOf = (s: GameState, kind: ZoneKind): LevelCohort =>
+  kind === 'home' ? s.homeLevels : kind === 'shop' ? s.shopLevels : s.industryLevels;
+
+export const abandonedOf = (s: GameState, kind: ZoneKind): number =>
+  kind === 'home' ? s.abandonedR : kind === 'shop' ? s.abandonedC : s.abandonedI;
+
+export const occupancyOf = (s: GameState, kind: ZoneKind): number =>
+  kind === 'home' ? s.occupancyR : kind === 'shop' ? s.occupancyC : s.occupancyI;
+
+export const vacantOf = (s: GameState, kind: ZoneKind): number =>
+  kind === 'home' ? s.vacantR : kind === 'shop' ? s.vacantC : s.vacantI;
+
+export const demandOf = (s: GameState, kind: ZoneKind): number =>
+  kind === 'home' ? s.demandR : kind === 'shop' ? s.demandC : s.demandI;
+
+export const driftOf = (s: GameState, kind: ZoneKind): number =>
+  kind === 'home' ? s.driftR : kind === 'shop' ? s.driftC : s.driftI;
+
+/** The three zones, in the order the HUD and the renderer walk them. */
+export const ZONE_KINDS: readonly ZoneKind[] = ['home', 'shop', 'industry'];
+
+/** Buildings of a zone that still stand: its count, less the ones written off. */
+export const standingOf = (s: GameState, kind: ZoneKind): number =>
+  Math.max(0, countOf(s, kind) - abandonedOf(s, kind));
+
+/** How many buildings a cohort accounts for. Always equals `standingOf`. */
+export const cohortTotal = (levels: LevelCohort): number => {
+  let n = 0;
+  for (let l = 0; l < levels.length; l++) n += levels[l] ?? 0;
+  return n;
+};
+
+/**
+ * The level of the k-th building of a zone, from the cohorts alone.
+ *
+ * The whole reason cohorts work. Buildings take levels in build order, oldest
+ * first, so slot 0 is in the top cohort and the newest slots are at level 0 —
+ * which means a slot's level is a pure function of its index and four counts,
+ * with nothing stored per building and nothing to keep in step. Slots past the
+ * standing stock are the abandoned ones and report -1: they hold their plot,
+ * but they hold no level.
+ */
+export const levelAt = (levels: LevelCohort, slot: number): number => {
+  if (slot < 0) return -1;
+  let seen = 0;
+  for (let l = levels.length - 1; l >= 0; l--) {
+    seen += levels[l] ?? 0;
+    if (slot < seen) return l;
+  }
+  return -1;
+};
+
+/** First slot index of each level, oldest level first. Written into `out`. */
+export const cohortStart = (levels: LevelCohort, out: number[]): number[] => {
+  let seen = 0;
+  for (let l = levels.length - 1; l >= 0; l--) {
+    out[l] = seen;
+    seen += levels[l] ?? 0;
+  }
+  return out;
+};
+
+/**
+ * A cohort measured in level-0 buildings — what it is worth, not how many it is.
+ *
+ * One ladder for all three zones (see LEVEL_SCALE), so this is the number every
+ * per-building constant in the game multiplies: jobs, trips, output and the
+ * income multiplier all scale with it, which is what keeps ZONE_SHARE's
+ * equilibrium true at the top of the skyline as well as the bottom.
+ */
+export const cohortScale = (levels: LevelCohort): number => {
+  let n = 0;
+  for (let l = 0; l < levels.length; l++) n += (levels[l] ?? 0) * (LEVEL_SCALE[l] ?? 1);
+  return n;
+};
+
+/**
+ * A zone's earning weight: what its buildings are worth, less the share empty.
+ *
+ * Level-scaled, so this is what the income multiplier reads and the only thing
+ * that does. See LEVEL_SCALE for why jobs and trips deliberately do not.
+ */
+export const effectiveOf = (s: GameState, kind: ZoneKind): number =>
+  cohortScale(levelsOf(s, kind)) * occupancyOf(s, kind);
+
+/**
+ * A zone's trading weight: how many of its buildings are actually open.
+ *
+ * Per plot rather than per level. A shop employs a neighbourhood and serves the
+ * trips its neighbourhood generates whatever is stacked on top of it, so the
+ * number of shops a city needs grows with its population — which is what makes
+ * a district's commercial land fillable and its annexation gate reachable.
+ * Ruins are excluded and the empty share is taken off: neither trades.
+ */
+export const activeOf = (s: GameState, kind: ZoneKind): number =>
+  standingOf(s, kind) * occupancyOf(s, kind);
+
+/**
+ * The average level of the city's housing, in level-0 buildings.
+ *
+ * The size term the demand model divides by. See `demandScale`.
+ */
+export const cityScale = (s: GameState): number => {
+  const standing = cohortTotal(s.homeLevels);
+  if (standing <= 0) return 1;
+  return Math.max(1, cohortScale(s.homeLevels) / standing);
+};
+
+// ----------------------------------------------------------------- occupancy
+
+/**
+ * Where a zone's occupancy is heading.
+ *
+ * Two inputs. Happiness is the dominant one, running the target linearly from
+ * OCCUPANCY_FLOOR at nobody-is-happy to OCCUPANCY_FULL at everybody-is: an
+ * unhappy city does not merely stop attracting people, it loses the ones in the
+ * houses it has already built, and past HAPPINESS_MIN_OCCUPANCY it loses them
+ * fast enough to start boarding plots up. The zone's own demand is the smaller
+ * modifier, so a zone in surcharge keeps most of its tenants rather than
+ * emptying.
+ */
+export const occupancyTarget = (s: GameState, kind: ZoneKind): number => {
+  const mood = Math.max(0, Math.min(1, s.happiness));
+  const wanted =
+    OCCUPANCY_FLOOR +
+    (OCCUPANCY_FULL - OCCUPANCY_FLOOR) * mood +
+    OCCUPANCY_DEMAND * clampDemand(demandOf(s, kind));
+  return Math.max(0, Math.min(1, wanted));
+};
+
+/** Fraction of the gap occupancy closes over `dt`. Same form as `demandStep`. */
+export const occupancyStep = (dt: number): number =>
+  1 - Math.exp(-Math.max(0, dt) / OCCUPANCY_TAU);
+
+/** Whether a zone is sitting empty enough to start its vacancy clock. */
+export const isVacant = (s: GameState, kind: ZoneKind): boolean =>
+  occupancyOf(s, kind) < OCCUPANCY_EMPTY;
+
+/** Whether a zone has been empty long enough to start writing buildings off. */
+export const isAbandoning = (s: GameState, kind: ZoneKind): boolean =>
+  isVacant(s, kind) && vacantOf(s, kind) >= ABANDON_SECONDS && standingOf(s, kind) > 0;
+
+/** Whether a zone has ruins to bring back and the occupancy to justify it. */
+export const isRecovering = (s: GameState, kind: ZoneKind): boolean =>
+  !isVacant(s, kind) && abandonedOf(s, kind) > 0;
+
+/** Buildings a zone writes off per second, once it is past ABANDON_SECONDS. */
+export const abandonRate = (s: GameState, kind: ZoneKind): number =>
+  standingOf(s, kind) / ABANDON_SPREAD_SECONDS;
+
+/** Buildings a zone brings back per second. Four times the rate it lost them. */
+export const recoverRate = (s: GameState, kind: ZoneKind): number =>
+  countOf(s, kind) / RECOVER_SPREAD_SECONDS;
+
+// ----------------------------------------------------------------- levelling
+
+/**
+ * Whether the city as a whole is in a state that lets buildings climb.
+ *
+ * Two of the three gates: the zone is wanted, and the city is worth expanding
+ * into. The third — education — is per *level* rather than per zone, so it is
+ * applied in `promotableAt` where the level is known.
+ */
+export const canLevelUp = (s: GameState, kind: ZoneKind): boolean =>
+  occupancyOf(s, kind) >= LEVEL_UP_OCCUPANCY && s.happiness >= LEVEL_UP_HAPPINESS;
+
+/** Buildings of a zone that could climb if the gates are open. */
+export const promotable = (s: GameState, kind: ZoneKind): number => {
+  const levels = levelsOf(s, kind);
+  let n = 0;
+  for (let l = 0; l < LEVELS - 1; l++) n += levels[l] ?? 0;
+  return n;
+};
+
+/**
+ * Share of the city's residents within reach of education, in [0, 1].
+ *
+ * Schools and universities pooled, because a level's requirement is a statement
+ * about how educated the city is rather than about which building did it. Same
+ * convention as the service coverages, and the same denominator: the population
+ * the housing is built for, so it does not jump when a city empties out.
+ */
+export const educationCoverage = (s: GameState): number => {
+  const people = population(s);
+  if (people <= 0) return 1;
+  let reached = 0;
+  for (const service of EDUCATION_SERVICES) reached += covered(s, service);
+  return Math.min(1, reached / people);
+};
+
+/** Buildings a zone promotes per second, with every gate open. */
+export const promoteRate = (s: GameState, kind: ZoneKind): number =>
+  canLevelUp(s, kind) ? promotable(s, kind) / LEVEL_UP_SECONDS : 0;
+
 // ------------------------------------------------------------------ capacity
 
-/** Civic buildings, of every kind. */
-export const civicBuildings = (s: GameState): number => s.hospitals + s.police + s.fire;
+/** Civic buildings, of every kind — the three that gate happiness and the two
+ *  that gate levelling. */
+export const civicBuildings = (s: GameState): number =>
+  s.hospitals + s.police + s.fire + s.schools + s.universities;
 
 /**
  * Housing land. Civic buildings no longer come out of it: they stand on 2x2
@@ -96,9 +310,17 @@ export const parkCapacity = (s: GameState): number =>
 export const civicSiteCapacity = (s: GameState): number =>
   s.districts * CIVIC_SITES_PER_DISTRICT;
 
-/** Every plot the city can put something on, civic sites included. */
+/** 3x3 university sites the city owns. One a district, always. */
+export const universitySiteCapacity = (s: GameState): number =>
+  s.districts * UNIVERSITY_SITES_PER_DISTRICT;
+
+/** Every plot the city can put something on, every kind of site included. */
 export const plotCapacity = (s: GameState): number =>
-  homeCapacity(s) + shopCapacity(s) + industryCapacity(s) + civicSiteCapacity(s);
+  homeCapacity(s) +
+  shopCapacity(s) +
+  industryCapacity(s) +
+  civicSiteCapacity(s) +
+  universitySiteCapacity(s);
 
 /**
  * A civic building is development too, so it counts against the same total.
@@ -113,32 +335,100 @@ export const plotCapacity = (s: GameState): number =>
 export const plotsUsed = (s: GameState): number =>
   s.homes + s.shops + s.industry + civicBuildings(s);
 
-export const occupancy = (s: GameState): number => plotsUsed(s) / plotCapacity(s);
+/**
+ * Share of the city's plots with something on them.
+ *
+ * Named `developed` rather than `occupancy` since buildings gained an occupancy
+ * of their own: this one is about land, `occupancyR` and its siblings are about
+ * tenancy, and a reader who conflates the two gets the annexation gate wrong in
+ * both directions. Abandoned buildings count here — they are still standing on
+ * the plot — which is exactly why the annexation trigger uses `activeDeveloped`
+ * rather than this.
+ */
+export const developed = (s: GameState): number => plotsUsed(s) / plotCapacity(s);
 
-export const residents = (s: GameState): number => s.homes * tierOf(s).capacity;
+/** Buildings the city has written off, across every zone. */
+export const abandonedBuildings = (s: GameState): number =>
+  s.abandonedR + s.abandonedC + s.abandonedI;
+
+/**
+ * Share of the city's plots with something *working* on them.
+ *
+ * What annexation triggers on, and the distinction is the whole point: a ruin
+ * holds its plot but earns nothing and houses nobody, so counting it would let
+ * a city expand because it was full of the buildings it had given up on.
+ * Expanding because the city is full of ruins is exactly backwards.
+ */
+export const activeDeveloped = (s: GameState): number =>
+  Math.max(0, plotsUsed(s) - abandonedBuildings(s)) / plotCapacity(s);
+
+/**
+ * Residents housed, cohort by cohort, less the share of housing sitting empty.
+ *
+ * This replaces `homes x tierOf(s).capacity`. Three things fall out of it that
+ * the old form could not express: a mixed-age skyline houses a mix of
+ * populations, an unhappy city loses residents without losing a building, and
+ * an abandoned house holds nobody because it holds no level.
+ */
+export const residents = (s: GameState): number => population(s) * s.occupancyR;
+
+/**
+ * The population the city's housing is *built for*, empty or not.
+ *
+ * The denominator every coverage uses, and it has to be this one rather than
+ * `residents`. Coverage measured against who is actually in the houses makes an
+ * emptied city read as fully covered — there is nobody left for a hospital to
+ * fail — which sends happiness back up, which refills the houses, which
+ * collapses coverage again. Measured, that loop oscillates indefinitely and
+ * never settles anywhere a player can act on.
+ *
+ * Against capacity it is stable and it is also the truer statement: a service
+ * is sized to the housing stock it stands among, not to how full it happens to
+ * be this minute. A city with no housing at all still reads as covered, so the
+ * opening — where there is genuinely nobody to fail — is unchanged.
+ */
+export const population = (s: GameState): number => {
+  let people = 0;
+  for (let l = 0; l < s.homeLevels.length; l++) {
+    people += (s.homeLevels[l] ?? 0) * (LEVEL_CAPACITY[l] ?? 0);
+  }
+  return people;
+};
 
 // ------------------------------------------------------------------ services
 
 export type ServiceKey = Service['key'];
 
 export const serviceCount = (s: GameState, key: ServiceKey): number =>
-  key === 'hospital' ? s.hospitals : key === 'police' ? s.police : s.fire;
+  key === 'hospital' ? s.hospitals
+  : key === 'police' ? s.police
+  : key === 'fire' ? s.fire
+  : key === 'school' ? s.schools
+  : s.universities;
 
 /** How much of a type's payroll is actually filled, in [0, 1]. See `staffStep`. */
 export const staffing = (s: GameState, key: ServiceKey): number =>
-  key === 'hospital' ? s.hospitalStaff : key === 'police' ? s.policeStaff : s.fireStaff;
+  key === 'hospital' ? s.hospitalStaff
+  : key === 'police' ? s.policeStaff
+  : key === 'fire' ? s.fireStaff
+  : key === 'school' ? s.schoolStaff
+  : s.universityStaff;
 
 /**
  * Sites of one type the city has land for.
  *
- * The interleave hands hospitals sites 3k, police 3k+1 and fire 3k+2 out of one
- * city-wide list, so with 7 sites a district the three types get 3/2/2 in the
- * first district and even out from there.
+ * Two answers, because there are two kinds of site. The four 2x2 types share one
+ * city-wide list by a fixed interleave — hospitals take 4k, police 4k+1, fire
+ * 4k+2, schools 4k+3 — so with 6 sites a district the first district gets
+ * 2/2/1/1 and they even out from there. A university stands on its own 3x3 list,
+ * one to a district, and does not touch the interleave at all.
  */
 export const siteCapacity = (s: GameState, key: ServiceKey): number => {
+  if (key === 'university') return universitySiteCapacity(s);
   const sites = civicSiteCapacity(s);
-  const offset = key === 'hospital' ? 0 : key === 'police' ? 1 : 2;
-  return Math.max(0, Math.ceil((sites - offset) / 3));
+  const offset = CIVIC_SERVICES.findIndex((service) => service.key === key);
+  if (offset < 0) return 0;
+  return Math.max(0, Math.ceil((sites - offset) / CIVIC_SERVICES.length));
 };
 
 /**
@@ -152,13 +442,13 @@ export const siteCapacity = (s: GameState, key: ServiceKey): number => {
  */
 export const serviceAllowed = (s: GameState, service: Service): number =>
   Math.min(
-    Math.floor(residents(s) / service.capacity) + 1,
+    Math.floor(population(s) / service.capacity) + 1,
     siteCapacity(s, service.key),
   );
 
 /** How many of a service the current population would need for full cover. */
 export const serviceNeeded = (s: GameState, service: Service): number =>
-  Math.ceil(residents(s) / service.capacity);
+  Math.ceil(population(s) / service.capacity);
 
 /** Residents a service actually reaches, staffing included. */
 export const covered = (s: GameState, service: Service): number =>
@@ -167,14 +457,16 @@ export const covered = (s: GameState, service: Service): number =>
 /**
  * Share of the population a service reaches, capped at everybody.
  *
- * An empty city reads as fully covered rather than as fully neglected: this is
- * the share of residents a service fails, and it fails nobody when there is
- * nobody. Without that the game deadlocks on its own tutorial — happiness would
- * be 0 before the first house, the housing gate would refuse to open it, and
- * there would be no income to buy the hospital that lifts the gate.
+ * A city with no housing reads as fully covered rather than as fully
+ * neglected: this is the share of the population a service fails, and it fails
+ * nobody when there is nowhere to live. Without that the game deadlocks on its
+ * own tutorial — happiness would be 0 before the first house, the housing gate
+ * would refuse to open it, and there would be no income to buy the hospital
+ * that lifts the gate. See `population` for why the denominator is the housing
+ * stock rather than the people currently in it.
  */
 export const coverage = (s: GameState, service: Service): number => {
-  const people = residents(s);
+  const people = population(s);
   if (people <= 0) return 1;
   return Math.min(1, covered(s, service) / people);
 };
@@ -195,7 +487,7 @@ export const serviceReadings = (s: GameState): readonly ServiceReading[] =>
     built: serviceCount(s, service.key),
     allowed: serviceAllowed(s, service),
     needed: serviceNeeded(s, service),
-    covered: Math.min(covered(s, service), residents(s)),
+    covered: Math.min(covered(s, service), population(s)),
     coverage: coverage(s, service),
   }));
 
@@ -233,7 +525,7 @@ export interface HappinessTerm {
 
 /** Every term happiness is made of, services first. The weights sum to 1. */
 export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
-  ...SERVICES.map((service) => ({
+  ...HAPPINESS_SERVICES.map((service) => ({
     key: service.key,
     coverLabel: service.coverLabel,
     weight: service.weight,
@@ -257,7 +549,7 @@ export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
  */
 export const happinessTarget = (s: GameState): number => {
   const covered =
-    SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0) +
+    HAPPINESS_SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0) +
     RECREATION_WEIGHT * recreationCoverage(s);
   return Math.max(0, covered - FIRE_UNHAPPINESS * s.fires.length);
 };
@@ -329,8 +621,7 @@ export const staffAfterBuild = (current: number, built: number): number =>
 export const burnableBuildings = (s: GameState): number => s.homes + s.shops + s.industry;
 
 /** How many of one kind the city has. The denominator an ignition draws against. */
-export const burnableOf = (s: GameState, kind: FireKind): number =>
-  kind === 'home' ? s.homes : kind === 'shop' ? s.shops : s.industry;
+export const burnableOf = countOf;
 
 /**
  * Share of residents the fire service reaches. The one input suppression reads.
@@ -377,14 +668,28 @@ export const resolvesAt = (s: GameState): number =>
   Math.min(extinguishSeconds(s), BURN_OUT_SECONDS);
 
 /** Fires burning in one kind of building right now. */
-export const burningOf = (s: GameState, kind: FireKind): number => {
+export const burningOf = (s: GameState, kind: ZoneKind): number => {
   let n = 0;
   for (const fire of s.fires) if (fire.kind === kind) n++;
   return n;
 };
 
+/**
+ * Share of a zone that is currently on fire, in [0, 1].
+ *
+ * A share rather than a count now that buildings differ: which cohort the
+ * burning building sits in is not recorded — a fire stores an ordinal, not a
+ * level — so taking a proportion of the zone's earnings off is the honest read
+ * and the only one that cannot go negative. Measured against the standing
+ * stock, because a ruin was earning nothing to begin with.
+ */
+export const alight = (s: GameState, kind: ZoneKind): number => {
+  const standing = standingOf(s, kind);
+  return standing <= 0 ? 0 : Math.min(1, burningOf(s, kind) / standing);
+};
+
 /** Whether this exact building is already alight. Ignition never doubles up. */
-export const isBurning = (s: GameState, kind: FireKind, index: number): boolean =>
+export const isBurning = (s: GameState, kind: ZoneKind, index: number): boolean =>
   s.fires.some((fire) => fire.kind === kind && fire.index === index);
 
 // -------------------------------------------------------------------- demand
@@ -397,7 +702,22 @@ export const exportMarket = (s: GameState): number =>
   EXPORT_BASE + EXPORT_PER_DISTRICT * (s.districts - 1);
 
 export const jobs = (s: GameState): number =>
-  s.shops * JOBS_PER_COMMERCIAL + s.industry * JOBS_PER_INDUSTRIAL;
+  activeOf(s, 'shop') * JOBS_PER_COMMERCIAL + activeOf(s, 'industry') * JOBS_PER_INDUSTRIAL;
+
+/**
+ * The imbalance that counts as "saturated", at the city's current level mix.
+ *
+ * DEMAND_SCALE on its own is a constant, and a constant could only ever be
+ * right at one level: residents span 4 to 300 a plot, so a scale set for
+ * detached housing pins every signal the moment the city has towers in it —
+ * which is exactly what the old build did, for about 21 hours of any 24 spent
+ * playing it, and what its own comment said could only be fixed by dividing by
+ * a size term rather than a constant. This is that size term. It measures the
+ * imbalance in level-0 buildings, so a district out of balance reads the same
+ * whatever is standing on it — and the arc survives it, because jobs are per
+ * plot while workers are per resident.
+ */
+export const demandScale = (s: GameState): number => DEMAND_SCALE * cityScale(s);
 
 export const workers = (s: GameState): number => residents(s) * WORKING_SHARE;
 
@@ -420,15 +740,18 @@ export interface DemandTargets {
  * whole tutorial: the demand bar flatlines, the discount never arrives, and the
  * services block says why.
  */
-export const demandTargets = (s: GameState): DemandTargets => ({
-  r: Math.min(s.happiness, clampDemand((jobs(s) - workers(s)) / DEMAND_SCALE)),
-  c: clampDemand(
-    (residents(s) * SPEND_PER_RESIDENT - s.shops * SHOP_THROUGHPUT) / DEMAND_SCALE,
-  ),
-  i: clampDemand(
-    (s.shops * SUPPLY_DRAW + exportMarket(s) - s.industry * INDUSTRIAL_OUTPUT) / DEMAND_SCALE,
-  ),
-});
+export const demandTargets = (s: GameState): DemandTargets => {
+  const scale = demandScale(s);
+  const shops = activeOf(s, 'shop');
+  const industry = activeOf(s, 'industry');
+  return {
+    r: Math.min(s.happiness, clampDemand((jobs(s) - workers(s)) / scale)),
+    c: clampDemand((residents(s) * SPEND_PER_RESIDENT - shops * SHOP_THROUGHPUT) / scale),
+    i: clampDemand(
+      (shops * SUPPLY_DRAW + exportMarket(s) - industry * INDUSTRIAL_OUTPUT) / scale,
+    ),
+  };
+};
 
 /**
  * Fraction of the gap to close over `dt` seconds.
@@ -470,9 +793,8 @@ export const parkCost = (s: GameState): number => PARK_BASE * PARK_GROWTH ** s.p
 
 /** Services are not demand-priced: nobody haggles over a hospital. */
 export const serviceCost = (s: GameState, service: Service): number =>
-  service.base * CIVIC_GROWTH ** serviceCount(s, service.key);
+  service.base * service.growth ** serviceCount(s, service.key);
 
-export const rezoneCost = (s: GameState): number => REZONE_BASE * REZONE_GROWTH ** s.tier;
 export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** (s.districts - 1);
 
 // -------------------------------------------------------------------- income
@@ -487,10 +809,9 @@ export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** 
  * city owns and turn income negative.
  */
 export const income = (s: GameState): number => {
-  const tier = tierOf(s);
-  const people = Math.max(0, s.homes - burningOf(s, 'home')) * tier.capacity;
-  const shops = Math.max(0, s.shops - burningOf(s, 'shop'));
-  const industry = Math.max(0, s.industry - burningOf(s, 'industry'));
+  const people = residents(s) * (1 - alight(s, 'home'));
+  const shops = effectiveOf(s, 'shop') * (1 - alight(s, 'shop'));
+  const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry'));
   return (
     people *
     RENT *
@@ -500,8 +821,6 @@ export const income = (s: GameState): number => {
 };
 
 // ------------------------------------------------------------------ can-build
-
-export const nextTier = (s: GameState) => TIERS[s.tier + 1];
 
 export const canBuildHome = (s: GameState): boolean =>
   s.homes < homeCapacity(s) && s.happiness >= HAPPINESS_MIN_BUILD && s.cash >= homeCost(s);
@@ -518,27 +837,42 @@ export const canBuildPark = (s: GameState): boolean =>
 export const canBuildService = (s: GameState, service: Service): boolean =>
   serviceCount(s, service.key) < serviceAllowed(s, service) && s.cash >= serviceCost(s, service);
 
-export const canRezone = (s: GameState): boolean =>
-  nextTier(s) !== undefined && s.homes >= REZONE_MIN_HOMES && s.cash >= rezoneCost(s);
-
 export const canAnnex = (s: GameState): boolean =>
   s.districts < MAX_DISTRICTS &&
-  occupancy(s) >= ANNEX_MIN_OCCUPANCY &&
+  activeDeveloped(s) >= ANNEX_MIN_OCCUPANCY &&
   s.cash >= annexCost(s);
 
-/** Why the annex button is off, phrased for the HUD. */
+/**
+ * Whether the city will take the next district on its own this tick.
+ *
+ * Everything the button needs plus a reserve, so the automatic pass spends a
+ * surplus rather than the treasury. A player who wants the land before the
+ * surplus is there presses the button; that is the override.
+ */
+export const willAutoAnnex = (s: GameState): boolean =>
+  canAnnex(s) && s.cash >= annexCost(s) * (1 + AUTO_ANNEX_RESERVE);
+
+/**
+ * Why the city is not expanding, phrased for the HUD.
+ *
+ * Three answers now rather than two, because with annexation automatic "why has
+ * nothing happened" is a question the player asks without having clicked
+ * anything — and "you cannot afford it yet" is a real answer to it, where
+ * before it was implied by a disabled button next to a price.
+ */
 export function annexBlocker(s: GameState): string | null {
   if (s.districts >= MAX_DISTRICTS) return 'City limits reached';
-  if (occupancy(s) < ANNEX_MIN_OCCUPANCY) {
+  if (activeDeveloped(s) < ANNEX_MIN_OCCUPANCY) {
     return `Needs ${Math.round(ANNEX_MIN_OCCUPANCY * 100)}% developed`;
   }
+  if (s.cash < annexCost(s)) return 'Saving for the next district';
   return null;
 }
 
 /**
  * Why the home button is off, phrased for the HUD.
  *
- * Same shape as `annexBlocker`/`rezoneBlocker` so the HUD has one pattern to
+ * Same shape as `annexBlocker` so the HUD has one pattern to
  * follow rather than two: a string when the button is dead for a reason worth
  * saying, null when it is only a matter of money.
  */
@@ -560,9 +894,3 @@ export function serviceBlocker(s: GameState, service: Service): string | null {
   return null;
 }
 
-/** Why the rezone button is off, phrased for the HUD. */
-export function rezoneBlocker(s: GameState): string | null {
-  if (nextTier(s) === undefined) return 'Zoning maxed';
-  if (s.homes < REZONE_MIN_HOMES) return `Rezone needs ${REZONE_MIN_HOMES} homes`;
-  return null;
-}

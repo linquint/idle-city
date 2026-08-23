@@ -1,7 +1,8 @@
-import { MAX_ACTIVE_FIRES, MAX_DISTRICTS, SERVICES, TIERS } from './config';
+import { LEVELS, MAX_ACTIVE_FIRES, MAX_DISTRICTS, OCCUPANCY_FULL, SERVICES } from './config';
 import {
   burnableOf,
   clampDemand,
+  cohortTotal,
   happinessTarget,
   homeCapacity,
   industryCapacity,
@@ -10,23 +11,26 @@ import {
   shopCapacity,
 } from './economy';
 import {
+  cohortOf,
   createState,
   SAVE_VERSION,
   type Fire,
   type FireKind,
   type GameState,
+  type LevelCohort,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v4';
+export const SAVE_KEY = 'idle-city/save/v5';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v4 miss falls back through
+ * new build has not agreed to lose their city — so a v5 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v4',
   'idle-city/save/v3',
   'idle-city/save/v2',
   'idle-city/save/v1',
@@ -56,6 +60,39 @@ const demand = (v: unknown): number => clampDemand(num(v, 0));
 /** Staffing and happiness are shares. A save claiming 9 gets 1. */
 const share = (v: unknown, fallback: number): number =>
   Math.max(0, Math.min(1, num(v, fallback)));
+
+/**
+ * Rebuilds one zone's level cohort from untrusted JSON.
+ *
+ * Three shapes arrive here. A v5 save has the array, which is read a level at a
+ * time and never past LEVELS — a save claiming a fifth level simply does not
+ * have one to claim. A v4 save has no array but does have a global `tier`, and
+ * the honest reading of "the whole city is towers" is a cohort with every
+ * standing building at that level, which is what `fallback` carries in. Anything
+ * older has neither and starts where a fresh city does, at level 0.
+ *
+ * Whatever arrives is then reconciled to `standing` rather than trusted, because
+ * the sum is the one invariant the rest of the game reads: buildings are trimmed
+ * from the newest end — lowest level first, the same rule abandonment and
+ * demolition use — and any shortfall is topped up at level 0.
+ */
+function migrateCohort(raw: unknown, standing: number, fallback: number): LevelCohort {
+  const levels = cohortOf();
+  if (Array.isArray(raw)) {
+    for (let l = 0; l < LEVELS; l++) levels[l] = count(raw[l]);
+  } else {
+    levels[Math.min(LEVELS - 1, Math.max(0, Math.floor(fallback)))] = standing;
+  }
+
+  let over = cohortTotal(levels) - standing;
+  for (let l = 0; l < LEVELS && over > 0; l++) {
+    const take = Math.min(over, levels[l] ?? 0);
+    levels[l] = (levels[l] ?? 0) - take;
+    over -= take;
+  }
+  levels[0] = (levels[0] ?? 0) + Math.max(0, standing - cohortTotal(levels));
+  return levels;
+}
 
 const FIRE_KINDS: readonly FireKind[] = ['home', 'shop', 'industry'];
 
@@ -101,8 +138,11 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   const r = raw as Record<string, unknown>;
 
   const base = createState(now);
+  const version = Math.max(0, Math.floor(num(r['version'], 0)));
   const districts = Math.min(MAX_DISTRICTS, Math.max(1, Math.floor(num(r['districts'], 1))));
-  const tier = Math.min(TIERS.length - 1, Math.max(0, Math.floor(num(r['tier'], 0))));
+  // v4's one global tier. Dropped as a field, but not as information: it is
+  // what every building in a v4 city stood at, so it seeds the cohorts below.
+  const tier = Math.min(LEVELS - 1, Math.max(0, Math.floor(num(r['tier'], 0))));
 
   const state: GameState = {
     version: SAVE_VERSION,
@@ -113,6 +153,36 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // A v1 save has none of these; every one defaults to nothing built and no
     // demand, which is exactly the state a fresh city starts in.
     industry: count(r['industry']),
+    // Filled in below, once the counts and the write-offs they answer to are
+    // legal — a cohort has to sum to something before it can be summed to it.
+    homeLevels: cohortOf(),
+    shopLevels: cohortOf(),
+    industryLevels: cohortOf(),
+    // Not zero. A save carrying no occupancy at all is every save written
+    // before this version, and zero would read as a city in the middle of
+    // being abandoned the instant it opened — the vacancy clock would start on
+    // the first tick and the player would watch their city rot for no reason
+    // they could see. A v4 city's residents were `homes x capacity`, which is
+    // implicitly full, so the faithful default is the value a happy city
+    // settles at rather than either extreme.
+    occupancyR: share(r['occupancyR'], OCCUPANCY_FULL),
+    occupancyC: share(r['occupancyC'], OCCUPANCY_FULL),
+    occupancyI: share(r['occupancyI'], OCCUPANCY_FULL),
+    // A vacancy clock is seconds, so it is floored at zero and nothing else: a
+    // save claiming an enormous one only gets to abandon at the usual rate, and
+    // the first tick above OCCUPANCY_EMPTY resets it anyway.
+    vacantR: Math.max(0, num(r['vacantR'], 0)),
+    vacantC: Math.max(0, num(r['vacantC'], 0)),
+    vacantI: Math.max(0, num(r['vacantI'], 0)),
+    // Clamped against the building counts below, once those are legal.
+    abandonedR: count(r['abandonedR']),
+    abandonedC: count(r['abandonedC']),
+    abandonedI: count(r['abandonedI']),
+    // Fractional buildings, so the band is the one `spendDrift` works in. A
+    // save outside it would hand the city a free promotion on the first tick.
+    driftR: Math.max(-1, Math.min(1, num(r['driftR'], 0))),
+    driftC: Math.max(-1, Math.min(1, num(r['driftC'], 0))),
+    driftI: Math.max(-1, Math.min(1, num(r['driftI'], 0))),
     // A v3 save has no parks, which is exactly the state a city that never
     // built one is in. Clamped to the land below, like every other count.
     parks: count(r['parks']),
@@ -121,11 +191,21 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // raise happiness — so the counts carry across by weight rather than being
     // silently deleted, and the clamps below make whatever arrives legal.
     hospitals: count(r['hospitals'] ?? r['clinics']),
-    police: count(r['police'] ?? r['schools']),
+    // v2's `schools` were what became police stations, and a v5 save has a
+    // `schools` of its own that means something else entirely. Version is the
+    // only thing that can tell them apart, so the old alias is read only from a
+    // save old enough to have meant it.
+    police: count(r['police'] ?? (version <= 2 ? r['schools'] : undefined)),
     fire: count(r['fire'] ?? r['stations']),
+    // A save older than v5 has neither, which is the state a city that never
+    // built one is in.
+    schools: count(version >= 5 ? r['schools'] : undefined),
+    universities: count(r['universities']),
     hospitalStaff: share(r['hospitalStaff'], 0),
     policeStaff: share(r['policeStaff'], 0),
     fireStaff: share(r['fireStaff'], 0),
+    schoolStaff: share(r['schoolStaff'], 0),
+    universityStaff: share(r['universityStaff'], 0),
     // Filled in below, once the counts it is computed from are legal.
     happiness: 0,
     demandR: demand(r['demandR']),
@@ -138,7 +218,6 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // owe the city a fire it never has to pay.
     fireCursor: Math.max(0, Math.floor(num(r['fireCursor'], 0))),
     fireHazard: Math.max(0, num(r['fireHazard'], 0)),
-    tier,
     districts,
     earned: Math.max(0, num(r['earned'], 0)),
     autoDevelop: r['autoDevelop'] === true,
@@ -154,6 +233,20 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   state.industry = Math.min(state.industry, industryCapacity(state));
   state.parks = Math.min(state.parks, parkCapacity(state));
 
+  // Write-offs cannot outnumber the buildings they are write-offs of, and the
+  // cohorts are then reconciled to what is left standing. This order is forced:
+  // `standing` is `count - abandoned`, so both have to be legal first.
+  state.abandonedR = Math.min(state.abandonedR, state.homes);
+  state.abandonedC = Math.min(state.abandonedC, state.shops);
+  state.abandonedI = Math.min(state.abandonedI, state.industry);
+  state.homeLevels = migrateCohort(r['homeLevels'], state.homes - state.abandonedR, tier);
+  state.shopLevels = migrateCohort(r['shopLevels'], state.shops - state.abandonedC, tier);
+  state.industryLevels = migrateCohort(
+    r['industryLevels'],
+    state.industry - state.abandonedI,
+    tier,
+  );
+
   // A doctored save with 400 hospitals gets the one its population is allowed,
   // and a save carried over from a smaller district count never keeps a
   // building whose site no longer exists. `serviceAllowed` folds both in.
@@ -161,7 +254,9 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     const allowed = serviceAllowed(state, service);
     if (service.key === 'hospital') state.hospitals = Math.min(state.hospitals, allowed);
     else if (service.key === 'police') state.police = Math.min(state.police, allowed);
-    else state.fire = Math.min(state.fire, allowed);
+    else if (service.key === 'fire') state.fire = Math.min(state.fire, allowed);
+    else if (service.key === 'school') state.schools = Math.min(state.schools, allowed);
+    else state.universities = Math.min(state.universities, allowed);
   }
 
   // After the building counts are legal, because a fire is only legal if the

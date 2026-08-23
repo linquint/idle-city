@@ -4,6 +4,14 @@ export interface GrowableOptions {
   castShadow?: boolean;
   receiveShadow?: boolean;
   renderOrder?: number;
+  /**
+   * Scene-graph name, reapplied across a reallocation.
+   *
+   * Set where a mesh is worth finding again from outside: the browser's scene
+   * inspector, and the tests, which check the building layer as a black box by
+   * walking the scene rather than by reaching into its privates.
+   */
+  name?: string;
 }
 
 /**
@@ -32,6 +40,7 @@ export class GrowableInstancedMesh {
     mesh.castShadow = this.options.castShadow ?? false;
     mesh.receiveShadow = this.options.receiveShadow ?? false;
     mesh.renderOrder = this.options.renderOrder ?? 0;
+    mesh.name = this.options.name ?? '';
     // The city is always the thing on screen, so a per-object frustum test can
     // only ever cost us. Skipping it also avoids stale bounds, since instance
     // matrices change every frame that anything is still growing.

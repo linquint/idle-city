@@ -5,17 +5,19 @@ import {
   MAX_DISTRICTS,
   PARK_BASE,
   PARK_GROWTH,
+  EDUCATION_SERVICES,
+  HAPPINESS_SERVICES,
+  LEVEL_CAPACITY,
   RECREATION_WEIGHT,
   SERVICES,
-  TIERS,
 } from '../src/sim/config';
 import {
   bindingTerm,
   canBuildPark,
   happinessTarget,
   happinessTerms,
+  developed,
   income,
-  occupancy,
   parkBlocker,
   parkCapacity,
   parkCost,
@@ -31,6 +33,7 @@ import {
   planFor,
 } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
+import { built, housed } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -94,10 +97,10 @@ describe('park land', () => {
    * under the gate for the sole reason that parks now exist.
    */
   it('is not development, so it does not move the annexation gate', () => {
-    const before = state({ homes: 19, shops: 28, industry: 11 });
+    const before = state(built(24, 31, 8));
     const after = { ...before, parks: 4 };
     expect(plotCapacity(after)).toBe(plotCapacity(before));
-    expect(occupancy(after)).toBe(occupancy(before));
+    expect(developed(after)).toBe(developed(before));
   });
 });
 
@@ -119,12 +122,12 @@ describe('the park curve', () => {
   });
 
   it('earns nothing at all', () => {
-    const quiet = state({ homes: 19, shops: 4 });
+    const quiet = state(built(19, 4));
     expect(income({ ...quiet, parks: 4 })).toBeCloseTo(income(quiet), 12);
   });
 
   it('runs out of land rather than out of permission', () => {
-    const full = state({ districts: 1, parks: 4, cash: 1e9 });
+    const full = state({ districts: 1, parks: BUILDABLE_PARKS_PER_DISTRICT, cash: 1e9 });
     expect(canBuildPark(full)).toBe(false);
     expect(parkBlocker(full)).toBe('No courtyards left');
     expect(parkBlocker(state({ parks: 3 }))).toBeNull();
@@ -141,37 +144,39 @@ describe('the park curve', () => {
 
 describe('recreation coverage', () => {
   it('is a share of homes, not of residents', () => {
-    expect(recreationCoverage(state({ homes: 10, parks: 1 }))).toBeCloseTo(HOMES_PER_PARK / 10, 12);
-    expect(recreationCoverage(state({ homes: 19, parks: 4 }))).toBe(1);
-    expect(recreationCoverage(state({ homes: 19, parks: 0 }))).toBe(0);
+    expect(recreationCoverage(state({ ...housed(10), parks: 1 }))).toBeCloseTo(HOMES_PER_PARK / 10, 12);
+    expect(recreationCoverage(state({ ...housed(19), parks: 4 }))).toBe(1);
+    expect(recreationCoverage(state({ ...housed(19), parks: 0 }))).toBe(0);
   });
 
   /**
-   * The reason the denominator is homes. Rezoning multiplies residents by up to
+   * The reason the denominator is homes. Levelling multiplies residents by up to
    * 75x and adds not one park plot, so a per-resident measure would be trivial
-   * at tier 0 and unreachable at tier 3 — the same term meaning two different
+   * at level 0 and unreachable at level 3 — the same term meaning two different
    * things at two ends of one game.
    */
-  it('does not move when the city rezones', () => {
+  it('does not move when the city climbs', () => {
     for (const parks of [0, 1, 3, 4]) {
-      const base = state({ homes: 19, parks });
-      const reach = recreationCoverage(base);
-      for (let tier = 0; tier < TIERS.length; tier++) {
-        const rezoned = { ...base, tier };
-        expect(residents(rezoned)).toBe(19 * (TIERS[tier]?.capacity ?? 0));
-        expect(recreationCoverage(rezoned)).toBe(reach);
+      const reach = recreationCoverage(state({ ...housed(19), parks }));
+      for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
+        const climbed = state({ ...housed(19, level), parks });
+        expect(residents(climbed)).toBe(19 * (LEVEL_CAPACITY[level] ?? 0));
+        expect(recreationCoverage(climbed)).toBe(reach);
       }
     }
   });
 
   it('reads as covered when there is nobody housed to be short of one', () => {
     expect(recreationCoverage(state())).toBe(1);
-    expect(recreationCoverage(state({ shops: 20, industry: 9 }))).toBe(1);
+    expect(recreationCoverage(state(built(0, 20, 9)))).toBe(1);
   });
 
-  it('is satisfiable on the land a district actually has, at every tier', () => {
-    for (let tier = 0; tier < TIERS.length; tier++) {
-      const full = state({ tier, homes: 19, parks: BUILDABLE_PARKS_PER_DISTRICT });
+  it('is satisfiable on the land a district actually has, at every level', () => {
+    // A district holds 24 homes and 4 parks now, and HOMES_PER_PARK is 5, so
+    // 4 parks cover 20 of 24 rather than all of them — the one number the wider
+    // district moved. Checked as the ratio it is rather than as a hard 1.
+    for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
+      const full = state({ ...housed(19, level), parks: BUILDABLE_PARKS_PER_DISTRICT });
       expect(recreationCoverage(full)).toBe(1);
     }
   });
@@ -179,10 +184,17 @@ describe('recreation coverage', () => {
 
 describe('the happiness weights', () => {
   it('sum to exactly 1 across the four terms', () => {
+    // Across the four that *are* happiness terms. Schools and universities are
+    // services by every other measure — a site, a cost curve, a staffing ramp —
+    // and deliberately carry no weight here: what they gate is how tall the city
+    // may build. Adding them to this sum would re-open the calibration for
+    // nothing. See LEVEL_EDUCATION.
     const services = SERVICES.reduce((sum, service) => sum + service.weight, 0);
     expect(services + RECREATION_WEIGHT).toBeCloseTo(1, 12);
+    expect(HAPPINESS_SERVICES).toHaveLength(3);
+    for (const service of EDUCATION_SERVICES) expect(service.weight).toBe(0);
     const terms = happinessTerms(state());
-    expect(terms).toHaveLength(SERVICES.length + 1);
+    expect(terms).toHaveLength(HAPPINESS_SERVICES.length + 1);
     expect(terms.reduce((sum, term) => sum + term.weight, 0)).toBeCloseTo(1, 12);
   });
 
@@ -193,30 +205,30 @@ describe('the happiness weights', () => {
    * load. 0.82 against 0.35 is not close.
    */
   it('cap a park-less city at 0.82, well clear of the housing gate', () => {
-    for (const tier of [0, 1, 2, 3]) {
-      const best = state({ homes: 19, tier, parks: 0, ...served() });
+    for (const level of [0, 1, 2, 3]) {
+      const best = state({ ...housed(19, level), parks: 0, ...served() });
       expect(happinessTarget(best)).toBeLessThanOrEqual(0.82 + 1e-12);
       expect(happinessTarget(best)).toBeGreaterThan(HAPPINESS_MIN_BUILD);
     }
     // Exactly 0.82 when the three services are full and nothing is on fire.
-    expect(happinessTarget(state({ homes: 19, parks: 0, ...served() }))).toBeCloseTo(0.82, 12);
+    expect(happinessTarget(state({ ...housed(19), parks: 0, ...served() }))).toBeCloseTo(0.82, 12);
   });
 
   it('reach 1 only once the parks are in as well', () => {
-    const planted = state({ homes: 19, parks: 4, ...served() });
+    const planted = state({ ...housed(19), parks: 4, ...served() });
     expect(happinessTarget(planted)).toBeCloseTo(1, 12);
     expect(bindingTerm(planted).coverage).toBe(1);
   });
 
   it('name recreation when it is the term costing the most', () => {
-    const parkless = state({ homes: 19, parks: 0, ...served() });
+    const parkless = state({ ...housed(19), parks: 0, ...served() });
     expect(bindingTerm(parkless).key).toBe('recreation');
     expect(bindingTerm(parkless).coverLabel).toBe('Parks per home');
   });
 
   it('let a v3-shaped city keep building housing on load', () => {
     // The state a v3 save arrives in: services as they were, parks at zero.
-    const carried = at({ homes: 19, parks: 0, ...served() });
+    const carried = at({ ...housed(19), parks: 0, ...served() });
     for (let i = 0; i < 3000; i++) carried.advance(0.1);
     expect(carried.state.happiness).toBeGreaterThan(HAPPINESS_MIN_BUILD);
     expect(carried.state.happiness).toBeCloseTo(0.82, 2);
@@ -230,7 +242,7 @@ describe('auto-development', () => {
    * 0.82 by the one amenity auto-development cannot see.
    */
   it('lays out parks while you are away', () => {
-    const game = at({ homes: 19, cash: 1e6, autoDevelop: true });
+    const game = at({ ...housed(19), cash: 1e6, autoDevelop: true });
     const report = game.catchUp(3600);
     expect(report.parks).toBeGreaterThan(0);
     expect(game.state.parks).toBeLessThanOrEqual(parkCapacity(game.state));

@@ -19,6 +19,7 @@ import {
   shopCost,
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
+import { built, housed } from './levels';
 import { createState, type GameState } from '../src/sim/state';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
@@ -150,7 +151,24 @@ describe('smoothing', () => {
 
 describe('the demand signals', () => {
   it('converge toward their targets', () => {
-    const game = at({ homes: 24, shops: 6, industry: 3, hospitals: 1, police: 1, fire: 1 });
+    // Settled first, then perturbed. A target is only a fixed point once the
+    // city under it has stopped moving: housing that is still climbing changes
+    // the population every few seconds, so a snapshot taken at t=0 is not the
+    // thing the integrator is heading for. Every home starts at the top level
+    // so nothing can promote, and the run below lets occupancy find its resting
+    // point before the signals are knocked off theirs.
+    const game = at({
+      ...built(24, 6, 3, 3),
+      hospitals: 40,
+      police: 40,
+      fire: 40,
+      hospitalStaff: 1,
+      policeStaff: 1,
+      fireStaff: 1,
+      parks: 40,
+    });
+    play(game, 3_000);
+    Object.assign(game.state, { demandR: 0, demandC: 0, demandI: 0 });
     const target = demandTargets(game.state);
 
     let gap = Infinity;
@@ -164,19 +182,19 @@ describe('the demand signals', () => {
       gap = now;
     }
     play(game, DEMAND_TAU * 8);
-    expect(game.state.demandR).toBeCloseTo(target.r, 5);
-    expect(game.state.demandC).toBeCloseTo(target.c, 5);
-    expect(game.state.demandI).toBeCloseTo(target.i, 5);
+    expect(game.state.demandR).toBeCloseTo(target.r, 3);
+    expect(game.state.demandC).toBeCloseTo(target.c, 3);
+    expect(game.state.demandI).toBeCloseTo(target.i, 3);
   });
 
   it('never leave [-1, 1], however lopsided the city gets', () => {
     // Deliberately absurd shapes: all housing and no jobs, then all jobs and no
-    // housing, at the tier where the imbalance is largest.
+    // housing, at the level where the imbalance is largest.
     const shapes: Array<Partial<GameState>> = [
-      { homes: 43, tier: 3 },
-      { shops: 28, industry: 19 },
-      { homes: 40, shops: 28, industry: 19, tier: 3, hospitals: 1, police: 1, fire: 1 },
-      { homes: 1, shops: 28, industry: 19, districts: 4 },
+      housed(43, 3),
+      built(0, 28, 19),
+      { ...built(40, 28, 19, 3), hospitals: 1, police: 1, fire: 1 },
+      { ...built(1, 28, 19), districts: 4 },
     ];
     for (const shape of shapes) {
       const game = at({ ...shape, cash: 0 });

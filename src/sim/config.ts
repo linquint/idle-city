@@ -10,8 +10,17 @@ export const SEED = 20260823;
 /** World units per plot. */
 export const CELL = 4;
 
-/** Plots per side of a district. A district is the unit of expansion. */
-export const DISTRICT_SPAN = 12;
+/**
+ * Plots per side of a district. A district is the unit of expansion.
+ *
+ * Widened from 12 to make room for a 3x3 university. At 12 the land budget has
+ * no solution: a 3x3 reserved before the 2x2 civic pass leaves
+ * 90 - 18 - 28 - 11 - 6x4 - 9 = 0 courtyard plots on the only tuple that is
+ * reachable often enough to sample for, which deletes park land outright. 13
+ * is the smallest span that fits the university, six civic sites and the four
+ * courtyards parks stand on at the same time. See FRONTAGE_TARGET.
+ */
+export const DISTRICT_SPAN = 13;
 
 /**
  * Streets are not a fixed grid. Each axis is walked in seeded steps inside this
@@ -30,44 +39,57 @@ export const ROAD_GAP_MAX = 7;
  * strand plots or hand out plots that do not exist. Generation rejection-samples
  * until it hits this number exactly.
  *
- * Measured, not guessed. Over 1000 seeds the raw (pre-sampling) count takes
- * five values — 72, 80, 81, 90, 100 — with a median and mode of 90 (51.3%),
- * mean 89.66, stddev 6.71. 90 is therefore both the empirical median and the
- * cheapest target to sample for. See tools/citygen.calibrate.mjs.
+ * Measured, not guessed, and re-measured for the wider district. Over 4000 raw
+ * (pre-sampling) attempts at DISTRICT_SPAN 13 the count takes six values — 81,
+ * 90, 99, 100, 110, 121 — with a mode of 100 at 47.3%, ahead of 110 at 38.6%.
+ * 100 is therefore the cheapest target to sample for, exactly as 90 was at span
+ * 12 (51.3%). Worst inner sampling over 4000 seeds is 15 attempts against a
+ * MAX_ATTEMPTS of 64. See tools/citygen.calibrate.mjs.
  */
-export const TARGET_PLOTS = 90;
+export const TARGET_PLOTS = 100;
 
 /**
- * What one district must offer once frontage and civic land are taken out.
+ * What one district must offer once frontage, civic land and the university are
+ * taken out.
  *
- * Every building fronts a street, so only the 72 road-adjacent plots of a
- * district's 90 are ever for sale, and `civicSites` claims 2x2 quads out of
- * those before housing sees them. Neither number falls where the brief for this
- * change assumed. Measured by enumerating all 240 street plans the generator
- * can produce (60 skeletons x 4 rail sides — the complete space, not a sample):
+ * Every building fronts a street, so only the 84 road-adjacent plots of a
+ * district's 100 are ever for sale, and the site passes claim quads out of
+ * those before housing sees them. A university is reserved first (one 3x3),
+ * then `civicSites` takes 2x2 quads out of what is left, then the three build
+ * lists are what remains. The land adds up exactly:
  *
- *   - road-adjacent plots: 72 of 90, invariant;
- *   - of those, commercial is invariant at 28, because `zoneBlocks` lays shops
- *     along block rings and a ring is exactly the frontage;
- *   - residential and industrial split the remaining 44 *variably* — R lands on
- *     one of {25, 26, 28, 29, 31, 33, 34} and I on {19, 18, 16, 15, 13, 11, 10}.
- *     30/14 never occurs; it is the mean of the two distributions, not a value
- *     either one takes.
+ *   24 + 31 + 8 for sale + 6 x 4 civic + 1 x 9 university + 4 courtyard = 100
+ *
+ * Measured by reserving one 3x3 and running the existing 2x2 pass over 20,000
+ * street plans, then tallying the tuple that falls out:
+ *
+ *   - road-adjacent plots: 84 of 100, invariant;
+ *   - commercial frontage: 31, invariant, because `zoneBlocks` lays shops along
+ *     block rings and a ring is exactly the frontage;
+ *   - residential and industrial split the rest variably, so the tuple below is
+ *     reached by 3.28% of plans — about 1 in 30 attempts, and at
+ *     FRONTAGE_MAX_ATTEMPTS the probability of exhausting them is 3.9e-8.
+ *
+ * The industrial 8 is what the university costs. Nothing else in this tuple is
+ * a cut: residential grew 19 -> 24 and commerce 28 -> 31 with the wider
+ * district, so an existing save gains housing land rather than losing it. The
+ * alternative at span 12 was a tuple with zero courtyards, which would have
+ * deleted park land — see DISTRICT_SPAN.
  *
  * `homeCapacity` multiplies a per-district constant by the district count, so a
  * variable split would either strand land or sell plots that do not exist. The
  * fix is the one this codebase already uses one level down: reject and reseed.
- * `districtPlanAt` samples district seeds until the district lands on the triple
- * below, which 8.8% of accepted layouts do — about 11 tries, and it still leaves
- * 32 distinct street plans in play. Taking the guaranteed minimum instead would
- * mean 9 residential and 3 industrial plots a district, which is not a game.
+ * `districtPlanAt` samples district seeds until the district lands on the tuple
+ * below. Taking the guaranteed minimum instead would not be a game.
  */
 export const FRONTAGE_TARGET = {
-  residential: 19,
-  commercial: 28,
-  industrial: 11,
-  /** 2x2 civic quads per district. 7 x 4 = 28 plots, mostly dead interior. */
-  civicSites: 7,
+  residential: 24,
+  commercial: 31,
+  industrial: 8,
+  /** 2x2 civic quads per district. 6 x 4 = 24 plots, mostly dead interior. */
+  civicSites: 6,
+  /** 3x3 university quads per district. Exactly one, reserved before the rest. */
+  universitySites: 1,
 } as const;
 
 /**
@@ -89,29 +111,206 @@ export const ZONE_SHARE = {
 /** Rings of districts around the centre: 7x7 grid of districts. */
 export const MAX_DISTRICTS = 49;
 
-export interface Tier {
-  /** Shown in the zoning readout. */
-  readonly name: string;
-  /** Verb on the build button while this tier is active. */
-  readonly buildLabel: string;
-  /** Residents housed per building. */
-  readonly capacity: number;
-  /** Footprint width in world units (must stay under CELL). */
-  readonly width: number;
-  /** Height in world units. */
-  readonly height: number;
-  /** Pitched roofs read as houses; flat roofs read as blocks. */
-  readonly pitched: boolean;
-  /** Tall tiers get an aircraft warning light, which is what sells their scale. */
-  readonly beacon: boolean;
-}
+/**
+ * Residents one home houses, per building level.
+ *
+ * The four numbers the old global rezoning tiers carried, kept exactly: a
+ * level-0 house holds 4, an apartment block 16, a tower 70, an arcology 300.
+ * Keeping them means every constant that was solved against those capacities —
+ * RENT against the opening minute, WORKING_SHARE against the labour market —
+ * still means what it meant. What changed is *who* holds them: a level is a
+ * property of a cohort of buildings now, not of the whole city at once.
+ */
+export const LEVEL_CAPACITY = [4, 16, 70, 300] as const;
 
-export const TIERS: readonly Tier[] = [
-  { name: 'detached housing', buildLabel: 'Build home',            capacity: 4,   width: 2.2, height: 1.6,  pitched: true,  beacon: false },
-  { name: 'apartments',       buildLabel: 'Build apartment block', capacity: 16,  width: 2.6, height: 4.6,  pitched: false, beacon: false },
-  { name: 'towers',           buildLabel: 'Raise tower',           capacity: 70,  width: 2.8, height: 11.5, pitched: false, beacon: true  },
-  { name: 'arcologies',       buildLabel: 'Seal arcology',         capacity: 300, width: 3.0, height: 22.0, pitched: false, beacon: true  },
-];
+/** How many levels a building can climb through. */
+export const LEVELS = LEVEL_CAPACITY.length;
+
+/**
+ * What a building at each level *earns*, in level-0 buildings.
+ *
+ * An income ladder and nothing else, and the "nothing else" is load-bearing.
+ * The obvious generalisation — one ladder for capacity, jobs, trips and output
+ * alike — was built and measured, and it breaks the game in two places:
+ *
+ *   - a level-2 shop serving 17.5x the trips means the city needs 17.5x fewer
+ *     shops, so commercial land can never be filled. Measured over 24 hours,
+ *     auto-develop stalled at 7 shops of 31 and 65.2% developed against a 70%
+ *     annexation gate, and no policy annexed even once in a day;
+ *   - jobs scaling with capacity freezes the job/worker ratio at whatever it is
+ *     at level 0, which deletes the arc WORKING_SHARE is built around: young
+ *     cities are job-rich and pull people in, mature ones are worker-rich and
+ *     have to go and find them work.
+ *
+ * So levels raise what a building is worth to the ledger, and leave the number
+ * of people it employs and the number of customers it serves per plot alone.
+ * A district still needs more shops as its towers fill, which is what fills the
+ * land, and the land filling is what makes annexation reachable.
+ *
+ * Derived from LEVEL_CAPACITY rather than typed out, so the two can never drift.
+ */
+export const LEVEL_SCALE = LEVEL_CAPACITY.map((c) => c / LEVEL_CAPACITY[0]) as readonly number[];
+
+/** What the zoning readout calls a level, and the verb on the build button. */
+export const LEVEL_NAMES = ['detached housing', 'apartments', 'towers', 'arcologies'] as const;
+
+// --------------------------------------------------------------- occupancy
+
+/**
+ * Seconds for occupancy to close ~63% of the gap to its target.
+ *
+ * Slower than demand (25s) and than happiness (45s) on purpose: people move
+ * house on a longer clock than a price moves or a mood turns. Same exponential
+ * form as both, and for the same reason — it saturates at 1 for any step size,
+ * so a 60-second offline catch-up step lands where 60 one-second ticks would.
+ */
+export const OCCUPANCY_TAU = 120;
+
+/**
+ * What share of its capacity a perfectly happy zone fills.
+ *
+ * Not 1. A city at literally full occupancy has no slack for anyone to move
+ * into, and a bar pinned at 100% tells the player nothing. 0.92 leaves the top
+ * of the gauge as headroom the demand term can reach into.
+ */
+export const OCCUPANCY_FULL = 0.92;
+
+/** How far a zone's own demand can pull its occupancy target either way. */
+export const OCCUPANCY_DEMAND = 0.15;
+
+
+
+/**
+ * What share of a zone stays put however bad things get.
+ *
+ * The occupancy twin of HAPPINESS_FLOOR, and there for the same reason it is:
+ * a neglected city should feel like one that has stopped growing, not one that
+ * has been switched off. Without a floor, occupancy reaches zero, residents
+ * reach zero, and income reaches *exactly* zero — measured, a city that spent
+ * its treasury on shops and no services ended a 24-hour run with 33 in the bank
+ * and no way to earn the 130 a hospital costs. That is a soft-lock, which is
+ * worse than the loss the floor is protecting against.
+ *
+ * 0.08 is well under OCCUPANCY_EMPTY, so the vacancy clock still runs and
+ * buildings still get boarded up. What it buys is a trickle of income to climb
+ * back with: 8% of a zone at the happiness floor is about 4% of peak earnings.
+ */
+export const OCCUPANCY_FLOOR = 0.08;
+
+/** Below this occupancy a zone is sitting empty and starts its vacancy clock. */
+export const OCCUPANCY_EMPTY = 0.25;
+
+/**
+ * The happiness at which a zone starts emptying out fast enough to rot.
+ *
+ * Derived rather than chosen, because it is a consequence of the other three:
+ * occupancy runs linearly from OCCUPANCY_FLOOR at happiness 0 to
+ * OCCUPANCY_FULL at happiness 1, so this is simply where that line crosses
+ * OCCUPANCY_EMPTY. Naming it is still worth it — it is the number the HUD and
+ * the tests mean by "the city is losing people" — but it must not be tuned on
+ * its own or the three constants stop agreeing.
+ *
+ * The line used to start at a *threshold* — occupancy zero at happiness 0.30,
+ * ramping up from there — and that turned out to double-count unhappiness. The
+ * ledger already scales with happiness through HAPPINESS_FLOOR, so a city at
+ * 0.34 happiness was earning 0.55 of its rate on 5% of its residents: 3% of
+ * peak. Measured, that made the opening a 45-minute stall where the old build
+ * had a two-minute one, and the tutorial the happiness gate is supposed to be
+ * became a wait. A floor-plus-range keeps the mechanic — an unhappy city really
+ * does lose the people in the houses it built — without charging for it twice.
+ */
+export const HAPPINESS_MIN_OCCUPANCY =
+  (OCCUPANCY_EMPTY - OCCUPANCY_FLOOR) / (OCCUPANCY_FULL - OCCUPANCY_FLOOR);
+
+/**
+ * Seconds a zone must sit below OCCUPANCY_EMPTY before anything is written off.
+ *
+ * The whole difference between a dip and a decline. Five minutes is long enough
+ * that a bad minute costs nothing — occupancy moves on a 120s constant, so a
+ * transient cannot hold the zone under the line for anything like this long —
+ * and short enough that a genuinely emptied city visibly rots.
+ */
+export const ABANDON_SECONDS = 300;
+
+/**
+ * Seconds for a fully vacant zone to write off its whole standing stock, and to
+ * bring it all back.
+ *
+ * Rates rather than counts, so the pace scales with the city: a 24-home
+ * district loses one home every 50 seconds, a 1,176-home one loses one a
+ * second. Recovery is four times faster than decay, which is not symmetry for
+ * its own sake — coming back has to feel like relief, and an idle game that
+ * makes you wait as long to repair as you waited to break is one you quit.
+ */
+export const ABANDON_SPREAD_SECONDS = 1_200;
+export const RECOVER_SPREAD_SECONDS = 300;
+
+/**
+ * Abandonments a single `catchUp` call may make, however long the absence.
+ *
+ * The same guard CATCHUP_MAX_LOSSES puts on fire, at three rather than one
+ * because these are recoverable: a returning player can see three boarded-up
+ * plots and get them back, where a building lost to fire is gone. Without it a
+ * twelve-hour absence from an unhappy city returns a ruin nobody watched form.
+ */
+export const CATCHUP_MAX_ABANDONED = 3;
+
+// ----------------------------------------------------------------- levelling
+
+/**
+ * The three gates a building has to pass to climb a level, all at once.
+ *
+ * Occupancy says the building is wanted, happiness says the city is worth
+ * expanding into, and education (LEVEL_EDUCATION) says the people are trained
+ * for what the next level is. Any one of them short holds the cohort still —
+ * they are an AND, not a weighted score, because a weighted score would let a
+ * city buy its way past a gate it has not actually cleared.
+ *
+ * 0.65 and 0.55 are set against what coverage a city can actually reach: a
+ * fully served city with parks settles at happiness 1 and occupancy 0.92, and
+ * one with the three services but no parks at 0.82 and 0.68. So the park-less
+ * city still grows, slowly, and a city short of a whole service (0.60 or less)
+ * does not.
+ */
+export const LEVEL_UP_OCCUPANCY = 0.65;
+export const LEVEL_UP_HAPPINESS = 0.55;
+
+/**
+ * Seconds for a zone to promote its entire eligible stock by one level.
+ *
+ * A rate, like abandonment, so a big city climbs faster in absolute terms and
+ * at the same pace per building. Five minutes a level and four levels to climb
+ * puts a fully gated district about twenty minutes from detached housing to
+ * arcologies — against the old rezone, which was one button and 3,000 cash.
+ * The pacing lever moved from the treasury to the happiness panel, which is the
+ * point of the change.
+ */
+export const LEVEL_UP_SECONDS = 300;
+
+/**
+ * Education coverage a building needs before it may climb *to* each level.
+ *
+ * Indexed by the level being climbed to, so level 0 asks for nothing.
+ *
+ * Education gates levelling and is deliberately *not* a happiness term. The
+ * four happiness weights were calibrated to sum to exactly 1 last cycle, and a
+ * fifth would re-open that whole calibration for nothing — coverage would buy a
+ * little more income and the skyline would be unaffected. As a gate it does
+ * something happiness cannot: it decides how tall the city is allowed to get.
+ * Do not "tidy" it into the happiness sum.
+ *
+ * Measured against what the two education types can actually reach. A district
+ * of 24 homes holds 96 residents at level 0, 384 at level 1, 1,680 at level 2
+ * and 7,200 at level 3, and its 1.5 schools educate 1,050 of them:
+ *
+ *   - 0.35 to reach level 1 means the city needs a school at all. Coverage
+ *     without one is zero, so the first promotion is gated on the first school;
+ *   - 0.60 to reach level 2 is covered by schools alone, which is what makes
+ *     schools the route through the middle of the game;
+ *   - 0.85 to reach level 3 is not: schools alone cover a district of towers to
+ *     63%, so the top of the skyline is the university's to unlock.
+ */
+export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85] as const;
 
 /**
  * Cash per resident per second.
@@ -213,40 +412,56 @@ export const INDUSTRY_GROWTH = 1.2;
  */
 export const INDUSTRY_BONUS = 0.11;
 
-export const REZONE_BASE = 3_000;
-export const REZONE_GROWTH = 26;
-
-/** Rezoning is a district-wide programme; it needs a district worth building on. */
-export const REZONE_MIN_HOMES = 12;
-
 export const ANNEX_BASE = 60_000;
 export const ANNEX_GROWTH = 3.4;
 
 /**
- * You must have built out this share of your land before you may annex more.
+ * You must have built out this share of your land before the city annexes more.
  *
- * Left at 0.7 through the change that took interior plots off the market, which
- * shrank a district from 90 sellable plots to 65 (58 for sale plus 7 civic
- * sites) — the gate went from 63 buildings to 46. Re-measured rather than
- * assumed, and deliberately not retuned:
+ * Left at 0.7 through the change that made annexation automatic, and measured
+ * rather than assumed. Demand-neutral build-out of one district, holding every
+ * home at one level — a player who never buys into a surcharge:
  *
- *   - Demand-neutral build-out of one district, per tier: 53.8% at detached
- *     housing, 72.3% at apartments, 83.1% at towers, 70.8% at arcologies.
- *   - Tier 0 now falls 16 points short rather than 1, because the residential
- *     zone lost 24 plots to frontage and commerce lost none: 19 homes house 76
- *     people, and 76 people are served by 4 shops. That puts a rezone firmly
- *     before the first annex, which is the ordering the game should teach.
- *   - The first annex lands at 1.25h disciplined and 1.61h greedy, against 3.8h
- *     and 1.8h before. It arrived earlier, but not because of this gate: at 1h
- *     an attentive player is at 94% developed with 63.7K banked, so what they
- *     are waiting on is ANNEX_BASE, not occupancy.
+ *   detached housing  78.6%   apartments  80.0%
+ *   towers            68.6%   arcologies  68.6%
  *
- * Raising it is the obvious response and the wrong one: 0.8 would put both
- * apartments (72.3%) and arcologies (70.8%) under the gate, so the tiers where
- * a player most wants more land would be the tiers that cannot reach it. The
- * pacing lever here is ANNEX_BASE. See tools/economy.calibrate.mjs.
+ * So the opening and the middle game clear the gate comfortably and the top of
+ * the ladder settles 1.4 points under it. That is the same shape the tiered
+ * build had (53.8 / 72.3 / 83.1 / 70.8) and it is deliberate: a city of towers
+ * is worker-rich, its residential demand runs negative, and filling the last of
+ * its housing means paying the surcharge to do it. Expansion past the middle
+ * game is a decision rather than a formality.
+ *
+ * Raising it is the obvious response and the wrong one — 0.8 would put three of
+ * the four levels under. Lowering it to 0.65 would clear all four and is the
+ * lever to reach for if the endgame ever wants to expand on its own; the reason
+ * it is not pulled here is that "the endgame costs something" is the intended
+ * shape, and ANNEX_BASE is the pacing lever. See tools/economy.calibrate.mjs.
  */
 export const ANNEX_MIN_OCCUPANCY = 0.7;
+
+/**
+ * How much more than the price the city wants in hand before it expands itself.
+ *
+ * The whole difference between the automatic pass and the button. Annexation
+ * spends the treasury, and a city that emptied it the instant it could afford
+ * to would leave a returning player unable to buy anything at all. Waiting for
+ * a quarter again on top means the automatic pass only fires out of surplus,
+ * and the button is there for a player who has looked at the number and wants
+ * the land now — which is what "manual override" is actually for.
+ */
+export const AUTO_ANNEX_RESERVE = 0.25;
+
+/**
+ * Districts a single `catchUp` call may annex, however long the absence.
+ *
+ * The same guard fire and abandonment already have, and the one that matters
+ * most here: a twelve-hour absence with a full treasury would otherwise chain
+ * -annex, and the player would come back to a city several times the size of
+ * the one they left with no memory of any of it happening. Two is enough to
+ * feel like the city got on with things and few enough to still recognise.
+ */
+export const CATCHUP_MAX_ANNEXES = 2;
 
 /** Starting treasury. */
 export const START_CASH = 40;
@@ -403,7 +618,7 @@ export const PRICE_SURCHARGE_MAX = 0.6;
 
 export interface Service {
   /** Matches the GameState counter, the staffing scalar and the coverage key. */
-  readonly key: 'hospital' | 'police' | 'fire';
+  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university';
   readonly name: string;
   readonly buildLabel: string;
   /** How the HUD names this service's coverage when it is the binding one. */
@@ -411,30 +626,65 @@ export interface Service {
   /** Residents one of these covers, once it is fully staffed. */
   readonly capacity: number;
   readonly base: number;
-  /** Share of the happiness score. These three plus RECREATION_WEIGHT sum to 1. */
+  /** Price growth per building. Steeper for the one that is a landmark. */
+  readonly growth: number;
+  /**
+   * Share of the happiness score, or 0 for the two that gate levels instead.
+   *
+   * The three that are non-zero sum to 1 with RECREATION_WEIGHT and must go on
+   * doing so. Education is deliberately not among them — see LEVEL_EDUCATION.
+   */
   readonly weight: number;
+  /** Plots per side of the site this stands on. */
+  readonly span: 2 | 3;
 }
 
 /**
  * Civic buildings earn nothing at all. They gate: coverage feeds happiness,
  * happiness multiplies income, caps residential demand and stops housing
- * outright below HAPPINESS_MIN_BUILD. A city that never builds one still works,
- * it just runs at the floor — neglect reads as a ceiling on what the city can
- * become, not as a punishment for playing.
+ * outright below HAPPINESS_MIN_BUILD — or, for the two education types, it
+ * decides how tall the city is allowed to build.
  *
- * Each stands on a 2x2 site, of which a district has seven, so the three types
- * share about 2.3 buildings a district. Capacities are set against that supply
- * rather than against a population: at towers a district holds 1,330 people and
- * its share of the sites covers all of them, while arcologies (5,700 a district)
- * outrun the land. Measured over 24 hours of discount-chasing, that endgame
- * settles at 53% happiness — a real squeeze, and still comfortably clear of
- * HAPPINESS_MIN_BUILD, so housing is never bricked by land the city cannot buy.
+ * Four of the five stand on a 2x2 site, of which a district has six, so those
+ * types share 1.5 buildings a district. The university is the exception: its own
+ * 3x3 site, exactly one to a district, which is what makes it a landmark rather
+ * than another row in the panel.
+ *
+ * A city that never builds one still works, it just runs at the floor and never
+ * gets past detached housing — neglect reads as a ceiling on what the city can
+ * become, not as a punishment for playing.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital', name: 'Hospitals', buildLabel: 'Open hospital',      coverLabel: 'Health coverage', capacity: 900,  base: 130, weight: 0.34 },
-  { key: 'police',   name: 'Police',    buildLabel: 'Open police station', coverLabel: 'Police coverage', capacity: 1_200, base: 210, weight: 0.26 },
-  { key: 'fire',     name: 'Fire',      buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',   capacity: 1_500, base: 320, weight: 0.22 },
+  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    capacity: 900,   base: 130,    growth: 1.35, weight: 0.34, span: 2 },
+  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    capacity: 1_200, base: 210,    growth: 1.35, weight: 0.26, span: 2 },
+  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      capacity: 1_500, base: 320,    growth: 1.35, weight: 0.22, span: 2 },
+  /**
+   * Schools take the fourth slot in the 2x2 interleave. 700 is set against what
+   * a district holds rather than against anything real: 1.5 schools a district
+   * educate 1,050, which covers a district of apartments (384) outright and a
+   * district of towers (1,680) to 63% — under LEVEL_EDUCATION's top rung, which
+   * is what leaves the last level for the university to unlock.
+   */
+  { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    capacity: 700,   base: 180,    growth: 1.35, weight: 0,    span: 2 },
+  /**
+   * Five schools' worth of teaching in one building, on nine plots, one to a
+   * district, at forty times a school's opening price and compounding half again
+   * as fast. Every one of those is doing the same job: making a university a
+   * thing the city decides to do rather than a box it ticks.
+   */
+  { key: 'university', name: 'Universities', buildLabel: 'Found university',   coverLabel: 'University coverage', capacity: 3_500, base: 7_200, growth: 1.9,  weight: 0,    span: 3 },
 ];
+
+/** The three that feed happiness. Their weights and RECREATION_WEIGHT sum to 1. */
+export const HAPPINESS_SERVICES: readonly Service[] = SERVICES.filter((s) => s.weight > 0);
+
+/** The two that feed education, which gates levelling rather than happiness. */
+export const EDUCATION_SERVICES: readonly Service[] = SERVICES.filter(
+  (s) => s.key === 'school' || s.key === 'university',
+);
+
+/** The four that share the 2x2 civic sites, in interleave order. */
+export const CIVIC_SERVICES: readonly Service[] = SERVICES.filter((s) => s.span === 2);
 
 /** Civic buildings compound like everything else, and faster than housing. */
 export const CIVIC_GROWTH = 1.35;

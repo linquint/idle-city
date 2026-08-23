@@ -1,9 +1,18 @@
 /** Kept in step with the CSS custom properties in src/style.css. */
 export const PALETTE = {
-  ink: 0x0b111b,
-  land: 0x16202e,
-  asphalt: 0x161d28,
-  kerb: 0x3a4962,
+  ink: 0x111a26,
+  // The district's own ground, which sits on top of the grassland and has to
+  // read as made rather than grown: a pale dry earth, lighter than the streets
+  // it carries so the block structure still reads from the play camera.
+  land: 0x8f8a7c,
+  asphalt: 0x4a4f57,
+  kerb: 0x9ea1a8,
+  // The world outside the districts. Two greens and a sand, mixed per vertex by
+  // seeded noise — see `Grassland`. The dry tone is close enough in value to the
+  // grass that the patches read as ground cover rather than as holes.
+  grass: 0x7a9557,
+  grassDeep: 0x638049,
+  sand: 0xc3b489,
   concrete: 0xc9d1da,
   tile: 0x8b5c42,
   parapet: 0x2e3e55,
@@ -27,12 +36,18 @@ export const PALETTE = {
   policeRoof: 0x7fa8ff,
   fire: 0x6d2f2c,
   fireRoof: 0xe0574b,
+  // Education. Warm stone against the cool civic blues, so the two panels the
+  // HUD splits them into read as two things on the map as well.
+  school: 0xb9ab8e,
+  schoolRoof: 0x8d7f63,
+  university: 0xd6c9a8,
+  universityRoof: 0x9a7f4e,
   // Zoned land nobody will ever build on: the interior of a deep block, and the
   // civic sites still standing empty. Drawn, or the blocks read as holes.
-  courtyard: 0x3d6349,
+  courtyard: 0x5b7f57,
   // Parks. A shade up from the courtyard they stand on, so a laid-out plot
   // reads as planted rather than as the same interior land in a new colour.
-  park: 0x2f7a4a,
+  park: 0x3f8f57,
   trunk: 0x4a3524,
   canopy: 0x53a86a,
   // Traffic. One shared body colour rather than a per-instance tint: at the

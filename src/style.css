@@ -1,7 +1,10 @@
+/* Kept in step with PALETTE in src/render/palette.ts. The panel colours are a
+   shade lighter than the world behind them now that the world is daylit — a
+   near-black HUD over a blue sky reads as a hole punched in the scene. */
 :root {
-  --ink: #0b111b;
-  --panel: #131c2a;
-  --line: #25344b;
+  --ink: #111a26;
+  --panel: #16202e;
+  --line: #2b3a52;
   --concrete: #c9d1da;
   --sodium: #f0a64b;
   --signal: #63c6a8;
@@ -425,21 +428,22 @@ button.civic .built {
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
+/* Education is a civic button that buys height rather than mood, so it reads in
+   the signal colour the zoning readout uses rather than the civic blue. */
+button.civic.school { border-color: rgba(99, 198, 168, 0.4); }
+button.civic.school:hover:not(:disabled) { border-color: var(--signal); }
+button.civic.school .cost { color: var(--signal); }
+
 button.civic:disabled { border-color: #1c2739; }
 button.civic:disabled .cost,
 button.civic:disabled .built { color: var(--off); }
-
-button.rezone { border-color: rgba(99, 198, 168, 0.45); }
-button.rezone:hover:not(:disabled) { background: rgba(99, 198, 168, 0.1); border-color: var(--signal); }
-button.rezone .cost { color: var(--signal); }
+button.civic.school:disabled { border-color: #1c2739; }
 
 button.annex { border-color: rgba(127, 168, 255, 0.45); }
 button.annex:hover:not(:disabled) { background: rgba(127, 168, 255, 0.1); border-color: var(--civic); }
 button.annex .cost { color: var(--civic); }
 
-button.rezone:disabled,
 button.annex:disabled { border-color: #1c2739; }
-button.rezone:disabled .cost,
 button.annex:disabled .cost { color: var(--off); }
 
 .split { display: flex; gap: 8px; margin-top: 10px; }

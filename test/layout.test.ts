@@ -12,6 +12,7 @@ import {
   districtCoord,
   isRoad,
   PLOTS_PER_DISTRICT,
+  UNIVERSITY_SITES_PER_DISTRICT,
   worldX,
   worldZ,
   zoneAt,
@@ -120,7 +121,9 @@ describe('plot book', () => {
     // rest is courtyard, which is why these no longer add up to the total.
     const sellable =
       RESIDENTIAL_PER_DISTRICT + COMMERCIAL_PER_DISTRICT + INDUSTRIAL_PER_DISTRICT;
-    expect(sellable + CIVIC_SITES_PER_DISTRICT * 4).toBeLessThanOrEqual(PLOTS_PER_DISTRICT);
+    expect(
+      sellable + CIVIC_SITES_PER_DISTRICT * 4 + UNIVERSITY_SITES_PER_DISTRICT * 9,
+    ).toBeLessThanOrEqual(PLOTS_PER_DISTRICT);
     expect(sellable).toBeLessThan(PLOTS_PER_DISTRICT);
     expect(PLOTS_PER_DISTRICT).toBeLessThan(DISTRICT_SPAN * DISTRICT_SPAN);
 
@@ -191,11 +194,18 @@ describe('plot book', () => {
       (RESIDENTIAL_PER_DISTRICT + COMMERCIAL_PER_DISTRICT + INDUSTRIAL_PER_DISTRICT) * 9;
     expect(seen.size).toBe(sellable);
 
-    // Civic sites and courtyards make up the difference, with nothing shared.
+    // Civic sites, universities and courtyards make up the difference, with
+    // nothing shared: every one of these adds a cell the sale lists never had.
     for (let i = 0; i < layout.civicSites; i++) {
       const c = layout.civicSiteCell(i);
       for (const cell of [c, { x: c.x + 1, z: c.z }, { x: c.x, z: c.z + 1 }, { x: c.x + 1, z: c.z + 1 }]) {
         seen.add(key(cell));
+      }
+    }
+    for (let i = 0; i < layout.universitySites; i++) {
+      const c = layout.universitySiteCell(i);
+      for (let dz = 0; dz < 3; dz++) {
+        for (let dx = 0; dx < 3; dx++) seen.add(key({ x: c.x + dx, z: c.z + dz }));
       }
     }
     for (const cell of layout.courtyards) seen.add(key(cell));
