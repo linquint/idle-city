@@ -2,7 +2,7 @@ import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
   ANNEX_MIN_OCCUPANCY,
   HAPPINESS_MIN_BUILD,
-  HOMES_PER_PARK,
+  PLOTS_PER_PARK,
   LEVEL_EDUCATION,
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
@@ -51,7 +51,7 @@ import {
   transitCoverage,
   zoneOf,
   priceModifier,
-  population,
+  housingPlots,
   recreationCoverage,
   residents,
   serviceBlocker,
@@ -506,7 +506,6 @@ export class Hud {
     // The happiness panel. A bare percentage says nothing a player can act on,
     // so the binding term is named beside it: "Health coverage 41%" is the whole
     // reason this block exists rather than the number on its own.
-    const people = population(s);
     const worst = bindingTerm(s);
     const why = `${worst.coverLabel} ${pct(worst.coverage)}`;
     n.moodPct.textContent = pct(s.happiness);
@@ -517,26 +516,30 @@ export class Hud {
 
     const spoken: string[] = [];
     const taught: string[] = [];
+    // Coverage is land now, so the row says how much of the housing a service
+    // reaches rather than how many people. Plots are also the unit the player
+    // buys in, which the residents figure never was.
+    const plots = housingPlots(s);
     for (const { service, built, covered, coverage: reach } of serviceReadings(s)) {
       const row = this.serviceNodes.find((entry) => entry.service.key === service.key);
       if (!row) continue;
       row.built.textContent = fmtInt(built);
-      row.covers.textContent = `covers ${fmtInt(covered)} of ${fmtInt(people)}`;
+      row.covers.textContent = `covers ${fmtInt(covered)} of ${fmtInt(plots)}`;
       row.row.classList.toggle('covered', reach >= 1);
       (service.weight > 0 ? spoken : taught).push(
-        `${service.name} ${built}, covering ${Math.round(covered)} of ${Math.round(people)} residents`,
+        `${service.name} ${built}, covering ${Math.round(covered)} of ${Math.round(plots)} housing plots`,
       );
     }
     // Recreation is the fourth happiness term but not a service: it has no
-    // staffing, no site and a denominator in homes, so it gets its own row
-    // rather than being forced through `serviceReadings`.
+    // staffing and no site of its own, so it gets its own row rather than being
+    // forced through `serviceReadings`. Same denominator as the rest now.
     const parkLand = parkCapacity(s);
     const reach = recreationCoverage(s);
     n.parksBuilt.textContent = `${fmtInt(s.parks)}/${fmtInt(parkLand)}`;
-    n.parksCovers.textContent = `covers ${fmtInt(Math.min(s.homes, s.parks * HOMES_PER_PARK))} of ${fmtInt(s.homes)} homes`;
+    n.parksCovers.textContent = `covers ${fmtInt(Math.min(plots, s.parks * PLOTS_PER_PARK))} of ${fmtInt(plots)} plots`;
     n.parksRow.classList.toggle('covered', reach >= 1);
     spoken.push(
-      `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of homes`,
+      `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of housing land`,
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 

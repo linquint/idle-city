@@ -1,4 +1,4 @@
-import { LEVELS, MERGE_LEVEL } from '../src/sim/config';
+import { LEVEL_FOOTPRINT, LEVELS, MERGE_LEVEL } from '../src/sim/config';
 import { cohortOf, type GameState, type LevelCohort } from '../src/sim/state';
 
 /**
@@ -42,6 +42,22 @@ export const housed = (homes: number, level = 0): Partial<GameState> => ({
   mergedR: mergedFor(homes, level),
   occupancyR: 1,
 });
+
+/**
+ * The same *land*, developed at one level: as many buildings as `plots` holds.
+ *
+ * The primitive coverage is now measured against, and the one `housed` cannot
+ * express. `housed(24, 3)` is 24 arcologies standing on 48 plots — a bigger
+ * city, not a taller one — so a test that promotes with it is comparing two
+ * different amounts of land and every land-denominated reading moves under it.
+ * `housedOn(24, l)` is one district's housing at whatever level, which is what
+ * "promoting every building leaves coverage unchanged" is a statement about.
+ */
+export const housedOn = (plots: number, level = 0): Partial<GameState> => {
+  const clamped = Math.max(0, Math.min(LEVELS - 1, level));
+  const homes = Math.floor(Math.max(0, plots) / (LEVEL_FOOTPRINT[clamped] ?? 1));
+  return housed(homes, clamped);
+};
 
 export const trading = (shops: number, level = 0): Partial<GameState> => ({
   shops,

@@ -167,13 +167,22 @@ with no hospital watches its residential bar flatline however many jobs it has
 going spare, and then stops growing entirely. That is the tutorial, and it has
 no text.
 
+Coverage is measured against **housing plots**, not residents. That is the one
+denominator that survives the level ladder: residents per plot run from 4 to 300
+as buildings climb, and the civic land they stand on is fixed at six 2x2 sites
+a district — so a per-resident measure meant need scaled with density while
+supply scaled with land, and a maxed-out city read 34% happiness at every size.
+Plots are also merge-invariant (a pair of houses that becomes one tower still
+holds two plots) and occupancy-invariant (a boarded-up house still holds its
+land), so coverage answers "how much of the city is served" and nothing else.
+
 Three rules keep it from being either free or punishing. A new building ramps
-its staffing in over ninety seconds rather than covering anybody the moment its
-roof goes on. A build gate of `floor(residents / capacity) + 1` means you may
+its staffing in over ninety seconds rather than covering anything the moment its
+roof goes on. A build gate of `floor(housingPlots / plots) + 1` means you may
 always be one ahead of need and never five, so early cash cannot be dumped into
 permanent coverage. And an empty city reads as fully covered rather than fully
-neglected — coverage is the share of residents a service fails, and it fails
-nobody when there is nobody, which is what stops the housing gate deadlocking
+neglected — coverage is the share of the housing a service fails, and it fails
+nothing when nothing is built, which is what stops the housing gate deadlocking
 the opening.
 
 Each stands on a 2x2 site reserved before the housing list is drawn, and the

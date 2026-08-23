@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   HAPPINESS_MIN_BUILD,
-  HOMES_PER_PARK,
   MAX_DISTRICTS,
   PARK_BASE,
   PARK_GROWTH,
+  PLOTS_PER_PARK,
   EDUCATION_SERVICES,
   HAPPINESS_SERVICES,
   LEVEL_CAPACITY,
-  LEVEL_HOUSING,
+  MERGE_LEVEL,
   RECREATION_WEIGHT,
   SERVICES,
 } from '../src/sim/config';
@@ -29,12 +29,13 @@ import {
 import { Game } from '../src/sim/game';
 import {
   BUILDABLE_PARKS_PER_DISTRICT,
+  BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CityLayout,
   districtPlanAt,
   planFor,
 } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { built, housed } from './levels';
+import { built, housed, housedOn } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -144,24 +145,30 @@ describe('the park curve', () => {
 });
 
 describe('recreation coverage', () => {
-  it('is a share of homes, not of residents', () => {
-    expect(recreationCoverage(state({ ...housed(10), parks: 1 }))).toBeCloseTo(HOMES_PER_PARK / 10, 12);
-    expect(recreationCoverage(state({ ...housed(19), parks: 4 }))).toBe(1);
-    expect(recreationCoverage(state({ ...housed(19), parks: 0 }))).toBe(0);
+  it('is a share of housing plots, not of residents and not of homes', () => {
+    expect(recreationCoverage(state({ ...housed(10), parks: 1 }))).toBeCloseTo(PLOTS_PER_PARK / 10, 12);
+    expect(recreationCoverage(state({ ...housed(24), parks: 4 }))).toBe(1);
+    expect(recreationCoverage(state({ ...housed(24), parks: 0 }))).toBe(0);
+    // Not homes: the same land merged into half as many buildings reads the
+    // same, where a per-home denominator would have doubled it for free.
+    const detached = state({ ...housedOn(24, 0), parks: 3 });
+    const merged = state({ ...housedOn(24, MERGE_LEVEL), parks: 3 });
+    expect(merged.homes).toBe(detached.homes / 2);
+    expect(recreationCoverage(merged)).toBe(recreationCoverage(detached));
   });
 
   /**
-   * The reason the denominator is homes. Levelling multiplies residents by up to
+   * The reason the denominator is land. Levelling multiplies residents by up to
    * 75x and adds not one park plot, so a per-resident measure would be trivial
    * at level 0 and unreachable at level 3 — the same term meaning two different
    * things at two ends of one game.
    */
   it('does not move when the city climbs', () => {
     for (const parks of [0, 1, 3, 4]) {
-      const reach = recreationCoverage(state({ ...housed(19), parks }));
+      const reach = recreationCoverage(state({ ...housedOn(24), parks }));
       for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
-        const climbed = state({ ...housed(19, level), parks });
-        expect(residents(climbed)).toBe(19 * (LEVEL_HOUSING[level] ?? 0));
+        const climbed = state({ ...housedOn(24, level), parks });
+        expect(residents(climbed)).toBe(24 * (LEVEL_CAPACITY[level] ?? 0));
         expect(recreationCoverage(climbed)).toBe(reach);
       }
     }
@@ -173,11 +180,14 @@ describe('recreation coverage', () => {
   });
 
   it('is satisfiable on the land a district actually has, at every level', () => {
-    // A district holds 24 homes and 4 parks now, and HOMES_PER_PARK is 5, so
-    // 4 parks cover 20 of 24 rather than all of them — the one number the wider
-    // district moved. Checked as the ratio it is rather than as a hard 1.
+    // A district holds 24 housing plots and 4 parks, and PLOTS_PER_PARK is 6,
+    // so its parks cover its housing exactly — at every level, because both
+    // sides of the ratio are land.
     for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
-      const full = state({ ...housed(19, level), parks: BUILDABLE_PARKS_PER_DISTRICT });
+      const full = state({
+        ...housedOn(BUILDABLE_RESIDENTIAL_PER_DISTRICT, level),
+        parks: BUILDABLE_PARKS_PER_DISTRICT,
+      });
       expect(recreationCoverage(full)).toBe(1);
     }
   });
@@ -224,7 +234,7 @@ describe('the happiness weights', () => {
   it('name recreation when it is the term costing the most', () => {
     const parkless = state({ ...housed(19), parks: 0, ...served() });
     expect(bindingTerm(parkless).key).toBe('recreation');
-    expect(bindingTerm(parkless).coverLabel).toBe('Parks per home');
+    expect(bindingTerm(parkless).coverLabel).toBe('Parks per plot');
   });
 
   it('let a v3-shaped city keep building housing on load', () => {

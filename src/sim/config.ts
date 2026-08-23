@@ -124,10 +124,15 @@ export const MAX_DISTRICTS = 49;
  * Per plot, and that qualifier is what merging cost this comment. A tower
  * covers two plots (LEVEL_FOOTPRINT), so the *building* holds 140 and the land
  * under it still holds 70 a plot. Reading these as per-building instead would
- * halve the population of every merged district, which is not a small change to
- * one number: it is a change to the denominator of every coverage in the game.
- * Measured, it lets a district of towers be covered by schools alone and takes
- * the top of the skyline away from the university. See LEVEL_HOUSING.
+ * halve the population of every merged district. See LEVEL_HOUSING.
+ *
+ * This used to warn that the ladder was "the denominator of every coverage in
+ * the game". It is not, and has not been since Part 0: coverage is measured
+ * against housing *plots* (see `Service.plots` and `housingPlots`), so it is
+ * immune to what stands on them. A denominator that climbed 4 -> 300 while the
+ * civic land stayed fixed is the bug that comment was describing rather than a
+ * property worth protecting. What this ladder still sets is the population,
+ * and through it RENT, the labour market and every demand target.
  */
 export const LEVEL_CAPACITY = [4, 16, 70, 300] as const;
 
@@ -359,16 +364,20 @@ export const LEVEL_UP_SECONDS = 300;
  * something happiness cannot: it decides how tall the city is allowed to get.
  * Do not "tidy" it into the happiness sum.
  *
- * Measured against what the two education types can actually reach. A district
- * of 24 homes holds 96 residents at level 0, 384 at level 1, 1,680 at level 2
- * and 7,200 at level 3, and its 1.5 schools educate 1,050 of them:
+ * Measured against what the two education types can actually reach. Education
+ * is land-denominated like every other coverage now (see `Service.plots`), so
+ * these rungs mean the same thing at every level rather than sliding out of
+ * reach as the city climbs — which is what they used to do:
  *
  *   - 0.35 to reach level 1 means the city needs a school at all. Coverage
  *     without one is zero, so the first promotion is gated on the first school;
  *   - 0.60 to reach level 2 is covered by schools alone, which is what makes
- *     schools the route through the middle of the game;
- *   - 0.85 to reach level 3 is not: schools alone cover a district of towers to
- *     63%, so the top of the skyline is the university's to unlock.
+ *     schools the route through the middle of the game: 62.5% at one district,
+ *     75% once the site interleave evens out;
+ *   - 0.85 to reach level 3 is covered by neither type alone — schools top out
+ *     at 78% and a university reaches 75% — so the top of the skyline needs the
+ *     university *and* the schools already standing, which is what pooling the
+ *     two in `educationCoverage` is for.
  */
 export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85] as const;
 
@@ -479,18 +488,26 @@ export const ANNEX_GROWTH = 3.4;
  * You must have built out this share of your land before the city annexes more.
  *
  * Left at 0.7 through the change that made annexation automatic, and measured
- * rather than assumed. Demand-neutral build-out of one district, holding every
- * home at one level — a player who never buys into a surcharge:
+ * rather than assumed. Demand-neutral build-out, holding every home at one
+ * level — a player who never buys into a surcharge. Re-measured after Part 0
+ * made coverage land-denominated, against the reading before it:
  *
- *   detached housing  78.6%   apartments  80.0%
- *   towers            68.6%   arcologies  68.6%
+ *                     before   after
+ *   detached housing   69.6%   63.5%
+ *   apartments         68.6%   69.3%
+ *   towers             67.1%   67.1%
+ *   arcologies         65.7%   65.7%
  *
- * So the opening and the middle game clear the gate comfortably and the top of
- * the ladder settles 1.4 points under it. That is the same shape the tiered
- * build had (53.8 / 72.3 / 83.1 / 70.8) and it is deliberate: a city of towers
- * is worker-rich, its residential demand runs negative, and filling the last of
- * its housing means paying the surcharge to do it. Expansion past the middle
- * game is a decision rather than a formality.
+ * All four sat under the gate before the change and all four still do, so this
+ * is the shape rather than a regression Part 0 introduced: a demand-neutral
+ * player does not annex, and the two levels the change touched moved 6 points
+ * down and 1 up. Annexation in an actual run is unmoved — auto-develop still
+ * reaches 4 districts in 24 hours and its first annex moved 1.23h -> 1.25h.
+ *
+ * It is deliberate: a city of towers is worker-rich, its residential demand
+ * runs negative, and filling the last of its housing means paying the surcharge
+ * to do it. Expansion past the middle game is a decision rather than a
+ * formality.
  *
  * Raising it is the obvious response and the wrong one — 0.8 would put three of
  * the four levels under. Lowering it to 0.65 would clear all four and is the
@@ -720,8 +737,28 @@ export interface Service {
   readonly buildLabel: string;
   /** How the HUD names this service's coverage when it is the binding one. */
   readonly coverLabel: string;
-  /** Residents one of these covers, once it is fully staffed. */
-  readonly capacity: number;
+  /**
+   * Housing *plots* one of these covers, once it is fully staffed.
+   *
+   * Land, not people, and that is the repair Part 0 of this cycle was. Coverage
+   * used to divide by residents, and residents per plot climb 4 -> 300 as
+   * buildings level while civic land stays at six 2x2 sites a district split
+   * five ways — about 1.2 buildings of each type, forever. Need scaled with
+   * density and supply scaled with land, so the gap opened as the player
+   * succeeded: a city with every housing plot at the top level and every
+   * service built to the cap the land allows reached 34% happiness at 1
+   * district and 34% at 25, and could never reach 40% at any size.
+   *
+   * The repo had already solved this once for parks and written down why — see
+   * PLOTS_PER_PARK. Housing plots are the denominator that survives, because
+   * they do not move for levels (a merged tower stands on the two plots its
+   * pair held), for merges (`plotsOf` counts a merged parcel twice) or for
+   * occupancy (a boarded-up house still holds its land).
+   *
+   * See `coverage` in economy.ts for why the denominator is the housing plots
+   * the city has *developed* rather than the 24 a district owns.
+   */
+  readonly plots: number;
   readonly base: number;
   /** Price growth per building. Steeper for the one that is a landmark. */
   readonly growth: number;
@@ -750,19 +787,51 @@ export interface Service {
  * A city that never builds one still works, it just runs at the floor and never
  * gets past detached housing — neglect reads as a ceiling on what the city can
  * become, not as a punishment for playing.
+ *
+ * ---
+ *
+ * The `plots` column is what Part 0 of this cycle re-derived, and it is derived
+ * rather than picked. Two numbers set it: 1.2 sites of each 2x2 type per
+ * district, against 24 housing plots per district. A type whose every allowed
+ * building is standing therefore covers `1.2 x plots / 24` of the city, so
+ * `plots = 20` is exactly full coverage and exactly half coverage at half the
+ * buildings. That is the hospital, and it is the anchor.
+ *
+ * The other two happiness services come off the weight ordering rather than
+ * being chosen: `plots_i = 20 x w_hospital / w_i`, so a service worth less to
+ * happiness needs less of the city's civic land to satisfy. That reproduces the
+ * ordering the old `capacity` column had — 900 / 1200 / 1500 is within 8% of
+ * inverse-proportional to 0.34 / 0.26 / 0.22 — and the slack it leaves police
+ * and fire is what the one-district city needs: the six sites interleave
+ * 2/1/1/1/1, so at one district police and fire have a single building each
+ * against 24 plots and would read 83% and 87% at the hospital's 20.
+ *
+ * `serviceAllowed` then does the rest of the work, and it is why the three do
+ * not have to be equal to read alike: the allowance is `need + 1` clamped by the
+ * land, so a service with more reach per building is simply allowed fewer of
+ * them. Measured over every district count from 1 to MAX_DISTRICTS with every
+ * allowed building standing and staffed, the worst reading of any of the three
+ * is 100%; at half the allowed buildings they average 53% / 55% / 55%. See
+ * test/services.test.ts, which asserts the >= 95% floor so a later change to the
+ * site interleave cannot quietly reopen the ceiling.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    capacity: 900,   base: 130,    growth: 1.35, weight: 0.34, span: 2 },
-  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    capacity: 1_200, base: 210,    growth: 1.35, weight: 0.26, span: 2 },
-  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      capacity: 1_500, base: 320,    growth: 1.35, weight: 0.22, span: 2 },
+  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 20, base: 130,    growth: 1.35, weight: 0.34, span: 2 },
+  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 26, base: 210,    growth: 1.35, weight: 0.26, span: 2 },
+  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 31, base: 320,    growth: 1.35, weight: 0.22, span: 2 },
   /**
-   * Schools take the fourth slot in the 2x2 interleave. 700 is set against what
-   * a district holds rather than against anything real: 1.5 schools a district
-   * educate 1,050, which covers a district of apartments (384) outright and a
-   * district of towers (1,680) to 63% — under LEVEL_EDUCATION's top rung, which
-   * is what leaves the last level for the university to unlock.
+   * Schools take the fourth slot in the 2x2 interleave, and 15 is the only
+   * integer that keeps LEVEL_EDUCATION's design intact at both ends of the map.
+   * Schools alone have to clear the 0.60 rung and miss the 0.85 one, at one
+   * district (a single school against 24 plots, so plots/24) and at scale (1.2
+   * schools against 24, so 1.2 x plots/24). That is plots in [14.4, 20.4) and
+   * [12, 17): 15 or 16, and 15 leaves the wider margin under 0.85.
+   *
+   * Measured: schools alone read 62.5% at 1 district, 62.5% at 2 and 3, 78% at
+   * 4 and 75% from 10 up — through the middle of LEVEL_EDUCATION everywhere,
+   * and never at its top.
    */
-  { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    capacity: 700,   base: 180,    growth: 1.35, weight: 0,    span: 2 },
+  { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    plots: 15, base: 180,    growth: 1.35, weight: 0,    span: 2 },
   /**
    * The transit depot: the fifth 2x2 type, and the first civic building in the
    * game that *earns*.
@@ -776,17 +845,31 @@ export const SERVICES: readonly Service[] = [
    * exactly 1 two cycles ago, and a fifth would re-open that calibration to buy
    * something transport already has two better routes to.
    *
-   * 2,200 against a hospital's 900: a network reaches further than a building,
-   * and a district that has bought one depot should feel covered by it.
+   * 24 against a hospital's 20: a network reaches further than a building, and
+   * "a district that has bought one depot should feel covered by it" is now
+   * exactly what the number says — one depot, 24 plots, the 24 plots of a
+   * district. The 2,200 residents this used to read stated the same intent
+   * against a denominator that moved 75x under it.
    */
-  { key: 'transit',    name: 'Transit',     buildLabel: 'Open depot',          coverLabel: 'Transit coverage',   capacity: 2_200, base: 260,    growth: 1.35, weight: 0,    span: 2 },
+  { key: 'transit',    name: 'Transit',     buildLabel: 'Open depot',          coverLabel: 'Transit coverage',   plots: 24, base: 260,    growth: 1.35, weight: 0,    span: 2 },
   /**
-   * Five schools' worth of teaching in one building, on nine plots, one to a
-   * district, at forty times a school's opening price and compounding half again
-   * as fast. Every one of those is doing the same job: making a university a
-   * thing the city decides to do rather than a box it ticks.
+   * Three quarters of a district's housing taught by one building, on nine
+   * plots, one to a district, at forty times a school's opening price and
+   * compounding half again as fast.
+   *
+   * It used to say "five schools' worth of teaching", and against a residents
+   * denominator that was true — 3,500 against 700. Against land it is not, and
+   * it must not be: there are 1.2 school sites to a district and exactly one
+   * university site, so a university worth five schools would reach 75 plots,
+   * three districts of housing, and education would be a thing you bought once.
+   *
+   * 18 is what the pool needs instead. `educationCoverage` sums schools and
+   * universities, so neither type alone clears LEVEL_EDUCATION's top rung —
+   * schools reach 62.5-78%, a university 75% — and together they always do.
+   * The top of the skyline is still the university's to unlock; what changed is
+   * that it unlocks it alongside the schools rather than instead of them.
    */
-  { key: 'university', name: 'Universities', buildLabel: 'Found university',   coverLabel: 'University coverage', capacity: 3_500, base: 7_200, growth: 1.9,  weight: 0,    span: 3 },
+  { key: 'university', name: 'Universities', buildLabel: 'Found university',   coverLabel: 'University coverage', plots: 18, base: 7_200, growth: 1.9,  weight: 0,    span: 3 },
 ];
 
 /** The three that feed happiness. Their weights and RECREATION_WEIGHT sum to 1. */
@@ -867,17 +950,24 @@ export const HAPPINESS_MIN_BUILD = 0.35;
 // ------------------------------------------------------------------ parks
 
 /**
- * Homes one park keeps happy.
+ * Housing plots one park keeps happy.
  *
- * Against *homes*, not residents, and that is the whole design of the term. The
- * land ratio is fixed at four park plots to nineteen housing plots a district,
- * whatever stands on them — a rezone multiplies residents by up to 75x and adds
- * exactly zero park land. A per-resident denominator would therefore be trivial
- * at detached housing and unreachable at arcologies, which is a happiness term
- * that means two different things at two ends of the same game. Per home it is
- * tier-invariant: 19 homes want 3.8 parks and a district has 4.
+ * Against land, not residents, and that is the whole design of the term — this
+ * is the one coverage the repo got right first time, and the one Part 0 made
+ * every other coverage copy. A rezone multiplies residents by up to 75x and adds
+ * exactly zero park land, so a per-resident denominator would be trivial at
+ * detached housing and unreachable at arcologies: a happiness term that means
+ * two different things at two ends of the same game.
+ *
+ * Plots rather than *homes*, which is the one thing that moved. Per home the
+ * term was level-invariant but not merge-invariant: 24 detached houses want 4.8
+ * parks against the 4 a district has, and the same land merged into 12 towers
+ * wants 2.4 — so recreation jumped from 83% to 100% the moment a district
+ * merged, having built nothing. Six is the ratio the land already states: four
+ * park plots to twenty-four housing plots a district, so a district's parks
+ * cover its housing exactly and half of them cover half of it.
  */
-export const HOMES_PER_PARK = 5;
+export const PLOTS_PER_PARK = 6;
 
 /**
  * Recreation's share of happiness. With the three services above it sums to 1.
