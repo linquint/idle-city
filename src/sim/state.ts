@@ -1,4 +1,4 @@
-import { LEVELS, OCCUPANCY_FULL, START_CASH } from './config.ts';
+import { LEVELS, OCCUPANCY_FULL, START_CASH, TAX_NEUTRAL } from './config.ts';
 
 /**
  * The three zones the player builds in, and the only three that can burn.
@@ -218,6 +218,14 @@ export interface GameState {
   districts: number;
   /** Lifetime earnings, for the ledger. */
   earned: number;
+  /**
+   * The tax step the city is on, an index into TAX_STEPS.
+   *
+   * Persisted policy, not a preference: it multiplies income and moves the
+   * happiness target, so a city reopened on a different rate from the one it was
+   * left on would earn a different amount for reasons the player never chose.
+   */
+  taxRate: number;
   /** When on, surplus cash is spent on the cheapest available plot, awake or away. */
   autoDevelop: boolean;
   /** Epoch ms of the last save, used to compute time away. */
@@ -275,6 +283,7 @@ export function createState(now = Date.now()): GameState {
     fireHazard: 0,
     districts: 1,
     earned: 0,
+    taxRate: TAX_NEUTRAL,
     autoDevelop: false,
     savedAt: now,
   };

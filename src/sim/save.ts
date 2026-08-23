@@ -5,6 +5,8 @@ import {
   MERGE_LEVEL,
   OCCUPANCY_FULL,
   SERVICES,
+  TAX_NEUTRAL,
+  TAX_STEPS,
 } from './config';
 import {
   burnableOf,
@@ -317,6 +319,12 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     fireHazard: Math.max(0, num(r['fireHazard'], 0)),
     districts,
     earned: Math.max(0, num(r['earned'], 0)),
+    // Policy, defaulted to neutral. A save older than v6 was played on a build
+    // that had no rate at all, and neutral is exactly what it was earning at.
+    taxRate: Math.max(
+      0,
+      Math.min(TAX_STEPS.length - 1, Math.floor(num(r['taxRate'], TAX_NEUTRAL))),
+    ),
     autoDevelop: r['autoDevelop'] === true,
     savedAt: num(r['savedAt'], now),
   };

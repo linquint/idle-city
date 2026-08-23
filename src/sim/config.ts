@@ -887,6 +887,54 @@ export const RECREATION_WEIGHT = 0.18;
 export const PARK_BASE = 45;
 export const PARK_GROWTH = 1.18;
 
+// -------------------------------------------------------------------- policy
+
+/**
+ * What the city may set its tax rate to.
+ *
+ * Four discrete steps rather than a slider, and that is a decision about what
+ * the control feeds rather than about taste. The rate moves happiness, which is
+ * a lagged signal on a 45-second constant — a slider invites a player to drag
+ * it, which would push a stream of values into an integrator that answers none
+ * of them for the best part of a minute, and the reading they get back would
+ * be of wherever the drag happened to stop rather than of what they chose. Four
+ * named steps are also readable at a glance, which a percentage is not.
+ *
+ * `income` multiplies the ledger. `mood` is added to the happiness *target*, in
+ * the same way the fire term is subtracted from it: it is a modifier on the
+ * coverage the city has earned, not a fifth weight. The four happiness weights
+ * were calibrated to sum to exactly 1 and still do.
+ *
+ * The multipliers are far wider than they look, because happiness is expensive.
+ * It is worth 45% of the ledger through HAPPINESS_FLOOR, it moves occupancy
+ * across a 0.84 range, and occupancy moves the shop multiplier on top — so the
+ * three compound and a tenth of a point of mood costs roughly a fifth of the
+ * income. A first pass at 1.18 for eight points was measured and was *strictly
+ * worse* than neutral on a fully covered city, which is a control with three
+ * dead options on it.
+ *
+ * Measured on two cities settled for half an hour, against the neutral step:
+ *
+ *                    fully covered        short of a hospital and its parks
+ *   Low               x0.92  h 1.00        x1.15  h 0.77
+ *   High              x1.13  h 0.94        x1.08  h 0.63
+ *   Punitive          x1.15  h 0.86        x1.02  h 0.55
+ *
+ * Which is the trade the control exists to offer, and it points both ways: a
+ * covered city has mood to sell and should raise the rate, and a struggling one
+ * is better off buying mood back — Low is what lifts a neglected city over
+ * HAPPINESS_MIN_BUILD when it cannot yet afford the hospital that would.
+ */
+export const TAX_STEPS = [
+  { label: 'Low', income: 0.92, mood: 0.08 },
+  { label: 'Standard', income: 1, mood: 0 },
+  { label: 'High', income: 1.3, mood: -0.06 },
+  { label: 'Punitive', income: 1.6, mood: -0.14 },
+] as const;
+
+/** The step a fresh city starts on, and the one a save without a rate defaults to. */
+export const TAX_NEUTRAL = TAX_STEPS.findIndex((step) => step.mood === 0);
+
 // ---------------------------------------------------------------------- fire
 
 /**

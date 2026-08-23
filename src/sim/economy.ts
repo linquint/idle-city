@@ -61,6 +61,7 @@ import {
   SHOP_SUPPLY,
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
+  TAX_STEPS,
   WORKING_SHARE,
   type Service,
 } from './config.ts';
@@ -679,7 +680,11 @@ export const happinessTarget = (s: GameState): number => {
   const covered =
     HAPPINESS_SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0) +
     RECREATION_WEIGHT * recreationCoverage(s);
-  return Math.max(0, covered - FIRE_UNHAPPINESS * s.fires.length);
+  // The tax term joins the fire term as a *modifier* on earned coverage rather
+  // than as a fifth weight. The four weights sum to exactly 1 and go on doing
+  // so; what a tax rate changes is how the city feels about the coverage it has,
+  // which is a different statement from how much that coverage is worth.
+  return Math.max(0, Math.min(1, covered + taxStep(s).mood) - FIRE_UNHAPPINESS * s.fires.length);
 };
 
 /**
@@ -701,6 +706,12 @@ export const bindingTerm = (s: GameState): HappinessTerm => {
     }
   }
   return worst;
+};
+
+/** The tax setting the city is on. Clamped, so a doctored save picks a real one. */
+export const taxStep = (s: GameState): (typeof TAX_STEPS)[number] => {
+  const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(s.taxRate)));
+  return TAX_STEPS[at] as (typeof TAX_STEPS)[number];
 };
 
 /**
@@ -957,7 +968,11 @@ export const income = (s: GameState): number => {
     people *
     RENT *
     (1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (s.districts - 1)) *
-    incomeMultiplier(s)
+    incomeMultiplier(s) *
+    // The tax rate multiplies the whole ledger, which is why the happiness it
+    // costs is worth more than it looks: happiness multiplies this same line
+    // through `incomeMultiplier`, so the two terms compound against each other.
+    taxStep(s).income
   );
 };
 

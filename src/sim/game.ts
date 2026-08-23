@@ -12,6 +12,7 @@ import {
   MERGE_LEVEL,
   OFFLINE_CAP_SECONDS,
   SERVICES,
+  TAX_STEPS,
   TICK_RATE,
   type Service,
 } from './config.ts';
@@ -873,6 +874,14 @@ export class Game {
 
   setAutoDevelop(on: boolean): void {
     this.inner.autoDevelop = on;
+  }
+
+  /**
+   * Moves the city to one of TAX_STEPS. Clamped rather than trusted, so a HUD
+   * bug cannot put the simulation on a rate that does not exist.
+   */
+  setTaxRate(step: number): void {
+    this.inner.taxRate = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(step)));
   }
 
   reset(): void {

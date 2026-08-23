@@ -9,6 +9,7 @@ import {
   LEVEL_HOUSING,
   SHOP_JOBS,
   SHOP_TRIPS,
+  TAX_STEPS,
   ZONE_LEVEL_NAMES,
   LEVELS,
   MAX_DISTRICTS,
@@ -42,6 +43,7 @@ import {
   parkCost,
   plotsOf,
   promotionBlocker,
+  taxStep,
   zoneOf,
   priceModifier,
   population,
@@ -86,6 +88,10 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
   industry: 'Industrial',
 };
 
+/** The tabs the docked control is split into, in the order they are shown. */
+const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes'] as const;
+type TabKey = (typeof TAB_KEYS)[number];
+
 /** Plots one district sells of each zone. Turns a plot index into a district. */
 const ZONE_PLOTS: Record<ZoneKind, number> = {
   home: BUILDABLE_RESIDENTIAL_PER_DISTRICT,
@@ -129,6 +135,9 @@ export class Hud {
   private readonly nodes = {
     cash: el('cash'),
     rate: el('rate'),
+    ledgerCash: el('ledger-cash'),
+    ledgerRate: el('ledger-rate'),
+    earned: el('earned'),
     residents: el('residents'),
     plotsResidential: el('plots-r'),
     plotsCommercial: el('plots-c'),
@@ -190,7 +199,35 @@ export class Hud {
     inspectWhere: el('inspect-where'),
     inspectRows: el('inspect-rows'),
     inspectClose: el<HTMLButtonElement>('inspect-close'),
+    taxSteps: el('tax-steps'),
+    taxIncome: el('tax-income'),
+    taxMood: el('tax-mood'),
   };
+
+  /**
+   * The four tabs, and which panel each shows.
+   *
+   * Real buttons with `role="tab"` and `aria-selected`, a roving tabindex, and
+   * arrow keys across the row: a tab strip built out of divs is a tab strip
+   * nobody can reach without a mouse.
+   */
+  private readonly tabs = TAB_KEYS.map((key) => ({
+    key,
+    button: el<HTMLButtonElement>(`tab-${key}`),
+    panel: el(`panel-${key}`),
+  }));
+
+  /**
+   * Which tab is open. The one number that decides how much `paint` does.
+   *
+   * `paint` runs ten times a second and used to touch every node in the HUD.
+   * With four tabs that would be four times the DOM writes for one tab's worth
+   * of information, so the panels are painted one at a time — a hidden node is
+   * not information, it is a write nobody can read.
+   */
+  private open: TabKey = 'build';
+  /** One control per TAX_STEPS entry, built once. */
+  private readonly taxButtons: HTMLButtonElement[] = [];
 
   /**
    * The building the card is showing, or null.
@@ -203,6 +240,15 @@ export class Hud {
   private selected: BuildingRef | null = null;
   /** Reused by the card, which asks the layout where its building stands. */
   private readonly at = createPlacement();
+  /**
+   * What the card last said, as one string.
+   *
+   * `paint` runs at 10Hz and the card is a `replaceChildren` of eight rows;
+   * doing that when nothing has changed is eighty DOM nodes a second thrown
+   * away for no new information. Comparing the rendered text first costs one
+   * string compare.
+   */
+  private cardShown = '';
 
   /**
    * One row of controls and readouts per service, keyed the same way.
@@ -262,6 +308,28 @@ export class Hud {
       this.inspect(null);
     });
 
+    for (const tab of this.tabs) {
+      tab.button.addEventListener('click', () => this.show(tab.key));
+      tab.button.addEventListener('keydown', (event) => this.onTabKey(event, tab.key));
+    }
+
+    // The tax control, built once from TAX_STEPS rather than typed into the
+    // markup: the steps are balance, and balance lives in config.ts.
+    for (let i = 0; i < TAX_STEPS.length; i++) {
+      const step = TAX_STEPS[i] as (typeof TAX_STEPS)[number];
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'step';
+      button.setAttribute('role', 'radio');
+      button.textContent = step.label;
+      button.addEventListener('click', () => {
+        this.game.setTaxRate(i);
+        this.paint();
+      });
+      this.taxButtons.push(button);
+      n.taxSteps.append(button);
+    }
+
     n.occupancyMark.style.left = `${ANNEX_MIN_OCCUPANCY * 100}%`;
 
     if (import.meta.env.DEV && this.hooks.onSkip) {
@@ -278,6 +346,34 @@ export class Hud {
 
   private act(run: () => boolean): void {
     if (run()) this.paint();
+  }
+
+  /** Opens one tab. Nothing about the data moves; only which nodes are visible. */
+  show(key: TabKey): void {
+    this.open = key;
+    for (const tab of this.tabs) {
+      const on = tab.key === key;
+      tab.button.setAttribute('aria-selected', String(on));
+      // A roving tabindex, so the strip is one stop rather than four.
+      tab.button.tabIndex = on ? 0 : -1;
+      tab.panel.hidden = !on;
+    }
+    this.paint();
+  }
+
+  /** Left and right walk the strip; Home and End jump to its ends. */
+  private onTabKey(event: KeyboardEvent, key: TabKey): void {
+    const at = TAB_KEYS.indexOf(key);
+    let next = -1;
+    if (event.key === 'ArrowRight') next = (at + 1) % TAB_KEYS.length;
+    else if (event.key === 'ArrowLeft') next = (at + TAB_KEYS.length - 1) % TAB_KEYS.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = TAB_KEYS.length - 1;
+    if (next < 0) return;
+    event.preventDefault();
+    const target = TAB_KEYS[next] as TabKey;
+    this.show(target);
+    this.tabs.find((tab) => tab.key === target)?.button.focus();
   }
 
   /** Throttled from the frame loop; the ledger does not need 144 updates a second. */
@@ -328,22 +424,40 @@ export class Hud {
     fill.classList.toggle('short', demand < 0);
   }
 
+  /**
+   * The whole HUD, ten times a second.
+   *
+   * Two always-on numbers, the open tab, and the card. Everything else is
+   * behind a `hidden` panel, and a write to a hidden node is a write nobody can
+   * read — with four tabs, painting them all would be four times the DOM
+   * traffic for one tab's worth of information.
+   */
   paint(): void {
     const s = this.game.state;
     const n = this.nodes;
-    const target = demandTargets(s);
 
     n.cash.textContent = fmt(s.cash);
-    n.rate.textContent = fmt(income(s));
+    n.rate.textContent = `${fmt(income(s))}/s`;
+
+    if (this.open === 'build') this.paintBuild(s);
+    else if (this.open === 'treasury') this.paintTreasury(s);
+    else if (this.open === 'demand') this.paintDemand(s);
+    else this.paintTaxes(s);
+
+    this.paintCard(s);
+  }
+
+  private paintTreasury(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    n.ledgerCash.textContent = fmt(s.cash);
+    n.ledgerRate.textContent = fmt(income(s));
+    n.earned.textContent = fmt(s.earned);
     n.residents.textContent = fmtInt(residents(s));
-    // One number per zone rather than one city-wide total: each building type is
-    // now capped by its own zone's plot count, so a single total would hide the
-    // cap that is actually about to bite.
+    // Plots taken, not buildings owned. A merged building covers two plots, so
+    // a row that counted buildings would show a district emptying as it grew.
     const homes = homeCapacity(s);
     const shops = shopCapacity(s);
     const industry = industryCapacity(s);
-    // Plots taken, not buildings owned. A merged building covers two plots, so
-    // a row that counted buildings would show a district emptying as it grew.
     const takenR = plotsOf(s, 'home');
     const takenC = plotsOf(s, 'shop');
     const takenI = plotsOf(s, 'industry');
@@ -357,7 +471,10 @@ export class Hud {
     );
     n.districts.textContent = `${s.districts} / ${MAX_DISTRICTS}`;
     n.happiness.textContent = pct(s.happiness);
+  }
 
+  private paintDemand(s: Readonly<GameState>): void {
+    const n = this.nodes;
     this.paintBar(n.demandRFill, s.demandR);
     this.paintBar(n.demandCFill, s.demandC);
     this.paintBar(n.demandIFill, s.demandI);
@@ -384,18 +501,14 @@ export class Hud {
 
     const spoken: string[] = [];
     const taught: string[] = [];
-    for (const { service, built, allowed, covered, coverage: reach } of serviceReadings(s)) {
+    for (const { service, built, covered, coverage: reach } of serviceReadings(s)) {
       const row = this.serviceNodes.find((entry) => entry.service.key === service.key);
       if (!row) continue;
       row.built.textContent = fmtInt(built);
       row.covers.textContent = `covers ${fmtInt(covered)} of ${fmtInt(people)}`;
       row.row.classList.toggle('covered', reach >= 1);
-      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
-      row.cost.textContent = fmt(serviceCost(s, service));
-      row.button.disabled = !canBuildService(s, service);
-      row.button.title = serviceBlocker(s, service) ?? service.buildLabel;
       (service.weight > 0 ? spoken : taught).push(
-        `${service.name} ${built} of ${allowed} allowed, covering ${Math.round(covered)} of ${Math.round(people)} residents`,
+        `${service.name} ${built}, covering ${Math.round(covered)} of ${Math.round(people)} residents`,
       );
     }
     // Recreation is the fourth happiness term but not a service: it has no
@@ -418,9 +531,7 @@ export class Hud {
     const next = nextLevelRequirement(s);
     n.educationReach.textContent = pct(taughtShare);
     n.educationNext.textContent =
-      next === null
-        ? 'every level unlocked'
-        : `next level needs ${pct(next)}`;
+      next === null ? 'every level unlocked' : `next level needs ${pct(next)}`;
     n.education.classList.toggle('covered', next !== null && taughtShare >= next);
     taught.push(
       `Education reaches ${Math.round(taughtShare * 100)} percent` +
@@ -429,6 +540,45 @@ export class Hud {
           : `, next level needs ${Math.round(next * 100)} percent`),
     );
     n.education.setAttribute('aria-label', `Education: ${taught.join('; ')}`);
+  }
+
+  /**
+   * The policy tab: what the city charges, and what that costs it.
+   *
+   * The blocker-reason pattern in a different key — every other control in the
+   * HUD says why it is off, and this one says what it is doing, because a rate
+   * with no stated consequence is a rate nobody moves.
+   */
+  private paintTaxes(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(s.taxRate)));
+    for (let i = 0; i < this.taxButtons.length; i++) {
+      const button = this.taxButtons[i];
+      if (!button) continue;
+      const step = TAX_STEPS[i] as (typeof TAX_STEPS)[number];
+      button.setAttribute('aria-checked', String(i === at));
+      button.title = `${step.label}: income x${step.income.toFixed(2)}`;
+    }
+    const step = taxStep(s);
+    n.taxIncome.textContent = `x${step.income.toFixed(2)}`;
+    n.taxMood.textContent =
+      step.mood === 0
+        ? 'no effect on mood'
+        : `${step.mood > 0 ? '+' : '−'}${Math.round(Math.abs(step.mood) * 100)} points of mood`;
+  }
+
+  private paintBuild(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    const target = demandTargets(s);
+
+    for (const { service, built, allowed } of serviceReadings(s)) {
+      const row = this.serviceNodes.find((entry) => entry.service.key === service.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(serviceCost(s, service));
+      row.button.disabled = !canBuildService(s, service);
+      row.button.title = serviceBlocker(s, service) ?? service.buildLabel;
+    }
 
     // There is no single zoning any more, so the readout names the tallest
     // thing standing rather than one city-wide tier — "towers" once the first
@@ -484,8 +634,6 @@ export class Hud {
 
     n.auto.textContent = `Auto-develop · ${s.autoDevelop ? 'on' : 'off'}`;
     n.auto.setAttribute('aria-pressed', String(s.autoDevelop));
-
-    this.paintCard(s);
   }
 
   /**
@@ -497,6 +645,7 @@ export class Hud {
    */
   inspect(ref: BuildingRef | null): void {
     this.selected = ref;
+    this.cardShown = '';
     this.nodes.inspect.hidden = ref === null;
     this.paint();
   }
@@ -553,6 +702,10 @@ export class Hud {
     rows.push(['Adds to income', `${fmt(buildingIncome(s, ref.kind, level))}/s`]);
     rows.push(['Expansion', promotionBlocker(s, ref.kind, level, at.parcelPlots) ?? 'Ready to climb']);
     rows.push(['Parcel', `#${at.plot + 1} · slot ${ref.slot + 1}`]);
+
+    const shown = `${n.inspectTitle.textContent}|${rows.map((row) => row.join('=')).join('|')}`;
+    if (shown === this.cardShown) return;
+    this.cardShown = shown;
 
     n.inspectRows.replaceChildren(
       ...rows.map(([key, value]) => {
