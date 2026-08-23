@@ -66,6 +66,21 @@ canvas {
   letter-spacing: 0.04em;
 }
 
+/* The frame-rate readout. Sits in the gap the masthead leaves above .hint, so
+   neither the chrome nor the hint has to move to make room for it. */
+.fps {
+  position: fixed;
+  left: 22px;
+  top: 57px;
+  z-index: 3;
+  font-size: 10px;
+  line-height: 1;
+  color: #5a6a80;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
 .hint {
   position: fixed;
   left: 22px;

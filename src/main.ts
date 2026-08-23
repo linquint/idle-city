@@ -5,6 +5,7 @@ import { CityLayout } from './sim/layout';
 import { load, save, secondsAway } from './sim/save';
 import { createState } from './sim/state';
 import { View } from './render/view';
+import { FpsMeter } from './ui/fps';
 import { Hud } from './ui/hud';
 
 const AUTOSAVE_SECONDS = 10;
@@ -18,6 +19,10 @@ const layout = new CityLayout();
 const saved = load();
 const game = new Game(saved ?? createState());
 const view = new View(canvas, layout);
+
+// A renderer instrument, fed from the frame loop rather than from the HUD:
+// `Hud` reads the simulation, and frame rate is not a simulation number.
+const fps = new FpsMeter();
 
 const hud = new Hud(game, {
   onReset: () => persist(),
@@ -61,6 +66,7 @@ function frame(now: number): void {
   view.sync(game.state);
   view.render(dt);
   hud.tick(dt);
+  fps.sample(dt);
 
   sinceSave += dt;
   if (sinceSave >= AUTOSAVE_SECONDS) {
@@ -96,5 +102,6 @@ if (import.meta.hot) {
     running = false;
     persist();
     view.dispose();
+    fps.dispose();
   });
 }
