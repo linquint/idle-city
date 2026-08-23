@@ -10,8 +10,17 @@ export const SEED = 20260823;
 /** World units per plot. */
 export const CELL = 4;
 
-/** Plots per side of a district. A district is the unit of expansion. */
-export const DISTRICT_SPAN = 12;
+/**
+ * Plots per side of a district. A district is the unit of expansion.
+ *
+ * Widened from 12 to make room for a 3x3 university. At 12 the land budget has
+ * no solution: a 3x3 reserved before the 2x2 civic pass leaves
+ * 90 - 18 - 28 - 11 - 6x4 - 9 = 0 courtyard plots on the only tuple that is
+ * reachable often enough to sample for, which deletes park land outright. 13
+ * is the smallest span that fits the university, six civic sites and the four
+ * courtyards parks stand on at the same time. See FRONTAGE_TARGET.
+ */
+export const DISTRICT_SPAN = 13;
 
 /**
  * Streets are not a fixed grid. Each axis is walked in seeded steps inside this
@@ -30,44 +39,57 @@ export const ROAD_GAP_MAX = 7;
  * strand plots or hand out plots that do not exist. Generation rejection-samples
  * until it hits this number exactly.
  *
- * Measured, not guessed. Over 1000 seeds the raw (pre-sampling) count takes
- * five values — 72, 80, 81, 90, 100 — with a median and mode of 90 (51.3%),
- * mean 89.66, stddev 6.71. 90 is therefore both the empirical median and the
- * cheapest target to sample for. See tools/citygen.calibrate.mjs.
+ * Measured, not guessed, and re-measured for the wider district. Over 4000 raw
+ * (pre-sampling) attempts at DISTRICT_SPAN 13 the count takes six values — 81,
+ * 90, 99, 100, 110, 121 — with a mode of 100 at 47.3%, ahead of 110 at 38.6%.
+ * 100 is therefore the cheapest target to sample for, exactly as 90 was at span
+ * 12 (51.3%). Worst inner sampling over 4000 seeds is 15 attempts against a
+ * MAX_ATTEMPTS of 64. See tools/citygen.calibrate.mjs.
  */
-export const TARGET_PLOTS = 90;
+export const TARGET_PLOTS = 100;
 
 /**
- * What one district must offer once frontage and civic land are taken out.
+ * What one district must offer once frontage, civic land and the university are
+ * taken out.
  *
- * Every building fronts a street, so only the 72 road-adjacent plots of a
- * district's 90 are ever for sale, and `civicSites` claims 2x2 quads out of
- * those before housing sees them. Neither number falls where the brief for this
- * change assumed. Measured by enumerating all 240 street plans the generator
- * can produce (60 skeletons x 4 rail sides — the complete space, not a sample):
+ * Every building fronts a street, so only the 84 road-adjacent plots of a
+ * district's 100 are ever for sale, and the site passes claim quads out of
+ * those before housing sees them. A university is reserved first (one 3x3),
+ * then `civicSites` takes 2x2 quads out of what is left, then the three build
+ * lists are what remains. The land adds up exactly:
  *
- *   - road-adjacent plots: 72 of 90, invariant;
- *   - of those, commercial is invariant at 28, because `zoneBlocks` lays shops
- *     along block rings and a ring is exactly the frontage;
- *   - residential and industrial split the remaining 44 *variably* — R lands on
- *     one of {25, 26, 28, 29, 31, 33, 34} and I on {19, 18, 16, 15, 13, 11, 10}.
- *     30/14 never occurs; it is the mean of the two distributions, not a value
- *     either one takes.
+ *   24 + 31 + 8 for sale + 6 x 4 civic + 1 x 9 university + 4 courtyard = 100
+ *
+ * Measured by reserving one 3x3 and running the existing 2x2 pass over 20,000
+ * street plans, then tallying the tuple that falls out:
+ *
+ *   - road-adjacent plots: 84 of 100, invariant;
+ *   - commercial frontage: 31, invariant, because `zoneBlocks` lays shops along
+ *     block rings and a ring is exactly the frontage;
+ *   - residential and industrial split the rest variably, so the tuple below is
+ *     reached by 3.28% of plans — about 1 in 30 attempts, and at
+ *     FRONTAGE_MAX_ATTEMPTS the probability of exhausting them is 3.9e-8.
+ *
+ * The industrial 8 is what the university costs. Nothing else in this tuple is
+ * a cut: residential grew 19 -> 24 and commerce 28 -> 31 with the wider
+ * district, so an existing save gains housing land rather than losing it. The
+ * alternative at span 12 was a tuple with zero courtyards, which would have
+ * deleted park land — see DISTRICT_SPAN.
  *
  * `homeCapacity` multiplies a per-district constant by the district count, so a
  * variable split would either strand land or sell plots that do not exist. The
  * fix is the one this codebase already uses one level down: reject and reseed.
- * `districtPlanAt` samples district seeds until the district lands on the triple
- * below, which 8.8% of accepted layouts do — about 11 tries, and it still leaves
- * 32 distinct street plans in play. Taking the guaranteed minimum instead would
- * mean 9 residential and 3 industrial plots a district, which is not a game.
+ * `districtPlanAt` samples district seeds until the district lands on the tuple
+ * below. Taking the guaranteed minimum instead would not be a game.
  */
 export const FRONTAGE_TARGET = {
-  residential: 19,
-  commercial: 28,
-  industrial: 11,
-  /** 2x2 civic quads per district. 7 x 4 = 28 plots, mostly dead interior. */
-  civicSites: 7,
+  residential: 24,
+  commercial: 31,
+  industrial: 8,
+  /** 2x2 civic quads per district. 6 x 4 = 24 plots, mostly dead interior. */
+  civicSites: 6,
+  /** 3x3 university quads per district. Exactly one, reserved before the rest. */
+  universitySites: 1,
 } as const;
 
 /**

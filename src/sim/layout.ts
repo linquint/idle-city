@@ -23,67 +23,99 @@ const mod = (a: number, n: number): number => ((a % n) + n) % n;
 
 // ------------------------------------------------------------- civic siting
 
-/** A 2x2 quad a hospital, police station or fire station can stand on. */
+/**
+ * A square a civic building can stand on: 2x2 for a hospital, police station,
+ * fire station or school, 3x3 for a university.
+ */
 export interface CivicSite {
-  /** Local cell index of the quad's lower-left plot. The other three follow it. */
+  /** Local cell index of the square's lower-left plot. The rest follow it. */
   readonly cell: number;
-  /** All four plots, local cell indices, row-major from the lower-left. */
+  /** Every plot, local cell indices, row-major from the lower-left. */
   readonly cells: readonly number[];
-  /** The zone all four share. Never commercial. */
+  /** The zone they all share. Never commercial. */
   readonly zone: Zone;
-  /** Interior plots the quad swallows, 0 to 3. What sites are ranked on. */
+  /** Interior plots the square swallows. What sites are ranked on. */
   readonly dead: number;
 }
 
 /**
- * Every 2x2 quad a civic building could stand on, best first, non-overlapping.
+ * Every square of `size` plots a building could stand on, best first.
  *
  * Pure, and deliberately not in citygen.ts: the street generator is frozen, and
  * this is a read over its output rather than a part of it.
  *
- * A site needs all four plots in one zone and at least one of them on a street.
- * Commercial quads are excluded outright — shop frontage is the scarcest land in
- * the district (28 plots, every one of them on a street) and a hospital sitting
- * on four of them would cost the city a seventh of its commerce.
+ * A site needs every plot in one zone and at least one of them on a street.
+ * Commercial squares are excluded outright — shop frontage is the scarcest land
+ * in the district (31 plots, every one of them on a street) and a hospital
+ * sitting on four of them would cost the city a seventh of its commerce.
  *
- * Sites are ranked by how much *dead* land they swallow, descending. A quad at
- * the edge of a deep block covers two street plots and two interior plots that
- * could never be built on anyway, so preferring it turns courtyard into civic
- * land instead of eating housing frontage: measured over all 240 street plans,
- * the greedy pass claims 8.4 sites a district and 14.3 of the 18 interior plots,
- * paying only 19.4 street plots for 33.6 plots of building land. Ties go to the
- * lower cell index, so the list is a pure function of the layout.
+ * Sites are ranked by how much *dead* land they swallow, descending. A square at
+ * the edge of a deep block covers street plots and interior plots that could
+ * never be built on anyway, so preferring it turns courtyard into civic land
+ * instead of eating housing frontage. Ties go to the lower cell index, so the
+ * list is a pure function of the layout.
  */
-export function civicSites(layout: DistrictLayout): readonly CivicSite[] {
-  const quads: CivicSite[] = [];
-  for (let z = 0; z + 1 < DISTRICT_SPAN; z++) {
-    for (let x = 0; x + 1 < DISTRICT_SPAN; x++) {
+function squares(layout: DistrictLayout, size: number): CivicSite[] {
+  const found: CivicSite[] = [];
+  for (let z = 0; z + size - 1 < DISTRICT_SPAN; z++) {
+    for (let x = 0; x + size - 1 < DISTRICT_SPAN; x++) {
       const cell = z * DISTRICT_SPAN + x;
-      const cells = [cell, cell + 1, cell + DISTRICT_SPAN, cell + DISTRICT_SPAN + 1];
+      const cells: number[] = [];
+      for (let dz = 0; dz < size; dz++) {
+        for (let dx = 0; dx < size; dx++) cells.push(cell + dz * DISTRICT_SPAN + dx);
+      }
       const zone = layout.zone[cell] as Zone;
       if (zone !== ZONE.residential && zone !== ZONE.industrial) continue;
       if (!cells.every((c) => layout.zone[c] === zone)) continue;
       if (!cells.some((c) => layout.perimeter[c] === 1)) continue;
-      quads.push({ cell, cells, zone, dead: cells.filter((c) => layout.perimeter[c] === 0).length });
+      found.push({ cell, cells, zone, dead: cells.filter((c) => layout.perimeter[c] === 0).length });
     }
   }
-  quads.sort((a, b) => b.dead - a.dead || a.cell - b.cell);
+  found.sort((a, b) => b.dead - a.dead || a.cell - b.cell);
+  return found;
+}
 
-  const taken = new Set<number>();
+/** Greedily takes non-overlapping sites out of a ranked list, marking `taken`. */
+function claim(ranked: readonly CivicSite[], taken: Set<number>): CivicSite[] {
   const chosen: CivicSite[] = [];
-  for (const quad of quads) {
-    if (quad.cells.some((c) => taken.has(c))) continue;
-    for (const c of quad.cells) taken.add(c);
-    chosen.push(quad);
+  for (const site of ranked) {
+    if (site.cells.some((c) => taken.has(c))) continue;
+    for (const c of site.cells) taken.add(c);
+    chosen.push(site);
   }
   return chosen;
+}
+
+/**
+ * Every 3x3 square a university could stand on, best first, non-overlapping.
+ *
+ * Same shape and same dead-land ranking as `civicSites`, three plots to a side
+ * instead of two. Reserved *before* the 2x2 pass, because a 3x3 is far rarer
+ * than a 2x2 — over 4000 districts the fewest 3x3 candidates any of them offers
+ * is 3, against dozens of 2x2s — so letting the civic pass go first would leave
+ * districts with nowhere to put a university at all.
+ *
+ * Only ever one is used (FRONTAGE_TARGET.universitySites), but the whole ranked
+ * list is returned for the same reason `civicSites` returns its whole list:
+ * `districtPlan` reserves the sites it is told about, and the harness checks
+ * the ranking rather than trusting it.
+ */
+export function universitySites(layout: DistrictLayout): readonly CivicSite[] {
+  return claim(squares(layout, 3), new Set<number>());
+}
+
+/** Every 2x2 quad a civic building could stand on, best first, non-overlapping. */
+export function civicSites(layout: DistrictLayout, taken = new Set<number>()): readonly CivicSite[] {
+  return claim(squares(layout, 2), taken);
 }
 
 /** One district's land, split into what can be bought and what cannot. */
 export interface DistrictPlan {
   readonly layout: DistrictLayout;
+  /** 3x3 university sites, reserved before anything else. */
+  readonly universities: readonly CivicSite[];
   readonly sites: readonly CivicSite[];
-  /** Build order per zone: road-adjacent, and clear of every civic site. */
+  /** Build order per zone: road-adjacent, and clear of every reserved site. */
   readonly residential: readonly number[];
   readonly commercial: readonly number[];
   readonly industrial: readonly number[];
@@ -92,16 +124,21 @@ export interface DistrictPlan {
 }
 
 /**
- * Reserves every civic site up front and hands back what is left.
+ * Reserves the university and every civic site up front and hands back what is
+ * left.
  *
- * Reserving the whole site list rather than the sites a building has actually
- * landed on is what keeps `homeCapacity` independent of build order: the plot a
- * house gets must be recoverable from `{ homes: 41 }` alone, and it would not be
- * if opening a hospital shortened the housing list under it.
+ * The university goes first because a 3x3 is the scarce shape: the 2x2 pass
+ * would otherwise fragment the only squares big enough to hold one. Reserving
+ * the whole site list rather than the sites a building has actually landed on is
+ * what keeps `homeCapacity` independent of build order — the plot a house gets
+ * must be recoverable from `{ homes: 41 }` alone, and it would not be if opening
+ * a hospital shortened the housing list under it.
  */
 export function districtPlan(layout: DistrictLayout): DistrictPlan {
-  const sites = civicSites(layout);
-  const reserved = new Set<number>(sites.flatMap((site) => site.cells));
+  const reserved = new Set<number>();
+  const universities = universitySites(layout).slice(0, FRONTAGE_TARGET.universitySites);
+  for (const site of universities) for (const c of site.cells) reserved.add(c);
+  const sites = civicSites(layout, reserved);
 
   const keep = (cells: readonly number[]): number[] => cells.filter((c) => !reserved.has(c));
   const residential = keep(layout.residential);
@@ -114,7 +151,7 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
     if (layout.zone[i] === ZONE.road || reserved.has(i) || forSale.has(i)) continue;
     courtyards.push(i);
   }
-  return { layout, sites, residential, commercial, industrial, courtyards };
+  return { layout, universities, sites, residential, commercial, industrial, courtyards };
 }
 
 /** Whether a plan hits the counts every district has to agree on. */
@@ -123,20 +160,27 @@ function onTarget(plan: DistrictPlan): boolean {
     plan.residential.length === FRONTAGE_TARGET.residential &&
     plan.commercial.length === FRONTAGE_TARGET.commercial &&
     plan.industrial.length === FRONTAGE_TARGET.industrial &&
-    plan.sites.length === FRONTAGE_TARGET.civicSites
+    plan.sites.length === FRONTAGE_TARGET.civicSites &&
+    plan.universities.length === FRONTAGE_TARGET.universitySites
   );
 }
 
-/** Reseeds a district until it lands on FRONTAGE_TARGET. See that constant. */
-export const FRONTAGE_MAX_ATTEMPTS = 256;
+/**
+ * Reseeds a district until it lands on FRONTAGE_TARGET. See that constant.
+ *
+ * Raised from 256 with the university: the tuple is reached by 3.28% of plans
+ * rather than 8.8%, so the same headroom costs twice the attempts. At 512 the
+ * probability of exhausting them is 3.9e-8 per district, or about 2e-6 across a
+ * full 49-district city — measured over 20,000 plans, not assumed.
+ */
+export const FRONTAGE_MAX_ATTEMPTS = 512;
 
 export function planFor(seed: number): DistrictPlan {
   for (let i = 0; i < FRONTAGE_MAX_ATTEMPTS; i++) {
     const plan = districtPlan(generateDistrict(mixSeed(seed, i * 2 + 1)));
     if (onTarget(plan)) return plan;
   }
-  // One in 8.8 accepted layouts is on target, so 256 misses has probability
-  // ~1e-10. Throwing beats shipping a district the economy cannot count.
+  // Throwing beats shipping a district the economy cannot count.
   throw new Error(`no on-target district for seed ${seed} in ${FRONTAGE_MAX_ATTEMPTS} attempts`);
 }
 
@@ -207,31 +251,38 @@ export const PLOTS_PER_DISTRICT = TARGET_PLOTS;
 
 /**
  * Buildable land per district: the plots that front a street and are not
- * reserved for a civic site. 19 + 28 + 11 = 58 of the 90 zoned plots are for
- * sale, 28 more are held for the seven 2x2 civic sites, and the last 4 are
- * interior land the renderer draws as courtyard.
+ * reserved for a site. 24 + 31 + 8 = 63 of the 100 zoned plots are for sale, 24
+ * more are held for the six 2x2 civic sites, 9 for the one 3x3 university, and
+ * the last 4 are interior land the renderer draws as courtyard.
  *
  * These are constants because `districtPlanAt` reseeds until they are — the
  * road-adjacent split is not seed-invariant on its own. See FRONTAGE_TARGET.
  */
 /**
- * Park land per district: whatever is left once frontage and civic sites are
- * taken out. Arithmetic, not a measurement — 90 zoned plots less 19 + 28 + 11
- * for sale and 7 x 4 held for civic sites leaves exactly 4, in every district,
- * for every seed, because `districtPlanAt` reseeds until the other four numbers
- * are exact. These are the plots `districtPlan` already reports as courtyards.
+ * Park land per district: whatever is left once frontage, civic sites and the
+ * university are taken out. Arithmetic, not a measurement — 100 zoned plots less
+ * 24 + 31 + 8 for sale, 6 x 4 held for civic sites and 1 x 9 for the university
+ * leaves exactly 4, in every district, for every seed, because `districtPlanAt`
+ * reseeds until the other numbers are exact. These are the plots `districtPlan`
+ * already reports as courtyards.
+ *
+ * Holding this at 4 across the university change is the whole reason
+ * DISTRICT_SPAN moved: at span 12 the reachable tuple left zero, and park land
+ * at zero is a happiness term that can never be earned.
  */
 export const BUILDABLE_PARKS_PER_DISTRICT =
   TARGET_PLOTS -
   FRONTAGE_TARGET.residential -
   FRONTAGE_TARGET.commercial -
   FRONTAGE_TARGET.industrial -
-  FRONTAGE_TARGET.civicSites * 4;
+  FRONTAGE_TARGET.civicSites * 4 -
+  FRONTAGE_TARGET.universitySites * 9;
 
 export const BUILDABLE_RESIDENTIAL_PER_DISTRICT = FRONTAGE_TARGET.residential;
 export const BUILDABLE_COMMERCIAL_PER_DISTRICT = FRONTAGE_TARGET.commercial;
 export const BUILDABLE_INDUSTRIAL_PER_DISTRICT = FRONTAGE_TARGET.industrial;
 export const CIVIC_SITES_PER_DISTRICT = FRONTAGE_TARGET.civicSites;
+export const UNIVERSITY_SITES_PER_DISTRICT = FRONTAGE_TARGET.universitySites;
 
 /**
  * The order in which a ring of districts gets annexed.
@@ -302,6 +353,8 @@ interface DistrictPlots {
   readonly industrial: Coord[];
   /** Lower-left plot of each civic site, in site order. */
   readonly civic: Coord[];
+  /** Lower-left plot of each university site, in site order. */
+  readonly universities: Coord[];
   readonly courtyards: Coord[];
   readonly roads: Coord[];
 }
@@ -337,6 +390,7 @@ function placeDistrict(index: number): DistrictPlots {
     commercial: plan.commercial.map(toGlobal),
     industrial: plan.industrial.map(toGlobal),
     civic: plan.sites.map((site) => toGlobal(site.cell)),
+    universities: plan.universities.map((site) => toGlobal(site.cell)),
     courtyards: plan.courtyards.map(toGlobal),
     roads,
   };
@@ -352,17 +406,20 @@ export class CityLayout {
   private readonly _commercial: Coord[] = [];
   private readonly _industrial: Coord[] = [];
   private readonly _civic: Coord[] = [];
+  private readonly _universities: Coord[] = [];
   private readonly _courtyards: Coord[] = [];
   private readonly _districts: District[] = [];
 
   /** Materialises districts up to `count`. Idempotent and cheap to over-call. */
   ensure(count: number): this {
     for (let i = this.materialised; i < count; i++) {
-      const { residential, commercial, industrial, civic, courtyards, roads } = placeDistrict(i);
+      const { residential, commercial, industrial, civic, universities, courtyards, roads } =
+        placeDistrict(i);
       this._residential.push(...residential);
       this._commercial.push(...commercial);
       this._industrial.push(...industrial);
       this._civic.push(...civic);
+      this._universities.push(...universities);
       this._courtyards.push(...courtyards);
       const c = districtCoord(i);
       this._districts.push({
@@ -413,6 +470,24 @@ export class CityLayout {
   /** How many 2x2 civic sites the city owns. */
   get civicSites(): number {
     return this._civic.length;
+  }
+
+  /**
+   * Lower-left plot of the i-th university site. The building spans this plot
+   * and the eight at +x, +z out to +2x+2z.
+   *
+   * Its own list rather than a slot in the civic interleave: a university is a
+   * different shape, one to a district, and mixing a 3x3 into a list of 2x2s
+   * would mean every consumer of `civicSiteCell` had to ask how big the site it
+   * just got is.
+   */
+  universitySiteCell(i: number): Coord {
+    return this._universities[i] as Coord;
+  }
+
+  /** How many 3x3 university sites the city owns. One per district. */
+  get universitySites(): number {
+    return this._universities.length;
   }
 
   /**

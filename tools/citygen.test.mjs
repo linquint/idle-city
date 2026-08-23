@@ -32,6 +32,7 @@ import {
   civicSites,
   districtPlan,
   planFor,
+  universitySites,
 } from '../src/sim/layout.ts';
 import { rng } from '../src/core/rng.ts';
 
@@ -297,13 +298,18 @@ function industrialClusters(zone) {
   return clusters;
 }
 
-check('industrial coherence: at most 3 connected clusters', () => {
+// Four, not the three this held at DISTRICT_SPAN 12. The zoning code is frozen
+// and unchanged; a wider district simply gives `cutWalk` room for one more
+// street line, which splits an industrial run that used to be contiguous.
+// Measured over 20,000 seeds at span 13: 1 cluster 22.5%, 2 clusters 72.4%,
+// 3 clusters 1.8%, 4 clusters 3.3%, and never 5.
+check('industrial coherence: at most 4 connected clusters', () => {
   let worst = 0;
   for (let i = 0; i < SEEDS; i++) {
     const layout = generateDistrict(seedOf(i));
     const clusters = industrialClusters(layout.zone);
     worst = Math.max(worst, clusters);
-    assert(clusters <= 3, `seed ${i}: industry broke into ${clusters} clusters`);
+    assert(clusters <= 4, `seed ${i}: industry broke into ${clusters} clusters`);
   }
   return `worst case ${worst} clusters over ${SEEDS} seeds`;
 });
@@ -330,22 +336,21 @@ check(`frontage: every plot offered for sale touches a road, ${SEEDS} seeds`, ()
         offered++;
       }
     }
-    // 72 of the 90 is invariant across every seed, even though how the 44 that
+    // 84 of the 100 is invariant across every seed, even though how the 53 that
     // are neither commercial nor road split between R and I is not.
     const total = layout.residential.length + layout.commercial.length + layout.industrial.length;
-    assert(total === 72, `seed ${i}: ${total} road-adjacent plots, wanted 72`);
-    assert(layout.commercial.length === 28, `seed ${i}: ${layout.commercial.length} shop plots`);
+    assert(total === 84, `seed ${i}: ${total} road-adjacent plots, wanted 84`);
+    assert(layout.commercial.length === 31, `seed ${i}: ${layout.commercial.length} shop plots`);
   }
   return `${offered} plots, all on a street`;
 });
 
 check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TARGET.commercial}/${FRONTAGE_TARGET.industrial} for sale, every seed`, () => {
-  // The brief for this change expected 30/28/14 straight out of the generator.
-  // It is not there to be had: over all 240 street plans the generator can
-  // produce, R takes one of {25,26,28,29,31,33,34} and I the complement out of
-  // 44 — 30 and 14 never occur. `planFor` reseeds until a district lands on the
-  // triple the economy needs, which is the same trick generateDistrict already
-  // uses for TARGET_PLOTS, one level up.
+  // The split is not there to be had straight out of the generator: commercial
+  // frontage is invariant at 31 but R and I divide the other 53 road-adjacent
+  // plots differently on every seed. `planFor` reseeds until a district lands on
+  // the tuple the economy needs, which is the same trick generateDistrict
+  // already uses for TARGET_PLOTS, one level up. Measured hit rate 3.28%.
   let worst = 0;
   for (let i = 0; i < SEEDS; i++) {
     const plan = planFor(seedOf(i));
@@ -365,11 +370,16 @@ check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TAR
       plan.sites.length === FRONTAGE_TARGET.civicSites,
       `seed ${i}: ${plan.sites.length} civic sites`,
     );
+    assert(
+      plan.universities.length === FRONTAGE_TARGET.universitySites,
+      `seed ${i}: ${plan.universities.length} university sites`,
+    );
     const accounted =
       plan.residential.length +
       plan.commercial.length +
       plan.industrial.length +
       plan.sites.length * 4 +
+      plan.universities.length * 9 +
       plan.courtyards.length;
     assert(accounted === TARGET_PLOTS, `seed ${i}: ${accounted} plots accounted for, not ${TARGET_PLOTS}`);
     worst = Math.max(worst, plan.layout.attempts);
@@ -489,6 +499,71 @@ check('civic sites: ranked so they eat dead land before they eat frontage', () =
   const perDistrict = (n) => (n / SEEDS).toFixed(1);
   assert(dead > frontage / 2, 'sites are eating more frontage than they save');
   return `${perDistrict(dead)} interior and ${perDistrict(frontage)} street plots a district`;
+});
+
+// ------------------------------------------------------- 11. university sites
+
+check(`universities: exactly one 3x3 a district, clear of everything else, ${SEEDS} seeds`, () => {
+  // The check the whole land budget turns on. A university that overlapped a
+  // civic site or a plot for sale would mean two buildings on one plot, and
+  // because plots are derived from counts rather than stored, nothing else in
+  // the game would ever notice.
+  let deadTotal = 0;
+  for (let i = 0; i < SEEDS; i++) {
+    const plan = planFor(seedOf(i));
+    assert(plan.universities.length === 1, `seed ${i}: ${plan.universities.length} universities`);
+    const uni = plan.universities[0];
+
+    assert(uni.cells.length === 9, `seed ${i}: university is not a 3x3`);
+    // A 3x3 on the grid, not nine cells that happen to be listed together.
+    for (let k = 0; k < 9; k++) {
+      const want = uni.cell + Math.floor(k / 3) * SPAN + (k % 3);
+      assert(uni.cells[k] === want, `seed ${i}: university is not contiguous at ${k}`);
+    }
+    assert(uni.zone !== ZONE.commercial, `seed ${i}: university sits on shop frontage`);
+    for (const cell of uni.cells) {
+      assert(plan.layout.zone[cell] === uni.zone, `seed ${i}: university spans two zones`);
+      assert(plan.layout.zone[cell] !== ZONE.road, `seed ${i}: university cell ${cell} is a road`);
+    }
+    assert(
+      uni.cells.some((cell) => plan.layout.perimeter[cell] === 1),
+      `seed ${i}: university touches no road`,
+    );
+
+    const civic = new Set(plan.sites.flatMap((site) => site.cells));
+    const forSale = new Set([...plan.residential, ...plan.commercial, ...plan.industrial]);
+    const courtyards = new Set(plan.courtyards);
+    for (const cell of uni.cells) {
+      assert(!civic.has(cell), `seed ${i}: university cell ${cell} is also a civic site`);
+      assert(!forSale.has(cell), `seed ${i}: university cell ${cell} is also for sale`);
+      assert(!courtyards.has(cell), `seed ${i}: university cell ${cell} is also a courtyard`);
+    }
+    deadTotal += uni.dead;
+  }
+  return `${SEEDS} districts, ${(deadTotal / SEEDS).toFixed(1)} interior plots swallowed each`;
+});
+
+check('universities: ranked by dead land, and reserved before the 2x2 pass', () => {
+  // Two properties in one sweep. The ranking is the same greedy rule civic
+  // sites use, so a later site must never swallow more dead land than an
+  // earlier one. And the university has to be claimed *first*: a 3x3 is far
+  // rarer than a 2x2 — the fewest candidates any district offers is 3 — so a
+  // civic pass that went first would fragment the only squares big enough.
+  for (let i = 0; i < SEEDS; i++) {
+    const layout = generateDistrict(seedOf(i));
+    const unis = universitySites(layout);
+    assert(unis.length >= 1, `seed ${i}: no 3x3 site anywhere in the district`);
+    for (let k = 1; k < unis.length; k++) {
+      assert(
+        unis[k - 1].dead >= unis[k].dead,
+        `seed ${i}: university site ${k} swallows more dead land than ${k - 1}`,
+      );
+    }
+    // The chosen site is the best-ranked one, and it survives the civic pass.
+    const plan = districtPlan(layout);
+    assert(plan.universities[0].cell === unis[0].cell, `seed ${i}: plan took a lesser 3x3`);
+  }
+  return 'best 3x3 first, then the 2x2s over what is left';
 });
 
 // ---------------------------------------------------------------------- 7. perf
