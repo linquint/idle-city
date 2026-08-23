@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { OFFLINE_CAP_SECONDS, START_CASH, TICK_RATE, TIERS } from '../src/sim/config';
+import {
+  CATCHUP_MAX_STEPS,
+  CATCHUP_STEP_SECONDS,
+  OFFLINE_CAP_SECONDS,
+  START_CASH,
+  TICK_RATE,
+  TIERS,
+} from '../src/sim/config';
 import { Game } from '../src/sim/game';
 import {
   homeCapacity,
   homeCost,
   income,
+  industryCapacity,
   plotCapacity,
   residents,
   shopCapacity,
@@ -117,8 +125,68 @@ describe('offline progress', () => {
     const game = at({ cash: 1e12, autoDevelop: true });
     game.catchUp(OFFLINE_CAP_SECONDS);
     expect(game.state.homes).toBeLessThanOrEqual(homeCapacity(game.state));
+    expect(game.state.shops).toBeLessThanOrEqual(shopCapacity(game.state));
+    expect(game.state.industry).toBeLessThanOrEqual(industryCapacity(game.state));
     expect(game.state.districts).toBe(1);
     expect(game.state.tier).toBe(0);
+  });
+
+  it('steps a fixed size, so an hour away is an hour away however it is taken', () => {
+    // The composability a fixed step size buys, and the thing a fixed chunk
+    // count breaks: with `credited / 24` a twelve-hour absence stepped 1800
+    // seconds at a time and a one-minute absence stepped 2.5, so the same
+    // elapsed time developed two different cities. Demand is a feedback loop
+    // now, so that difference compounds rather than cancelling out.
+    const patch = { homes: 20, shops: 4, cash: 3_000, autoDevelop: true };
+    const whole = at(patch);
+    whole.catchUp(60 * CATCHUP_STEP_SECONDS);
+
+    const pieces = at(patch);
+    for (let i = 0; i < 60; i++) pieces.catchUp(CATCHUP_STEP_SECONDS);
+
+    expect(pieces.state.homes).toBe(whole.state.homes);
+    expect(pieces.state.shops).toBe(whole.state.shops);
+    expect(pieces.state.cash).toBeCloseTo(whole.state.cash, 6);
+    expect(pieces.state.demandR).toBeCloseTo(whole.state.demandR, 9);
+    expect(pieces.state.demandC).toBeCloseTo(whole.state.demandC, 9);
+  });
+
+  it('credits the whole cap without running away with the iteration count', () => {
+    const game = at({ homes: 30, cash: 1e6, autoDevelop: true });
+    const report = game.catchUp(OFFLINE_CAP_SECONDS);
+    expect(report.seconds).toBe(OFFLINE_CAP_SECONDS);
+    expect(game.state.elapsed).toBeCloseTo(OFFLINE_CAP_SECONDS, 6);
+    expect(OFFLINE_CAP_SECONDS / CATCHUP_STEP_SECONDS).toBeLessThanOrEqual(CATCHUP_MAX_STEPS);
+  });
+
+  /**
+   * `spentSince` used to reconstruct this by replaying the cost curve, which
+   * cannot be right any more: a price now depends on the demand at the moment
+   * of purchase, and the replay only ever sees the demand at the end. The check
+   * is against `earned`, the ledger's own accumulator, which knows nothing about
+   * the spend accounting at all.
+   */
+  it('reports spend that matches what was actually deducted', () => {
+    const game = at({ homes: 24, shops: 4, cash: 4_000, autoDevelop: true });
+    const cashBefore = game.state.cash;
+    const earnedBefore = game.state.earned;
+
+    const report = game.catchUp(6 * 3600);
+    expect(report.spent).toBeGreaterThan(0);
+
+    const trueEarned = game.state.earned - earnedBefore;
+    const trueSpent = trueEarned - (game.state.cash - cashBefore);
+    expect(report.earned).toBeCloseTo(trueEarned, 6);
+    expect(report.spent).toBeCloseTo(trueSpent, 6);
+  });
+
+  it('will not build into a zone the city is already oversupplied in', () => {
+    // Far more shops than the residents can fill, so commercial demand is deep
+    // in surcharge. The away player has to leave it alone.
+    const game = at({ homes: 4, shops: 20, cash: 1e9, autoDevelop: true });
+    game.catchUp(3600);
+    expect(game.state.demandC).toBeLessThan(0);
+    expect(game.state.shops).toBe(20);
   });
 });
 

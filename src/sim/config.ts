@@ -102,6 +102,24 @@ export const HOME_GROWTH = 1.14;
 export const SHOP_BASE = 90;
 export const SHOP_GROWTH = 1.22;
 
+/**
+ * Industry is priced between a shop and a rezone, and compounds more slowly
+ * than commerce does. There are only 19 industrial plots to a district against
+ * 28 commercial ones, so a steeper curve would price the zone out before the
+ * demand loop ever had a chance to ask for it.
+ */
+export const INDUSTRY_BASE = 240;
+export const INDUSTRY_GROWTH = 1.2;
+
+/**
+ * Each industrial building adds this share of base income.
+ *
+ * Lower than SHOP_BONUS on purpose: industry's real payoff is the jobs it
+ * creates and therefore the residential demand it unlocks. A type that earned
+ * nothing at all and was not civic would simply never be worth a plot.
+ */
+export const INDUSTRY_BONUS = 0.11;
+
 export const REZONE_BASE = 3_000;
 export const REZONE_GROWTH = 26;
 
@@ -111,7 +129,26 @@ export const REZONE_MIN_HOMES = 12;
 export const ANNEX_BASE = 60_000;
 export const ANNEX_GROWTH = 3.4;
 
-/** You must have built out this share of your land before you may annex more. */
+/**
+ * You must have built out this share of your land before you may annex more.
+ *
+ * Left at 0.7 through the change that folded industry into the denominator,
+ * which grew a district from 71 buildable plots to 90 — the gate went from 50
+ * buildings to 63. Re-measured rather than assumed:
+ *
+ *   - Demand-neutral build-out of one district, per tier: 68.9% at detached
+ *     housing, 98.9% at apartments, 84.4% at towers, 71.1% at arcologies. Every
+ *     tier but the first clears the gate on demand alone, so annexation stays
+ *     reachable for as long as the city keeps expanding.
+ *   - Tier 0 falls 1.1 points short, which puts a rezone before the first annex.
+ *     That is the ordering the game should teach anyway, and REZONE_MIN_HOMES is
+ *     reachable long before a district fills.
+ *   - A player who respects the demand floors and does rezone reaches the first
+ *     annex at 3.8 hours; one chasing discounts reaches it at 1.8.
+ *
+ * 3.8 hours into a 24-hour arc is a sensible place for the first annex, so this
+ * needs no retune. See tools/economy.calibrate.mjs.
+ */
 export const ANNEX_MIN_OCCUPANCY = 0.7;
 
 /** Starting treasury. */
@@ -122,3 +159,180 @@ export const TICK_RATE = 10;
 
 /** Offline earnings stop accruing past this many hours away. */
 export const OFFLINE_CAP_SECONDS = 12 * 3600;
+
+/**
+ * Seconds of simulated time per catch-up step.
+ *
+ * Demand is a feedback loop now, so the step size is no longer free. The old
+ * `credited / 24` put 1800 seconds in a step at the 12-hour cap: the smoothing
+ * below survives that, but auto-development would then compound against a
+ * demand curve that had already jumped to its asymptote, buying a whole city
+ * against a signal that in real time would have moved under it. 60s is well
+ * inside DEMAND_TAU, so the curve the away city develops against is the one the
+ * player would have watched.
+ */
+export const CATCHUP_STEP_SECONDS = 60;
+
+/**
+ * Backstop on the loop above. At the 12-hour cap the fixed step needs 720
+ * iterations; this leaves headroom without letting a raised cap turn a return
+ * from holiday into a frozen tab.
+ */
+export const CATCHUP_MAX_STEPS = 1_024;
+
+// -------------------------------------------------------------- demand model
+
+/**
+ * Seconds for a demand signal to close ~63% of the gap to its target.
+ *
+ * The signal is integrated, not derived, which is the whole point: the order
+ * you build in matters because the city takes time to notice. 25s is roughly
+ * two purchases at the opening pace — long enough that spamming one button
+ * runs into its own surcharge before the discount catches up, short enough that
+ * a player watching the trend arrow is not waiting on a minute-long lag.
+ */
+export const DEMAND_TAU = 25;
+
+/**
+ * The imbalance, in people or trips, at which a demand signal saturates.
+ *
+ * The labour pool of one district built out at ZONE_SHARE's own design point:
+ * 43 residential plots x 14 workers. "Saturated" therefore means "a whole
+ * district out of balance" rather than an arbitrary number, and the constant
+ * stays derived from the same equilibrium the zoning budget is.
+ *
+ * Measured over 24 hours: nothing pins under idle or auto-develop, and
+ * auto-develop ends at R +0.65 / C -0.03 / I -0.02 — lively, and well short of
+ * the bounds.
+ *
+ * The honest limit of a *constant* scale, also measured: under the two policies
+ * that rezone to arcologies and annex five or six districts inside a day,
+ * residential pins at -1 and commercial at +1 for about 21 of the 24 hours. The
+ * imbalance a built city can reach scales with tier capacity, which spans 4 to
+ * 300, and no single constant covers a 75x range — a scale set for arcologies
+ * would leave the opening hour flat. Fixing it properly means dividing by a
+ * size term rather than a constant, which is a change to the model the brief
+ * specifies rather than a calibration. See tools/economy.calibrate.mjs.
+ */
+export const DEMAND_SCALE = 300;
+
+/**
+ * Share of residents in the labour force.
+ *
+ * ZONE_SHARE solves 14R = 8C + 20I for *workers* per residential plot, so the
+ * labour market clears when tier capacity x WORKING_SHARE = 14 — that is, at
+ * about 25 residents a plot, partway between apartments (16) and towers (70).
+ * Below it the city is job-rich and residential demand runs positive; above it
+ * worker-rich and it runs negative. That arc is deliberate: young cities pull
+ * people in, mature ones have to go and find them work.
+ */
+export const WORKING_SHARE = 0.55;
+
+/** Jobs per built plot. The two numbers ZONE_SHARE was derived from. */
+export const JOBS_PER_COMMERCIAL = 8;
+export const JOBS_PER_INDUSTRIAL = 20;
+
+/**
+ * Shopping trips generated per resident, against trips one shop can serve.
+ *
+ * Calibrated so commerce clears exactly at the zoning budget: 43 plots x 14
+ * residents x 0.5 trips = 301 trips, and 28 commercial plots x 11 = 308. The
+ * point is that the land budget and the demand model agree about what a
+ * finished district looks like — otherwise the annexation gate asks for plots
+ * the demand model is surcharging.
+ */
+export const SPEND_PER_RESIDENT = 0.5;
+export const SHOP_THROUGHPUT = 11;
+
+/**
+ * Goods one shop pulls from industry, against what one industrial plot makes.
+ *
+ * Same calibration: 28 shops x 4 plus a base export of 60 is 172, and 19
+ * industrial plots x 9 is 171.
+ */
+export const SUPPLY_DRAW = 4;
+export const INDUSTRIAL_OUTPUT = 9;
+
+/**
+ * The external tap on industrial demand.
+ *
+ * Without it a fresh save sits at zero demand everywhere with nothing to
+ * bootstrap from: no residents means no shoppers, no shops means no jobs, and
+ * the cycle never starts. It grows with annexed land and with nothing else.
+ *
+ * Deliberately not with elapsed time. A tap that grew on the clock would make
+ * every demand target a moving one, and the step-size invariance that makes
+ * offline catch-up safe would then only hold to the accuracy of the tap — the
+ * property worth testing is the integrator's, not the target's. It would also
+ * leave a parked city drifting into a permanent industrial discount.
+ */
+export const EXPORT_BASE = 60;
+export const EXPORT_PER_DISTRICT = 14;
+
+// ------------------------------------------------------------------- pricing
+
+/**
+ * How far demand may move a price, as a fraction of the compounded base.
+ *
+ * These being *constants* is the guardrail the whole price model rests on. The
+ * floor stays base x growth**n x (1 - PRICE_DISCOUNT_MAX), which is still
+ * exponential in n, so no amount of demand can make the next building cheaper
+ * than the last. Let the discount scale with anything unbounded, or let it
+ * reach 1, and the curve inverts and the city builds itself for free.
+ *
+ * The surcharge is deliberately the larger of the two: it is what stops
+ * "press whichever button is cheapest" from being the dominant strategy.
+ *
+ * The band between them, (1 + surcharge) / (1 - discount), is 2.9 — nine homes,
+ * six shops or six works of compounding. That is the most a demand swing can
+ * ever be worth, and it is deliberately smaller than the run of buildings it
+ * takes to move demand that far.
+ */
+export const PRICE_DISCOUNT_MAX = 0.45;
+export const PRICE_SURCHARGE_MAX = 0.6;
+
+// ------------------------------------------------------------------ services
+
+export interface Service {
+  /** Matches the GameState counter and the coverage key. */
+  readonly key: 'school' | 'clinic' | 'station';
+  readonly name: string;
+  readonly buildLabel: string;
+  /** Residents one of these covers. */
+  readonly capacity: number;
+  readonly base: number;
+  /** Share of the happiness score. The three sum to 1. */
+  readonly weight: number;
+}
+
+/**
+ * Civic buildings earn nothing at all. They gate: coverage feeds happiness,
+ * happiness multiplies income and caps residential demand. A city that never
+ * builds one still works, it just runs at the floor forever — neglect reads as
+ * a ceiling on what the city can become, not as a punishment for playing.
+ *
+ * Capacities are set against a tier-0 district (43 plots x 4 = 172 residents)
+ * so the first of each is due at roughly the same time, and a rezone to
+ * apartments makes all three short at once.
+ */
+export const SERVICES: readonly Service[] = [
+  { key: 'school',  name: 'Schools',  buildLabel: 'Open school',  capacity: 220, base: 1_200, weight: 0.35 },
+  { key: 'clinic',  name: 'Clinics',  buildLabel: 'Open clinic',  capacity: 320, base: 2_000, weight: 0.4  },
+  { key: 'station', name: 'Stations', buildLabel: 'Open station', capacity: 400, base: 1_600, weight: 0.25 },
+];
+
+/** Civic buildings compound like everything else, and faster than housing. */
+export const CIVIC_GROWTH = 1.35;
+
+/**
+ * What a city with no services at all still earns.
+ *
+ * 0.55 is the number the opening minute was re-checked against: the first house
+ * pays for itself in 26 seconds instead of 14, which is slower but still inside
+ * "a decision rather than a wait" — the pacing guard in test/game.test.ts still
+ * clears its floor of eight homes in the first minute, with two to spare.
+ *
+ * Measured at 24 hours: a city that never builds a service sits at the floor
+ * forever, and one that keeps up reaches 100% happiness by the sixth hour.
+ */
+export const HAPPINESS_FLOOR = 0.55;

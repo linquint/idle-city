@@ -20,7 +20,7 @@
   <p>every purchase is a building</p>
 </header>
 
-<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan</p>
+<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z for the zoning plan, again for demand</p>
 
 <section class="hud ledger" aria-label="City ledger">
   <div class="row"><span class="k">Treasury</span><span class="v cash" id="cash">0</span></div>
@@ -32,6 +32,35 @@
     <span class="zone-count"><i class="dot i"></i><span id="plots-i">0/0</span></span>
   </span></div>
   <div class="row"><span class="k">Districts</span><span class="v" id="districts">1</span></div>
+  <div class="row"><span class="k">Happiness</span><span class="v" id="happiness">0%</span></div>
+</section>
+
+<section class="hud demand" aria-label="Demand">
+  <p class="cap">Demand</p>
+  <div class="rci" id="rci" role="img">
+    <div class="rci-row"><span class="k">R</span>
+      <span class="bar"><i class="bar-fill" id="demand-r-fill"></i></span>
+      <span class="num" id="demand-r-num">0</span></div>
+    <div class="rci-row"><span class="k">C</span>
+      <span class="bar"><i class="bar-fill" id="demand-c-fill"></i></span>
+      <span class="num" id="demand-c-num">0</span></div>
+    <div class="rci-row"><span class="k">I</span>
+      <span class="bar"><i class="bar-fill" id="demand-i-fill"></i></span>
+      <span class="num" id="demand-i-num">0</span></div>
+  </div>
+
+  <p class="cap">Services</p>
+  <div class="services" id="services" role="img">
+    <div class="svc"><span class="k">School</span>
+      <span class="built" id="svc-school-built">0/0</span>
+      <span class="pct" id="svc-school-pct">0%</span></div>
+    <div class="svc"><span class="k">Clinic</span>
+      <span class="built" id="svc-clinic-built">0/0</span>
+      <span class="pct" id="svc-clinic-pct">0%</span></div>
+    <div class="svc"><span class="k">Station</span>
+      <span class="built" id="svc-station-built">0/0</span>
+      <span class="pct" id="svc-station-pct">0%</span></div>
+  </div>
 </section>
 
 <section class="hud controls" aria-label="City controls">
@@ -43,11 +72,30 @@
   </div>
 
   <button id="build-home" type="button">
-    <span id="build-home-label">Build home</span><span class="cost" id="build-home-cost">15</span>
+    <span id="build-home-label">Build home</span>
+    <span class="price"><span class="chip" id="build-home-chip"></span><i class="trend" id="build-home-trend"></i><span class="cost" id="build-home-cost">15</span></span>
   </button>
   <button id="build-shop" type="button">
-    <span>Open shop</span><span class="cost" id="build-shop-cost">200</span>
+    <span>Open shop</span>
+    <span class="price"><span class="chip" id="build-shop-chip"></span><i class="trend" id="build-shop-trend"></i><span class="cost" id="build-shop-cost">200</span></span>
   </button>
+  <button id="build-industry" type="button">
+    <span>Break ground</span>
+    <span class="price"><span class="chip" id="build-industry-chip"></span><i class="trend" id="build-industry-trend"></i><span class="cost" id="build-industry-cost">240</span></span>
+  </button>
+
+  <div class="civic-row">
+    <button class="civic" id="build-school" type="button">
+      <span>School</span><span class="cost" id="build-school-cost">1.20K</span>
+    </button>
+    <button class="civic" id="build-clinic" type="button">
+      <span>Clinic</span><span class="cost" id="build-clinic-cost">2.00K</span>
+    </button>
+    <button class="civic" id="build-station" type="button">
+      <span>Station</span><span class="cost" id="build-station-cost">1.60K</span>
+    </button>
+  </div>
+
   <button id="rezone" class="rezone" type="button">
     <span id="rezone-label">Rezone to apartments</span><span class="cost" id="rezone-cost">3.0K</span>
   </button>
