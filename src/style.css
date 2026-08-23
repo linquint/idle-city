@@ -464,6 +464,84 @@ button.ghost[aria-pressed='true'] {
   color: var(--signal);
 }
 
+/* ----------------------------------------------------------- inspector */
+
+/* The selected building's card. It sits above the controls rather than inside
+   them: it is about one thing on the map and appears only when there is one,
+   where the control below it is always there and always says the same things. */
+.card {
+  /* Beside the controls rather than over them: the control panel's height moves
+     with what the city has unlocked, so anything stacked on top of it would
+     have to guess. */
+  left: calc(var(--gutter) + 312px);
+  bottom: var(--gutter);
+  width: 264px;
+  padding: 12px 16px 10px;
+}
+.card[hidden] { display: none; }
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.card-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.card-close {
+  width: auto;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--dim);
+}
+.card-close:hover:not(:disabled) { background: transparent; color: var(--concrete); }
+.card-sub {
+  margin: 2px 0 8px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.card-rows { margin: 0; }
+.card-rows div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(37, 52, 75, 0.8);
+}
+.card-rows div:last-child { border-bottom: 0; }
+.card-rows dt {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.card-rows dd {
+  margin: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+/* The disclaimer the inspector needs: two buildings of one level are identical
+   by construction, so every scalar in the card belongs to the whole city. */
+.card-note {
+  margin: 8px 0 0;
+  font-size: 9px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--off);
+}
+
 /* ------------------------------------------------- while you were away */
 
 .scrim {

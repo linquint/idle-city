@@ -4,6 +4,11 @@ import {
   HAPPINESS_MIN_BUILD,
   HOMES_PER_PARK,
   LEVEL_EDUCATION,
+  INDUSTRY_JOBS,
+  INDUSTRY_OUTPUT,
+  LEVEL_HOUSING,
+  SHOP_JOBS,
+  SHOP_TRIPS,
   ZONE_LEVEL_NAMES,
   LEVELS,
   MAX_DISTRICTS,
@@ -15,6 +20,7 @@ import {
   annexBlocker,
   annexCost,
   bindingTerm,
+  buildingIncome,
   canAnnex,
   canBuildHome,
   canBuildIndustry,
@@ -31,8 +37,12 @@ import {
   industryCost,
   parkBlocker,
   parkCapacity,
+  levelAt,
+  mergedOf,
   parkCost,
   plotsOf,
+  promotionBlocker,
+  zoneOf,
   priceModifier,
   population,
   recreationCoverage,
@@ -44,8 +54,16 @@ import {
   shopCost,
   willAutoAnnex,
 } from '../sim/economy';
+import type { BuildingRef } from '../render/buildings';
 import type { AwayReport, Game } from '../sim/game';
-import type { GameState } from '../sim/state';
+import {
+  BUILDABLE_COMMERCIAL_PER_DISTRICT,
+  BUILDABLE_INDUSTRIAL_PER_DISTRICT,
+  BUILDABLE_RESIDENTIAL_PER_DISTRICT,
+  createPlacement,
+  type CityLayout,
+} from '../sim/layout';
+import type { GameState, ZoneKind } from '../sim/state';
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -57,7 +75,23 @@ export interface HudHooks {
   onReset: () => void;
   /** Dev-only time travel, wired to a button that only exists in dev builds. */
   onSkip?: (seconds: number) => void;
+  /** Told when the card is dismissed, so the outline goes with it. */
+  onDeselect?: () => void;
 }
+
+/** What each zone is called in the inspector, and what its capacity is called. */
+const ZONE_LABEL: Record<ZoneKind, string> = {
+  home: 'Residential',
+  shop: 'Commercial',
+  industry: 'Industrial',
+};
+
+/** Plots one district sells of each zone. Turns a plot index into a district. */
+const ZONE_PLOTS: Record<ZoneKind, number> = {
+  home: BUILDABLE_RESIDENTIAL_PER_DISTRICT,
+  shop: BUILDABLE_COMMERCIAL_PER_DISTRICT,
+  industry: BUILDABLE_INDUSTRIAL_PER_DISTRICT,
+};
 
 /** Below this a chip would say "-0%", which is noise rather than information. */
 const CHIP_DEADBAND = 0.005;
@@ -151,7 +185,24 @@ export class Hud {
     welcomeAway: el('welcome-away'),
     welcomeRows: el('welcome-rows'),
     welcomeClose: el<HTMLButtonElement>('welcome-close'),
+    inspect: el('inspect'),
+    inspectTitle: el('inspect-title'),
+    inspectWhere: el('inspect-where'),
+    inspectRows: el('inspect-rows'),
+    inspectClose: el<HTMLButtonElement>('inspect-close'),
   };
+
+  /**
+   * The building the card is showing, or null.
+   *
+   * A reference, never a copy: the numbers are re-read from the simulation on
+   * every paint, so a building that climbs a level or merges while its card is
+   * open updates in place rather than going stale. It is view state and never
+   * reaches the save.
+   */
+  private selected: BuildingRef | null = null;
+  /** Reused by the card, which asks the layout where its building stands. */
+  private readonly at = createPlacement();
 
   /**
    * One row of controls and readouts per service, keyed the same way.
@@ -176,6 +227,7 @@ export class Hud {
 
   constructor(
     private readonly game: Game,
+    private readonly layout: CityLayout,
     private readonly hooks: HudHooks,
   ) {
     const n = this.nodes;
@@ -203,6 +255,11 @@ export class Hud {
 
     n.welcomeClose.addEventListener('click', () => {
       n.welcome.hidden = true;
+    });
+
+    n.inspectClose.addEventListener('click', () => {
+      this.hooks.onDeselect?.();
+      this.inspect(null);
     });
 
     n.occupancyMark.style.left = `${ANNEX_MIN_OCCUPANCY * 100}%`;
@@ -427,6 +484,87 @@ export class Hud {
 
     n.auto.textContent = `Auto-develop · ${s.autoDevelop ? 'on' : 'off'}`;
     n.auto.setAttribute('aria-pressed', String(s.autoDevelop));
+
+    this.paintCard(s);
+  }
+
+  /**
+   * Opens the card on one building, or closes it.
+   *
+   * Called by the host when the view's selection changes. The card is painted
+   * from `paint`, not from here, so everything in it stays a read over the
+   * current state rather than a snapshot of the moment it was clicked.
+   */
+  inspect(ref: BuildingRef | null): void {
+    this.selected = ref;
+    this.nodes.inspect.hidden = ref === null;
+    this.paint();
+  }
+
+  /**
+   * The card. Every line is a read over the state, the seed and the layout, and
+   * nothing in it is per-building state — because there is none.
+   *
+   * What it may say is bounded by what a building actually knows. Levels are
+   * cohorts, and happiness, occupancy, demand and education are city-wide
+   * scalars, so two buildings of the same level are identical by construction:
+   * there is no per-building age, no per-building mood and no per-building
+   * occupancy to show, and inventing one would be a lie the rest of the game
+   * would immediately contradict. Where a number *is* city-wide it says so.
+   */
+  private paintCard(s: Readonly<GameState>): void {
+    const ref = this.selected;
+    const n = this.nodes;
+    if (!ref) return;
+
+    const levels = ref.kind === 'home' ? s.homeLevels : ref.kind === 'shop' ? s.shopLevels : s.industryLevels;
+    const level = levelAt(levels, ref.slot);
+    const names = ZONE_LEVEL_NAMES[ref.kind];
+    const at = this.layout
+      .ensure(s.districts)
+      .place(zoneOf(ref.kind), ref.slot, mergedOf(s, ref.kind), this.at);
+    const district = Math.floor(at.plot / (ZONE_PLOTS[ref.kind] || 1));
+
+    n.inspectTitle.textContent =
+      level < 0 ? 'Boarded up' : (names[level] ?? `level ${level}`);
+    n.inspectWhere.textContent = `${ZONE_LABEL[ref.kind]} · district ${district + 1}`;
+
+    const rows: Array<[string, string]> = [];
+    rows.push(['Level', level < 0 ? '—' : `${level + 1} of ${LEVELS}`]);
+    rows.push([
+      'Footprint',
+      at.plots > 1
+        ? '2 plots · merged'
+        : at.parcelPlots > 1
+          ? '1 plot · can merge'
+          : '1 plot · no pair',
+    ]);
+    if (ref.kind === 'home') {
+      rows.push(['Houses', level < 0 ? '0' : fmtInt(LEVEL_HOUSING[level] ?? 0)]);
+    } else if (ref.kind === 'shop') {
+      rows.push(['Employs', level < 0 ? '0' : fmtInt(SHOP_JOBS[level] ?? 0)]);
+      rows.push(['Serves', level < 0 ? '0' : `${fmtInt(SHOP_TRIPS[level] ?? 0)} trips`]);
+    } else {
+      rows.push(['Employs', level < 0 ? '0' : fmtInt(INDUSTRY_JOBS[level] ?? 0)]);
+      rows.push(['Makes', level < 0 ? '0' : fmtInt(INDUSTRY_OUTPUT[level] ?? 0)]);
+    }
+    // Marginal, and labelled: what the ledger loses if this one goes. Every
+    // other term in it belongs to the whole city.
+    rows.push(['Adds to income', `${fmt(buildingIncome(s, ref.kind, level))}/s`]);
+    rows.push(['Expansion', promotionBlocker(s, ref.kind, level, at.parcelPlots) ?? 'Ready to climb']);
+    rows.push(['Parcel', `#${at.plot + 1} · slot ${ref.slot + 1}`]);
+
+    n.inspectRows.replaceChildren(
+      ...rows.map(([key, value]) => {
+        const row = document.createElement('div');
+        const dt = document.createElement('dt');
+        dt.textContent = key;
+        const dd = document.createElement('dd');
+        dd.textContent = value;
+        row.append(dt, dd);
+        return row;
+      }),
+    );
   }
 
   /** The "while you were away" sheet. Skipped entirely for a trivial absence. */

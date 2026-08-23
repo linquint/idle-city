@@ -24,13 +24,20 @@ const view = new View(canvas, layout);
 // `Hud` reads the simulation, and frame rate is not a simulation number.
 const fps = new FpsMeter();
 
-const hud = new Hud(game, {
+const hud = new Hud(game, layout, {
   onReset: () => persist(),
   onSkip: (seconds) => {
     hud.showAway(game.catchUp(seconds));
     hud.paint();
   },
+  // Dismissing the card is the same act as clearing the selection, so the
+  // outline in the world goes with it rather than being left behind.
+  onDeselect: () => view.select(null),
 });
+
+// Selection is view state and stays there: the view owns what was clicked, the
+// HUD owns what is said about it, and neither writes it anywhere.
+view.onSelect = (ref) => hud.inspect(ref);
 
 /**
  * Writes the save and stamps the clock it will be measured from. Every

@@ -537,6 +537,24 @@ export class ParcelBook {
     return (this.begin[this.pairAt[merged] as number] as number) - 2 * merged;
   }
 
+  /**
+   * How many plots the parcel holding a given plot has: 1 or 2.
+   *
+   * What the inspector needs to tell a building at level 1 that is waiting for
+   * its turn to merge from one that will never get one. Unmerged, both look the
+   * same on the ground; only the parcel under them says which is which.
+   */
+  parcelPlots(plot: number): number {
+    let lo = 0;
+    let hi = this.size.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((this.begin[mid] as number) <= plot) lo = mid;
+      else hi = mid - 1;
+    }
+    return this.size[lo] as number;
+  }
+
   /** Flat plot index of the u-th unmerged plot, with `merged` parcels taken. */
   unmergedPlot(u: number, merged: number): number {
     // Binary search for the last parcel whose unmerged start is at or before u.
@@ -668,6 +686,15 @@ export interface Placement {
   alongX: boolean;
   /** Index of its first plot in the zone's flat list. Identifies the parcel. */
   plot: number;
+  /**
+   * Plots in the parcel this building stands on, merged or not.
+   *
+   * `plots` says what the building covers *now*; this says what it could ever
+   * cover. They differ for exactly one building: one at the level below
+   * MERGE_LEVEL standing on a pair that has not merged yet. Where they are both
+   * 1 the plot has no neighbour and never will.
+   */
+  parcelPlots: number;
 }
 
 export const createPlacement = (): Placement => ({
@@ -676,6 +703,7 @@ export const createPlacement = (): Placement => ({
   plots: 1,
   alongX: true,
   plot: 0,
+  parcelPlots: 1,
 });
 
 /**
@@ -747,6 +775,7 @@ export class CityLayout {
       const b = cells[book.mergedPlot(slot, 1)] as Coord;
       out.plot = first;
       out.plots = 2;
+      out.parcelPlots = 2;
       out.alongX = a.x !== b.x;
       out.x = (worldX(a.x) + worldX(b.x)) / 2;
       out.z = (worldZ(a.z) + worldZ(b.z)) / 2;
@@ -756,6 +785,7 @@ export class CityLayout {
     const cell = (cells[Math.max(0, plot)] ?? cells[0]) as Coord;
     out.plot = plot;
     out.plots = 1;
+    out.parcelPlots = book.parcelPlots(plot);
     out.alongX = true;
     out.x = worldX(cell.x);
     out.z = worldZ(cell.z);

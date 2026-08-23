@@ -9,7 +9,15 @@ import {
   type Service,
 } from '../sim/config';
 import { ZONE } from '../sim/citygen';
-import { cohortStart, cohortTotal, levelAt } from '../sim/economy';
+import {
+  cohortStart,
+  cohortTotal,
+  countOf,
+  levelAt,
+  levelsOf,
+  mergedOf,
+  zoneOf,
+} from '../sim/economy';
 import {
   createPlacement,
   worldX,
@@ -20,7 +28,7 @@ import {
 } from '../sim/layout';
 import type { GameState, LevelCohort, ZoneKind } from '../sim/state';
 import { Glow } from './glow';
-import { GrowableInstancedMesh } from './growable';
+import { GrowableInstancedMesh, SlotRanges } from './growable';
 import { GrowthSchedule } from './growth';
 import { PALETTE } from './palette';
 
@@ -261,6 +269,11 @@ class LevelMeshes {
     this.beaconGlow?.setNight(night);
   }
 
+  /** The mesh a click lands on. Roofs and beacons are decoration, not targets. */
+  get pickable(): GrowableInstancedMesh {
+    return this.body;
+  }
+
   ensure(capacity: number): void {
     this.body.ensure(capacity);
     this.beacon?.ensure(capacity);
@@ -442,6 +455,10 @@ class ShopMeshes {
     );
   }
 
+  get pickable(): GrowableInstancedMesh {
+    return this.body;
+  }
+
   ensure(capacity: number): void {
     this.body.ensure(capacity);
     this.fascia.ensure(capacity);
@@ -611,6 +628,10 @@ class IndustryMeshes {
       capacity,
       { castShadow: true, name: 'industry:vent' },
     );
+  }
+
+  get pickable(): GrowableInstancedMesh {
+    return this.body;
   }
 
   ensure(capacity: number): void {
@@ -928,6 +949,56 @@ export function roofline(kind: ZoneKind, slot: number, level: number): number {
 }
 
 /**
+ * A building the player has clicked on.
+ *
+ * The ordinal and nothing else — the same number a fire stores, and for the
+ * same reason: everything else about a building is a read over the state and
+ * the seed, so a selection that carried a level or a position would be a copy
+ * that could go stale. It is view state and is never saved.
+ */
+export interface BuildingRef {
+  readonly kind: ZoneKind;
+  readonly slot: number;
+}
+
+/**
+ * The outline that says which building is selected.
+ *
+ * Edges rather than a tint, and its own object rather than an instance colour:
+ * a selection has to be legible on a ruin, under the zone overlay and at night,
+ * and every one of those already owns the instance colour it would have had to
+ * borrow. One `LineSegments` for the whole city, moved rather than rebuilt.
+ */
+class Outline {
+  private readonly mesh: THREE.LineSegments;
+
+  constructor(scene: THREE.Scene) {
+    this.mesh = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+      new THREE.LineBasicMaterial({ color: PALETTE.select, transparent: true, opacity: 0.95 }),
+    );
+    this.mesh.name = 'select:outline';
+    // Drawn over whatever it is around: an outline hidden inside the building it
+    // is marking is not an outline.
+    this.mesh.renderOrder = 4;
+    this.mesh.frustumCulled = false;
+    this.mesh.visible = false;
+    scene.add(this.mesh);
+  }
+
+  hide(): void {
+    this.mesh.visible = false;
+  }
+
+  /** Wraps a box of `size` centred on (x, top/2, z), with a little air around it. */
+  show(x: number, z: number, width: number, depth: number, height: number): void {
+    this.mesh.visible = true;
+    this.mesh.position.set(x, height / 2, z);
+    this.mesh.scale.set(width + 0.5, height + 0.4, depth + 0.5);
+  }
+}
+
+/**
  * The building layer. It owns no game state: given counts, it reconciles the
  * scene toward them, and it can always rebuild itself from scratch.
  */
@@ -963,6 +1034,15 @@ export class Buildings {
   private readonly industryGrowth: GrowthSchedule;
   private readonly dummy = new THREE.Object3D();
   private readonly tint = new THREE.Color();
+  /**
+   * Which slots each body mesh is drawing, so a raycast hit can be turned back
+   * into a building. Rewritten wherever the runs move, which is exactly where
+   * the counts are written.
+   */
+  private readonly ranges = new SlotRanges<ZoneKind>();
+  private readonly outline: Outline;
+  /** Reused across clicks: `intersectObjects` fills it rather than returning one. */
+  private readonly hits: THREE.Intersection[] = [];
 
   private shownHomes = 0;
   private shownMergedHomes = -1;
@@ -1000,6 +1080,12 @@ export class Buildings {
     this.roofs = new Roofs(scene, 128);
     this.shops = new ShopMeshes(scene, 32);
     this.industry = new IndustryMeshes(scene, 24);
+    this.outline = new Outline(scene);
+    // Shops and industry draw their whole zone from slot zero, so their run
+    // never moves. The housing levels each draw one cohort and move whenever it
+    // does — `writeHomes` re-registers them.
+    this.ranges.set(this.shops.pickable, 'shop', 0);
+    this.ranges.set(this.industry.pickable, 'industry', 0);
     this.civic = SERVICES.map((service) => ({
       service,
       meshes: civicSet(scene, service, 8),
@@ -1152,6 +1238,7 @@ export class Buildings {
       }
       meshes.setCount(count);
       meshes.flush();
+      this.ranges.set(meshes.pickable, 'home', start);
     }
     this.roofs.end();
   }
@@ -1237,6 +1324,61 @@ export class Buildings {
     for (const level of this.levels) level.setNight(night);
     this.shops.setNight(night);
     for (const set of this.civic) set.meshes.setNight(night);
+  }
+
+  /**
+   * The building under a ray, or null for ground, a civic site or the sky.
+   *
+   * Only the three zone types are targets. A hospital has nothing per-building
+   * to say — its coverage is a city-wide scalar and its staffing is a per-type
+   * average — so a click on one clears the selection exactly as a click on
+   * grass does, rather than opening a card with nothing in it.
+   */
+  pick(raycaster: THREE.Raycaster): BuildingRef | null {
+    this.hits.length = 0;
+    raycaster.intersectObjects(this.ranges.targets(), false, this.hits);
+    for (const hit of this.hits) {
+      if (hit.instanceId === undefined) continue;
+      const found = this.ranges.resolve(hit.object, hit.instanceId);
+      if (found) return { kind: found.tag, slot: found.slot };
+    }
+    return null;
+  }
+
+  /**
+   * Draws the selection outline around one building, or hides it.
+   *
+   * Re-read from the state every sync rather than stamped when the click
+   * happened: the building under the outline can merge, climb a level or be
+   * boarded up while it is selected, and the outline has to follow it.
+   */
+  highlight(ref: BuildingRef | null, state: Readonly<GameState>): void {
+    if (!ref || ref.slot < 0 || ref.slot >= countOf(state, ref.kind)) {
+      this.outline.hide();
+      return;
+    }
+    const at = this.layout.place(zoneOf(ref.kind), ref.slot, mergedOf(state, ref.kind), this.at);
+    const level = levelAt(levelsOf(state, ref.kind), ref.slot);
+    const wide = at.plots > 1;
+
+    let width = SHOP_W;
+    let depth = SHOP_W;
+    if (ref.kind === 'industry') {
+      width = INDUSTRY_W * widthJitter(ref.slot);
+      depth = INDUSTRY_W * depthJitter(ref.slot);
+    } else if (ref.kind === 'shop') {
+      width = SHOP_W * widthJitter(ref.slot);
+      depth = SHOP_W * depthJitter(ref.slot);
+    } else {
+      const style = HOME_STYLES[Math.max(0, level)] ?? HOME_STYLES[0];
+      width = (style?.width ?? 2) * widthJitter(ref.slot);
+      depth = (style?.width ?? 2) * depthJitter(ref.slot);
+    }
+    if (wide) {
+      if (at.alongX) width = MERGED_SPAN;
+      else depth = MERGED_SPAN;
+    }
+    this.outline.show(at.x, at.z, width, depth, roofline(ref.kind, ref.slot, level));
   }
 
   /** Advances in-flight growth animations. Returns true while any are running. */

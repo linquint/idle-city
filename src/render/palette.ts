@@ -67,6 +67,9 @@ export const PALETTE = {
   // burning roof has to be the thing you look at first.
   flame: 0xff7a2e,
   flameGlow: 0xff4a1c,
+  // The selection outline. Deliberately not a colour anything else in the city
+  // uses: it has to read as chrome laid over the world rather than as part of it.
+  select: 0xffffff,
   // Demand overlay (the Z key, second press). Green where a discount is live,
   // red where the zone is oversupplied, grey at the balance point.
   demandHigh: 0x5fd08a,

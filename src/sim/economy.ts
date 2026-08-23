@@ -29,6 +29,7 @@ import {
   INDUSTRY_GROWTH,
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
+  LEVEL_EDUCATION,
   LEVEL_FOOTPRINT,
   LEVEL_HOUSING,
   LEVEL_SCALE,
@@ -1019,6 +1020,64 @@ export function annexBlocker(s: GameState): string | null {
 export function homeBlocker(s: GameState): string | null {
   if (!hasFreePlot(s, 'home')) return 'No housing land left';
   if (s.happiness < HAPPINESS_MIN_BUILD) return 'Residents are leaving';
+  return null;
+}
+
+/**
+ * What one building of a kind and level adds to the ledger per second, holding
+ * the rest of the city exactly as it is.
+ *
+ * Marginal, and it has to be: the three zones earn in two different ways. A
+ * home earns rent from the people in it; a shop or a works earns nothing of its
+ * own and multiplies what the homes earn. Quoting a shop's "income" as a share
+ * of a multiplier would be true and useless, so this is what taking the
+ * building away would cost — the number a player can actually act on.
+ *
+ * Every term but the level is city-wide, which is why the inspector says so.
+ */
+export const buildingIncome = (s: GameState, kind: ZoneKind, level: number): number => {
+  if (level < 0) return 0;
+  const mood = incomeMultiplier(s);
+  if (kind === 'home') {
+    const bonuses =
+      1 +
+      SHOP_BONUS * effectiveOf(s, 'shop') +
+      INDUSTRY_BONUS * effectiveOf(s, 'industry') +
+      DISTRICT_BONUS * (s.districts - 1);
+    return (LEVEL_HOUSING[level] ?? 0) * s.occupancyR * RENT * bonuses * mood;
+  }
+  const share = kind === 'shop' ? SHOP_BONUS : INDUSTRY_BONUS;
+  return (
+    residents(s) * RENT * share * (LEVEL_SCALE[level] ?? 1) * occupancyOf(s, kind) * mood
+  );
+};
+
+/**
+ * Why one building is not climbing, phrased for the inspector.
+ *
+ * Same shape as `annexBlocker` and `homeBlocker`: a string when there is a
+ * reason worth saying, null when the building is simply waiting its turn in the
+ * promotion wave. Ordered by how permanent the answer is, so the one thing a
+ * player can never fix comes first — a plot with no neighbour is capped at the
+ * level below MERGE_LEVEL forever, and saying "needs 60% education" to such a
+ * building would be a lie of omission.
+ */
+export function promotionBlocker(
+  s: GameState,
+  kind: ZoneKind,
+  level: number,
+  /** Plots in this building's parcel. One means it can never merge. */
+  parcelPlots: number,
+): string | null {
+  if (level < 0) return 'Abandoned';
+  if (level >= LEVELS - 1) return 'At its top level';
+  if (level + 1 >= MERGE_LEVEL && parcelPlots < 2) return 'No neighbour to merge with';
+  const taught = LEVEL_EDUCATION[level + 1] ?? 0;
+  if (educationCoverage(s) < taught) {
+    return `Needs ${Math.round(taught * 100)}% education`;
+  }
+  if (occupancyOf(s, kind) < LEVEL_UP_OCCUPANCY) return 'Too empty to expand';
+  if (s.happiness < LEVEL_UP_HAPPINESS) return 'City is too unhappy';
   return null;
 }
 

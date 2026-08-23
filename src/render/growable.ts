@@ -108,3 +108,53 @@ export class GrowableInstancedMesh {
     this.material.dispose();
   }
 }
+
+/**
+ * The map back from a raycast hit to the building it hit.
+ *
+ * `Raycaster` hands an `InstancedMesh` intersection an `instanceId`, which is a
+ * position in that mesh's own instance buffer and nothing else. Every mesh in
+ * the building layer draws one contiguous run of slots — a level's cohort, or a
+ * whole zone from slot zero — so the map back is a single addition, and the
+ * only thing worth keeping is where each mesh's run starts.
+ *
+ * It lives beside `GrowableInstancedMesh` because the ranges are its ranges: a
+ * mesh that reallocates swaps its `THREE.InstancedMesh` out from under the
+ * scene graph, so a table keyed on the three.js object would silently go stale
+ * the first time a district was annexed. Keyed on the wrapper, it cannot.
+ */
+export class SlotRanges<T> {
+  private readonly entries: Array<{ mesh: GrowableInstancedMesh; tag: T; from: number }> = [];
+  /** Reused by `targets`, which is called once per click and never per frame. */
+  private readonly scratch: THREE.Object3D[] = [];
+
+  /** Says that `mesh` draws the slots starting at `from`, tagged with `tag`. */
+  set(mesh: GrowableInstancedMesh, tag: T, from: number): void {
+    const found = this.entries.find((entry) => entry.mesh === mesh);
+    if (found) {
+      found.tag = tag;
+      found.from = from;
+      return;
+    }
+    this.entries.push({ mesh, tag, from });
+  }
+
+  /** Every mesh with something in it, for `Raycaster.intersectObjects`. */
+  targets(): THREE.Object3D[] {
+    this.scratch.length = 0;
+    for (const entry of this.entries) {
+      if (entry.mesh.count > 0) this.scratch.push(entry.mesh.mesh);
+    }
+    return this.scratch;
+  }
+
+  /** The slot an intersection stands for, or null if the mesh is not ours. */
+  resolve(object: THREE.Object3D, instanceId: number): { tag: T; slot: number } | null {
+    for (const entry of this.entries) {
+      if (entry.mesh.mesh !== object) continue;
+      if (instanceId < 0 || instanceId >= entry.mesh.count) return null;
+      return { tag: entry.tag, slot: entry.from + instanceId };
+    }
+    return null;
+  }
+}
