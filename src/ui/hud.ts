@@ -4,7 +4,7 @@ import {
   HAPPINESS_MIN_BUILD,
   HOMES_PER_PARK,
   LEVEL_EDUCATION,
-  LEVEL_NAMES,
+  ZONE_LEVEL_NAMES,
   LEVELS,
   MAX_DISTRICTS,
   SERVICES,
@@ -118,6 +118,8 @@ export class Hud {
     educationReach: el('education-reach'),
     educationNext: el('education-next'),
     zoneName: el('zone-name'),
+    zoneShop: el('zone-shop'),
+    zoneIndustry: el('zone-industry'),
     occupancy: el('occupancy'),
     occupancyFill: el('occupancy-fill'),
     occupancyMark: el('occupancy-mark'),
@@ -373,8 +375,12 @@ export class Hud {
 
     // There is no single zoning any more, so the readout names the tallest
     // thing standing rather than one city-wide tier — "towers" once the first
-    // tower is up, which is the milestone a player actually wants told.
-    n.zoneName.textContent = LEVEL_NAMES[topLevel(s.homeLevels)] ?? '';
+    // tower is up, which is the milestone a player actually wants told. One per
+    // zone, because commerce and industry climb the same ladder and "retail
+    // park" is the milestone for a player watching the high street.
+    n.zoneName.textContent = ZONE_LEVEL_NAMES.home[topLevel(s.homeLevels)] ?? '';
+    n.zoneShop.textContent = ZONE_LEVEL_NAMES.shop[topLevel(s.shopLevels)] ?? '';
+    n.zoneIndustry.textContent = ZONE_LEVEL_NAMES.industry[topLevel(s.industryLevels)] ?? '';
     // Same pattern as annex: when the button is dead for a reason worth
     // stating, the label states it instead of the verb.
     n.homeLabel.textContent = homeBlocker(s) ?? 'Build home';

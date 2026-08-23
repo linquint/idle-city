@@ -3,23 +3,41 @@ import {
   DEMAND_TAU,
   HOME_BASE,
   HOME_GROWTH,
+  INDUSTRIAL_OUTPUT,
   INDUSTRY_BASE,
   INDUSTRY_GROWTH,
+  INDUSTRY_JOBS,
+  INDUSTRY_OUTPUT,
+  JOBS_PER_COMMERCIAL,
+  JOBS_PER_INDUSTRIAL,
+  LEVEL_FOOTPRINT,
+  LEVELS,
   PRICE_DISCOUNT_MAX,
   PRICE_SURCHARGE_MAX,
   SHOP_BASE,
   SHOP_GROWTH,
+  SHOP_JOBS,
+  SHOP_SUPPLY,
+  SHOP_THROUGHPUT,
+  SHOP_TRIPS,
+  SUPPLY_DRAW,
+  ZONE_LEVEL_NAMES,
 } from '../src/sim/config';
 import {
+  cohortAgainst,
+  cohortFootprint,
   demandStep,
   demandTargets,
+  effectiveOf,
   homeCost,
   industryCost,
+  jobs,
   priceModifier,
   shopCost,
+  workers,
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
-import { built, housed } from './levels';
+import { built, housed, making, trading } from './levels';
 import { createState, type GameState } from '../src/sim/state';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
@@ -300,4 +318,77 @@ describe('the cycle', () => {
       expect(moved).toBe(true);
     });
   }
+});
+
+/**
+ * What levels do to commerce and industry.
+ *
+ * The claim the per-level ladders make: jobs, trips, supply and output are
+ * constant *per plot* at every level, so ZONE_SHARE's tier-0 equilibrium
+ * 14R = 8C + 20I is the equilibrium at every level rather than only the first.
+ * Income is the thing a level moves, and it moves it by LEVEL_SCALE.
+ */
+describe('commercial and industrial levels', () => {
+  const perPlot = (s: GameState, kind: 'shop' | 'industry', ladder: readonly number[]): number =>
+    cohortAgainst(kind === 'shop' ? s.shopLevels : s.industryLevels, ladder) /
+    cohortFootprint(kind === 'shop' ? s.shopLevels : s.industryLevels);
+
+  it('employ, serve and make the same per plot at every level', () => {
+    for (let level = 0; level < LEVELS; level++) {
+      const shops = state({ ...trading(8, level), occupancyC: 1 });
+      expect(perPlot(shops, 'shop', SHOP_JOBS)).toBeCloseTo(JOBS_PER_COMMERCIAL, 9);
+      expect(perPlot(shops, 'shop', SHOP_TRIPS)).toBeCloseTo(SHOP_THROUGHPUT, 9);
+      expect(perPlot(shops, 'shop', SHOP_SUPPLY)).toBeCloseTo(SUPPLY_DRAW, 9);
+
+      const works = state({ ...making(6, level), occupancyI: 1 });
+      expect(perPlot(works, 'industry', INDUSTRY_JOBS)).toBeCloseTo(JOBS_PER_INDUSTRIAL, 9);
+      expect(perPlot(works, 'industry', INDUSTRY_OUTPUT)).toBeCloseTo(INDUSTRIAL_OUTPUT, 9);
+    }
+  });
+
+  it('leave the labour market where ZONE_SHARE put it, at every level', () => {
+    // The zoning budget solves 14 workers a housing plot against 8 jobs a
+    // commercial one and 20 an industrial one. Building a district out on that
+    // split at each level has to leave the job side of the balance untouched:
+    // only the worker side moves, which is the arc WORKING_SHARE describes.
+    const split = { r: 48, c: 31, i: 21 };
+    let previous = -1;
+    for (let level = 0; level < LEVELS; level++) {
+      // Plot counts, not building counts: a merged level covers two plots each.
+      const plots = LEVEL_FOOTPRINT[level] ?? 1;
+      const s = state({
+        ...housed(split.r / plots, level),
+        ...trading(split.c / plots, level),
+        ...making(split.i / plots, level),
+        occupancyR: 1,
+        occupancyC: 1,
+        occupancyI: 1,
+      });
+      expect(jobs(s)).toBeCloseTo(split.c * JOBS_PER_COMMERCIAL + split.i * JOBS_PER_INDUSTRIAL, 6);
+      // And the worker side climbs, which is what carries the city from
+      // job-rich to worker-rich rather than pinning it at one or the other.
+      expect(workers(s)).toBeGreaterThan(previous);
+      previous = workers(s);
+    }
+  });
+
+  it('raise what a plot earns even though they leave what it employs alone', () => {
+    // The other half of the claim: a level has to be worth buying. Per plot,
+    // earnings climb the LEVEL_SCALE ladder while jobs sit still.
+    let previous = 0;
+    for (let level = 0; level < LEVELS; level++) {
+      const plots = LEVEL_FOOTPRINT[level] ?? 1;
+      const s = state({ ...trading(8 / plots, level), occupancyC: 1 });
+      const earned = effectiveOf(s, 'shop') / cohortFootprint(s.shopLevels);
+      expect(earned).toBeGreaterThan(previous);
+      previous = earned;
+    }
+  });
+
+  it('names every level of every zone', () => {
+    for (const names of Object.values(ZONE_LEVEL_NAMES)) {
+      expect(names).toHaveLength(LEVELS);
+      for (const name of names) expect(name.length).toBeGreaterThan(0);
+    }
+  });
 });

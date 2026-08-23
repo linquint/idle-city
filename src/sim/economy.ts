@@ -24,12 +24,11 @@ import {
   HOME_BASE,
   HOME_GROWTH,
   HOMES_PER_PARK,
-  INDUSTRIAL_OUTPUT,
   INDUSTRY_BASE,
   INDUSTRY_BONUS,
   INDUSTRY_GROWTH,
-  JOBS_PER_COMMERCIAL,
-  JOBS_PER_INDUSTRIAL,
+  INDUSTRY_JOBS,
+  INDUSTRY_OUTPUT,
   LEVEL_FOOTPRINT,
   LEVEL_HOUSING,
   LEVEL_SCALE,
@@ -57,9 +56,10 @@ import {
   SHOP_BASE,
   SHOP_BONUS,
   SHOP_GROWTH,
-  SHOP_THROUGHPUT,
+  SHOP_JOBS,
+  SHOP_SUPPLY,
+  SHOP_TRIPS,
   SPEND_PER_RESIDENT,
-  SUPPLY_DRAW,
   WORKING_SHARE,
   type Service,
 } from './config.ts';
@@ -225,6 +225,25 @@ export const standingPlotsOf = (s: GameState, kind: ZoneKind): number =>
   cohortFootprint(levelsOf(s, kind));
 
 /**
+ * A cohort measured against a per-level ladder — SHOP_JOBS, INDUSTRY_OUTPUT and
+ * their siblings. What the buildings are worth in whatever the ladder counts.
+ */
+export const cohortAgainst = (levels: LevelCohort, ladder: readonly number[]): number => {
+  let n = 0;
+  for (let l = 0; l < levels.length; l++) n += (levels[l] ?? 0) * (ladder[l] ?? 0);
+  return n;
+};
+
+/**
+ * What a zone's open buildings are worth against a per-level ladder.
+ *
+ * The ruins are already out — they hold no level, so no cohort counts them —
+ * and the empty share comes off, because a shop nobody is in serves nobody.
+ */
+export const openOf = (s: GameState, kind: ZoneKind, ladder: readonly number[]): number =>
+  cohortAgainst(levelsOf(s, kind), ladder) * occupancyOf(s, kind);
+
+/**
  * A zone's trading weight: how much of its *land* is actually open.
  *
  * Per plot rather than per building, which is the same statement it always was
@@ -235,6 +254,10 @@ export const standingPlotsOf = (s: GameState, kind: ZoneKind): number =>
  * buildings used to say that; since two shops can merge into one it says the
  * opposite, and a merging high street would halve the city's jobs overnight.
  * Ruins are excluded and the empty share is taken off: neither trades.
+ *
+ * The per-level ladders in config.ts are this number spelled out a level at a
+ * time, and `openOf` is what reads them; this is the same quantity with the
+ * ladder held at one, which is what the plot counts and the HUD want.
  */
 export const activeOf = (s: GameState, kind: ZoneKind): number =>
   standingPlotsOf(s, kind) * occupancyOf(s, kind);
@@ -806,7 +829,7 @@ export const exportMarket = (s: GameState): number =>
   EXPORT_BASE + EXPORT_PER_DISTRICT * (s.districts - 1);
 
 export const jobs = (s: GameState): number =>
-  activeOf(s, 'shop') * JOBS_PER_COMMERCIAL + activeOf(s, 'industry') * JOBS_PER_INDUSTRIAL;
+  openOf(s, 'shop', SHOP_JOBS) + openOf(s, 'industry', INDUSTRY_JOBS);
 
 /**
  * The imbalance that counts as "saturated", at the city's current level mix.
@@ -846,13 +869,16 @@ export interface DemandTargets {
  */
 export const demandTargets = (s: GameState): DemandTargets => {
   const scale = demandScale(s);
-  const shops = activeOf(s, 'shop');
-  const industry = activeOf(s, 'industry');
   return {
     r: Math.min(s.happiness, clampDemand((jobs(s) - workers(s)) / scale)),
-    c: clampDemand((residents(s) * SPEND_PER_RESIDENT - shops * SHOP_THROUGHPUT) / scale),
+    c: clampDemand(
+      (residents(s) * SPEND_PER_RESIDENT - openOf(s, 'shop', SHOP_TRIPS)) / scale,
+    ),
     i: clampDemand(
-      (shops * SUPPLY_DRAW + exportMarket(s) - industry * INDUSTRIAL_OUTPUT) / scale,
+      (openOf(s, 'shop', SHOP_SUPPLY) +
+        exportMarket(s) -
+        openOf(s, 'industry', INDUSTRY_OUTPUT)) /
+        scale,
     ),
   };
 };

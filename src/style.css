@@ -314,6 +314,8 @@ canvas {
   margin: 0 0 10px;
 }
 .zone b { color: var(--concrete); font-weight: 600; }
+/* Three names on one line, so the separator has to be quieter than they are. */
+.zone .dash { margin: 0 6px; color: var(--off); }
 
 /* Land developed, against the threshold that unlocks the next district. */
 .meter {

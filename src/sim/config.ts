@@ -199,6 +199,21 @@ export const LEVEL_SCALE = LEVEL_CAPACITY.map(
 /** What the zoning readout calls a level, and the verb on the build button. */
 export const LEVEL_NAMES = ['detached housing', 'apartments', 'towers', 'arcologies'] as const;
 
+/**
+ * What each zone calls its levels.
+ *
+ * Names rather than numbers, because "retail park" says what a level-2 shop is
+ * and "level 2" says only that it is above level 1. Commerce and industry climb
+ * the same four rungs housing does and merge at the same one, so a level-2 shop
+ * is a pair of shopfronts knocked together and a level-2 works is a plant that
+ * has taken the yard next door — which is what these names are trying to say.
+ */
+export const ZONE_LEVEL_NAMES = {
+  home: LEVEL_NAMES,
+  shop: ['corner shops', 'high street', 'retail park', 'exchange'],
+  industry: ['workshops', 'factory', 'plant', 'refinery'],
+} as const;
+
 // --------------------------------------------------------------- occupancy
 
 /**
@@ -601,6 +616,34 @@ export const JOBS_PER_COMMERCIAL = 8;
 export const JOBS_PER_INDUSTRIAL = 20;
 
 /**
+ * What one commercial or industrial *building* is worth to the labour market
+ * and to the goods cycle at each level.
+ *
+ * The commerce-and-industry answer to LEVEL_CAPACITY, and the ladder is the
+ * footprint rather than the income scale. That is not a shortcut; it is the only
+ * ladder that survives the two measurements in LEVEL_SCALE. Scaling trips with
+ * *capacity* means a level-2 shop serves 17.5x the trade, the city needs 17.5x
+ * fewer shops, commercial land can never be filled and the annexation gate can
+ * never be reached — measured, auto-develop stalled at 7 shops of 31. Scaling
+ * with footprint says the honest thing instead: a retail park is two shopfronts
+ * knocked together, so it employs two shopfronts' worth and serves two
+ * shopfronts' worth of trips.
+ *
+ * The consequence worth stating plainly, because it is what keeps ZONE_SHARE
+ * true: jobs, trips, supply and output are all constant *per plot* at every
+ * level. Merging changes how many buildings a district holds and never how much
+ * land they cover, so the tier-0 equilibrium 14R = 8C + 20I is the equilibrium
+ * at every level, not just the first. What levels buy commerce and industry is
+ * LEVEL_SCALE — a retail park earns 17.5x a corner shop's keep per plot — and
+ * the land still fills, which is the pair of things the old build could not have
+ * at once.
+ */
+export const SHOP_JOBS = LEVEL_FOOTPRINT.map((f) => JOBS_PER_COMMERCIAL * f) as readonly number[];
+export const INDUSTRY_JOBS = LEVEL_FOOTPRINT.map(
+  (f) => JOBS_PER_INDUSTRIAL * f,
+) as readonly number[];
+
+/**
  * Shopping trips generated per resident, against trips one shop can serve.
  *
  * Calibrated so commerce clears exactly at the zoning budget: 43 plots x 14
@@ -612,6 +655,9 @@ export const JOBS_PER_INDUSTRIAL = 20;
 export const SPEND_PER_RESIDENT = 0.5;
 export const SHOP_THROUGHPUT = 11;
 
+/** Trips one shop serves at each level. Per plot, as SHOP_JOBS explains. */
+export const SHOP_TRIPS = LEVEL_FOOTPRINT.map((f) => SHOP_THROUGHPUT * f) as readonly number[];
+
 /**
  * Goods one shop pulls from industry, against what one industrial plot makes.
  *
@@ -620,6 +666,12 @@ export const SHOP_THROUGHPUT = 11;
  */
 export const SUPPLY_DRAW = 4;
 export const INDUSTRIAL_OUTPUT = 9;
+
+/** Goods one shop draws and one works makes, per level. Per plot, as above. */
+export const SHOP_SUPPLY = LEVEL_FOOTPRINT.map((f) => SUPPLY_DRAW * f) as readonly number[];
+export const INDUSTRY_OUTPUT = LEVEL_FOOTPRINT.map(
+  (f) => INDUSTRIAL_OUTPUT * f,
+) as readonly number[];
 
 /**
  * The external tap on industrial demand.
