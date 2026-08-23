@@ -111,6 +111,25 @@ canvas {
 .v.cash { color: var(--signal); }
 .v.rate { color: var(--sodium); }
 
+/* Plots are counted per zone, so the row carries three of them. The dots are
+   the same colours the Z overlay paints the map with. */
+.v.zones {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.zone-count { display: inline-flex; align-items: center; gap: 4px; }
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.dot.r { background: #6fbf8b; }
+.dot.c { background: #4f8fd6; }
+.dot.i { background: #e0a84e; }
+
 /* ----------------------------------------------------------- controls */
 
 .controls {

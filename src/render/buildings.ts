@@ -22,6 +22,26 @@ const heightJitter = (i: number): number => 0.82 + hash01(i ^ 0x5bf03635) * 0.42
 /** Per-building concrete shade, so the mass does not flatten out. */
 const shade = (i: number): number => 0.84 + hash01(i ^ 0x2545f491) * 0.28;
 
+const targetColor = new THREE.Color();
+const materialColor = new THREE.Color();
+
+/**
+ * The instance colour that makes a mesh render as `target` even though its
+ * material is already tinted `material` — the shader multiplies the two, so a
+ * zone colour laid straight over the dark shop blue comes out near black.
+ * Dividing it back out is what keeps the overlay legible on every mesh.
+ */
+function against(target: number, material: number, out: THREE.Color): THREE.Color {
+  targetColor.setHex(target);
+  materialColor.setHex(material);
+  const ratio = (t: number, m: number): number => Math.min(t / Math.max(m, 0.02), 6);
+  return out.setRGB(
+    ratio(targetColor.r, materialColor.r),
+    ratio(targetColor.g, materialColor.g),
+    ratio(targetColor.b, materialColor.b),
+  );
+}
+
 /**
  * One InstancedMesh set per zoning tier.
  *
@@ -33,6 +53,8 @@ class TierMeshes {
   private readonly roof: GrowableInstancedMesh;
   private readonly beacon: GrowableInstancedMesh | null;
   private readonly roofRise: number;
+  /** Zone colour while the overlay is on, null for the city's own palette. */
+  private overlay: number | null = null;
 
   constructor(scene: THREE.Scene, readonly tier: Tier, capacity: number) {
     const w = tier.width;
@@ -69,6 +91,26 @@ class TierMeshes {
     this.beacon?.ensure(capacity);
   }
 
+  setOverlay(hex: number | null): void {
+    this.overlay = hex;
+  }
+
+  private bodyColor(index: number, out: THREE.Color): THREE.Color {
+    const base =
+      this.overlay === null
+        ? out.setHex(PALETTE.concrete)
+        : against(this.overlay, PALETTE.concrete, out);
+    // The per-instance shade survives the overlay, so the plan still reads as
+    // buildings rather than as a flat sheet of one colour.
+    return base.multiplyScalar(shade(index));
+  }
+
+  /** Rewrites colours only. Matrices are untouched, so this is one buffer pass. */
+  recolor(count: number, tint: THREE.Color): void {
+    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(i, tint));
+    this.body.flush();
+  }
+
   write(index: number, cell: Coord, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
     const x = worldX(cell.x);
     const z = worldZ(cell.z);
@@ -80,7 +122,7 @@ class TierMeshes {
     dummy.scale.set(1, stretch * scale, 1);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
-    this.body.setColorAt(index, tint.setHex(PALETTE.concrete).multiplyScalar(shade(index)));
+    this.body.setColorAt(index, this.bodyColor(index, tint));
 
     dummy.position.y = (height + this.roofRise) * scale;
     dummy.scale.setScalar(scale);
@@ -124,6 +166,7 @@ class ShopMeshes {
   private readonly body: GrowableInstancedMesh;
   private readonly fascia: GrowableInstancedMesh;
   private readonly cap: GrowableInstancedMesh;
+  private overlay: number | null = null;
 
   constructor(scene: THREE.Scene, capacity: number) {
     this.body = new GrowableInstancedMesh(
@@ -154,7 +197,24 @@ class ShopMeshes {
     this.cap.ensure(capacity);
   }
 
-  write(index: number, cell: Coord, scale: number, dummy: THREE.Object3D): void {
+  setOverlay(hex: number | null): void {
+    this.overlay = hex;
+  }
+
+  private bodyColor(out: THREE.Color): THREE.Color {
+    // White is the identity for the shader's multiply, so with no overlay the
+    // shop renders in exactly the material colour it always has.
+    return this.overlay === null
+      ? out.setRGB(1, 1, 1)
+      : against(this.overlay, PALETTE.shop, out);
+  }
+
+  recolor(count: number, tint: THREE.Color): void {
+    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(tint));
+    this.body.flush();
+  }
+
+  write(index: number, cell: Coord, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
     const x = worldX(cell.x);
     const z = worldZ(cell.z);
     dummy.rotation.set(0, 0, 0);
@@ -162,6 +222,7 @@ class ShopMeshes {
     dummy.scale.set(1, scale, 1);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
+    this.body.setColorAt(index, this.bodyColor(tint));
 
     dummy.scale.setScalar(scale);
     dummy.position.y = (SHOP_H - 0.42) * scale;
@@ -268,10 +329,28 @@ export class Buildings {
     this.shops.ensure(to);
     this.shopGrowth.ensure(to);
     for (let i = from; i < to; i++) {
-      this.shops.write(i, this.layout.shopCell(i), this.shopGrowth.scaleAt(i, now), this.dummy);
+      this.shops.write(
+        i,
+        this.layout.shopCell(i),
+        this.shopGrowth.scaleAt(i, now),
+        this.dummy,
+        this.tint,
+      );
     }
     this.shops.setCount(to);
     this.shops.flush();
+  }
+
+  /**
+   * Recolours the city by zone. Homes stand on residential plots and shops on
+   * commercial ones by construction, so the zone of a building is known from
+   * which list placed it — no per-plot lookup needed.
+   */
+  setZoneOverlay(on: boolean): void {
+    for (const tier of this.tiers) tier.setOverlay(on ? PALETTE.zoneResidential : null);
+    this.shops.setOverlay(on ? PALETTE.zoneCommercial : null);
+    this.active.recolor(this.shownHomes, this.tint);
+    this.shops.recolor(this.shownShops, this.tint);
   }
 
   /** Advances in-flight growth animations. Returns true while any are running. */
@@ -283,7 +362,7 @@ export class Buildings {
     if (homesMoving) meshes.flush();
 
     const shopsMoving = this.shopGrowth.update(now, (i, s) => {
-      this.shops.write(i, this.layout.shopCell(i), s, this.dummy);
+      this.shops.write(i, this.layout.shopCell(i), s, this.dummy, this.tint);
     });
     if (shopsMoving) this.shops.flush();
 

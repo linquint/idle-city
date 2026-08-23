@@ -20,7 +20,9 @@ compiles to about 10 kB gzipped on top of three.
 | `npm run build` | Typecheck, then a production bundle in `dist/` |
 | `npm run preview` | Serve the built bundle |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Simulation tests (vitest) |
+| `npm test` | Simulation tests (vitest), then the generator suite |
+| `npm run test:citygen` | District generation acceptance tests (plain Node) |
+| `npm run citygen:calibrate` | Plot-count distribution over 1000 seeds |
 
 ## How it is put together
 
@@ -39,7 +41,20 @@ timers, no renderer — which is why the whole simulation is unit-testable in
 Node, why offline progress is a loop rather than a special case, and why a save
 file is ten fields instead of a scene graph.
 
-Two techniques carry the rest:
+Three techniques carry the rest:
+
+**Generated districts.** Streets are not a grid. Each axis of a district is a
+seeded walk in steps of 3-7, so blocks come out anywhere from 2x2 to 6x6, and
+every non-road cell is labelled into a block with a frontage and a centrality
+score. Blocks are then zoned whole — industrial by footprint and closeness to
+the rail side, commercial by frontage and centrality with only the perimeter
+plots taking shops, residential for the rest. Zoning block-wise rather than
+plot-wise is what stops a factory quarter coming out half housing. Irregular
+spacing means seeds disagree about how much land they carve out, so generation
+rejection-samples until a district hits exactly `TARGET_PLOTS` — the economy
+multiplies one per-district constant by the district count, and it has to be
+true. `tools/citygen.test.mjs` guards all of it, and `npm run citygen:calibrate`
+prints the distribution the target came from.
 
 **Deterministic placement.** The save says `{ homes: 412 }`, never 412
 positions. Which plot the 412th home stands on is a pure function of its index
@@ -68,11 +83,19 @@ about the same as a city of forty.
   shadows do not crawl when the camera drifts.
 - Fog depths are measured from the camera, so they track the orbit distance as
   well as the size of the city.
+- Road cells work out their own orientation from whether their neighbours are
+  roads, so a junction, a straight run and a T-junction where a street meets a
+  district boundary all fall out of the same lookup.
+- **Z** toggles a zone overlay: the city is recoloured by zone through the same
+  per-instance colour path that already varies concrete shade, and every zoned
+  plot with nothing on it yet is drawn as a flat pad — one extra draw call.
 
 ## Balance
 
 Every tunable is in `src/sim/config.ts`, and nothing else in that file imports
-anything. `RENT`, `HOME_BASE` and the first tier's capacity together set how
+anything. `ZONE_SHARE` is the one set of numbers that looks wrong and is not: R 0.48 /
+C 0.31 / I 0.21 solves the tier-0 job/worker equilibrium, and rounding it to
+50/30/20 breaks the demand loop. `RENT`, `HOME_BASE` and the first tier's capacity together set how
 long the first house takes to pay for itself, which is the number the opening
 minute lives or dies on. `test/game.test.ts` guards the pacing at both ends: no
 dead first minute, and no filling a district in a quarter of an hour.

@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { OFFLINE_CAP_SECONDS, START_CASH, TICK_RATE, TIERS } from '../src/sim/config';
 import { Game } from '../src/sim/game';
-import { homeCapacity, homeCost, income, plotCapacity, residents } from '../src/sim/economy';
+import {
+  homeCapacity,
+  homeCost,
+  income,
+  plotCapacity,
+  residents,
+  shopCapacity,
+} from '../src/sim/economy';
 import { createState, type GameState } from '../src/sim/state';
 
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -32,12 +39,17 @@ describe('purchases', () => {
   });
 
   it('annexation adds plots without disturbing what is built', () => {
-    const game = at({ cash: 1e9, homes: homeCapacity(createState(0)) });
+    // Housing alone no longer reaches the occupancy gate: a district is 48%
+    // residential and 31% commercial, so filling every home leaves the city
+    // only 61% developed. Annexing takes shops as well as houses now.
+    const first = createState(0);
+    const homes = homeCapacity(first);
+    const game = at({ cash: 1e9, homes, shops: shopCapacity(first) });
     const before = plotCapacity(game.state);
     expect(game.annex()).toBe(true);
     expect(game.state.districts).toBe(2);
     expect(plotCapacity(game.state)).toBe(before * 2);
-    expect(game.state.homes).toBe(homeCapacity(createState(0)));
+    expect(game.state.homes).toBe(homes);
   });
 });
 

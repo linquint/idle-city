@@ -15,7 +15,11 @@ import {
   SHOP_GROWTH,
   TIERS,
 } from './config';
-import { COMMERCIAL_PER_DISTRICT, RESIDENTIAL_PER_DISTRICT } from './layout';
+import {
+  COMMERCIAL_PER_DISTRICT,
+  INDUSTRIAL_PER_DISTRICT,
+  RESIDENTIAL_PER_DISTRICT,
+} from './layout';
 import type { GameState } from './state';
 
 /** Pure reads over a state. No mutation lives in this file. */
@@ -24,6 +28,14 @@ export const tierOf = (s: GameState) => TIERS[Math.min(s.tier, TIERS.length - 1)
 
 export const homeCapacity = (s: GameState): number => s.districts * RESIDENTIAL_PER_DISTRICT;
 export const shopCapacity = (s: GameState): number => s.districts * COMMERCIAL_PER_DISTRICT;
+/**
+ * Industrial land is zoned and ordered but nothing builds on it yet, so it is
+ * deliberately outside `plotCapacity` — counting it would tell the player their
+ * city is a fifth empty and stall annexation behind an occupancy bar that can
+ * never fill. The ledger shows it separately instead.
+ */
+export const industryCapacity = (s: GameState): number => s.districts * INDUSTRIAL_PER_DISTRICT;
+
 export const plotCapacity = (s: GameState): number => homeCapacity(s) + shopCapacity(s);
 export const plotsUsed = (s: GameState): number => s.homes + s.shops;
 export const occupancy = (s: GameState): number => plotsUsed(s) / plotCapacity(s);
