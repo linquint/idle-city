@@ -10,8 +10,9 @@ import {
   shopCapacity,
   siteCapacity,
 } from '../src/sim/economy';
+import { BUILDABLE_PARKS_PER_DISTRICT } from '../src/sim/layout';
 import { load, migrate, save, SAVE_KEY, secondsAway } from '../src/sim/save';
-import { createState, SAVE_VERSION } from '../src/sim/state';
+import { createState, SAVE_VERSION, type GameState } from '../src/sim/state';
 
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
@@ -375,6 +376,21 @@ describe('the v4 migration', () => {
     expect(state?.fires).toEqual([]);
     expect(state?.fireCursor).toBe(0);
     expect(state?.fireHazard).toBe(0);
+  });
+
+  it('defaults parks to none, which is the state a v3 city was in', () => {
+    const state = migrate(v3, 2_000);
+    expect(state?.parks).toBe(0);
+    // And the housing gate still opens for it: no parks caps happiness at 0.82.
+    expect(state?.happiness).toBe(0.77);
+    expect(happinessTarget(state as GameState)).toBeGreaterThan(0.35);
+  });
+
+  it('clamps parks to the courtyard land the city owns', () => {
+    const state = migrate({ ...v3, districts: 2, parks: 900 }, 2_000);
+    expect(state?.parks).toBe(2 * BUILDABLE_PARKS_PER_DISTRICT);
+    expect(migrate({ ...v3, parks: -4 }, 0)?.parks).toBe(0);
+    expect(migrate({ ...v3, parks: 'lots' }, 0)?.parks).toBe(0);
   });
 
   it('reads a v4 save back exactly as it was written', () => {

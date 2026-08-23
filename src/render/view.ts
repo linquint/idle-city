@@ -7,7 +7,7 @@ import { createSkyReading, dayPhase, DUSK_PHASE, sampleSky } from './daylight';
 import { Fires } from './fires';
 import { Ground } from './ground';
 import { World } from './world';
-import { Courtyards, Zones, type ZoneMode } from './zones';
+import { Courtyards, Parks, Zones, type ZoneMode } from './zones';
 
 /**
  * The view layer, entire.
@@ -26,6 +26,7 @@ export class View {
   private readonly buildings: Buildings;
   private readonly zones: Zones;
   private readonly courtyards: Courtyards;
+  private readonly parks: Parks;
   private readonly cars: Cars;
   private readonly fires: Fires;
   private elapsed = 0;
@@ -47,6 +48,7 @@ export class View {
     this.buildings = new Buildings(this.world.scene, layout);
     this.zones = new Zones(this.world.scene, layout);
     this.courtyards = new Courtyards(this.world.scene, layout);
+    this.parks = new Parks(this.world.scene, layout);
     this.cars = new Cars(this.world.scene, layout, !reducedMotion);
     this.fires = new Fires(this.world.scene, layout, !reducedMotion);
 
@@ -107,6 +109,7 @@ export class View {
     this.buildings.sync(state, this.elapsed);
     this.zones.sync(state);
     this.courtyards.sync(state);
+    this.parks.sync(state);
     this.cars.sync(state);
     this.fires.sync(state);
   }

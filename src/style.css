@@ -393,6 +393,12 @@ button.civic {
 }
 button.civic:hover:not(:disabled) { background: rgba(127, 168, 255, 0.1); border-color: var(--civic); }
 button.civic .cost { color: var(--civic); font-size: 10px; }
+/* Parks share the civic row because they buy the same thing — a happiness term
+   — but they are not a service, so they get the signal green rather than the
+   civic blue. Four buttons in the row, so the padding comes down a little. */
+button.civic.park { border-color: rgba(99, 198, 168, 0.3); padding-inline: 7px; }
+button.civic.park:hover:not(:disabled) { background: rgba(99, 198, 168, 0.1); border-color: var(--signal); }
+button.civic.park .cost { color: var(--signal); }
 /* built / allowed, so the population gate is visible before it bites. */
 button.civic .built {
   font-size: 10px;

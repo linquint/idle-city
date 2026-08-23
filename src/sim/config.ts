@@ -351,7 +351,7 @@ export interface Service {
   /** Residents one of these covers, once it is fully staffed. */
   readonly capacity: number;
   readonly base: number;
-  /** Share of the happiness score. The three sum to 1. */
+  /** Share of the happiness score. These three plus RECREATION_WEIGHT sum to 1. */
   readonly weight: number;
 }
 
@@ -371,9 +371,9 @@ export interface Service {
  * HAPPINESS_MIN_BUILD, so housing is never bricked by land the city cannot buy.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital', name: 'Hospitals', buildLabel: 'Open hospital',      coverLabel: 'Health coverage', capacity: 900,  base: 130, weight: 0.4  },
-  { key: 'police',   name: 'Police',    buildLabel: 'Open police station', coverLabel: 'Police coverage', capacity: 1_200, base: 210, weight: 0.35 },
-  { key: 'fire',     name: 'Fire',      buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',   capacity: 1_500, base: 320, weight: 0.25 },
+  { key: 'hospital', name: 'Hospitals', buildLabel: 'Open hospital',      coverLabel: 'Health coverage', capacity: 900,  base: 130, weight: 0.34 },
+  { key: 'police',   name: 'Police',    buildLabel: 'Open police station', coverLabel: 'Police coverage', capacity: 1_200, base: 210, weight: 0.26 },
+  { key: 'fire',     name: 'Fire',      buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',   capacity: 1_500, base: 320, weight: 0.22 },
 ];
 
 /** Civic buildings compound like everything else, and faster than housing. */
@@ -420,8 +420,15 @@ export const HAPPINESS_FLOOR = 0.55;
  * Below this, nobody new will move in and the home button says so.
  *
  * This is the tutorial, and it has no text: housing stalls, the happiness panel
- * names the service that is short, and the player works out why. One hospital
- * is worth 0.4 on its own, so the fix is always exactly one purchase away.
+ * names the term that is short, and the player works out why.
+ *
+ * The fix used to be exactly one purchase: a hospital was worth 0.4 on its own
+ * and cleared 0.35 by itself. Recreation's 0.18 comes out of the three service
+ * weights, so a hospital is now 0.34 — a hair under — and the fix is two
+ * purchases rather than one. It is still short and still signposted: at twelve
+ * homes the panel names the police station (0.34 + 0.26 = 0.60), and the park
+ * it names next is 45 rather than 210 and gets there on its own too (0.34 +
+ * 0.18 x 5/12 = 0.42). Both routes are cheaper than the single hospital was.
  *
  * An empty city is at 1, not 0 — coverage is the share of residents a service
  * reaches, and with no residents there is nobody it fails. Happiness then lags
@@ -432,6 +439,46 @@ export const HAPPINESS_FLOOR = 0.55;
  * time — shops and industry are both still buildable through it.
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
+
+// ------------------------------------------------------------------ parks
+
+/**
+ * Homes one park keeps happy.
+ *
+ * Against *homes*, not residents, and that is the whole design of the term. The
+ * land ratio is fixed at four park plots to nineteen housing plots a district,
+ * whatever stands on them — a rezone multiplies residents by up to 75x and adds
+ * exactly zero park land. A per-resident denominator would therefore be trivial
+ * at detached housing and unreachable at arcologies, which is a happiness term
+ * that means two different things at two ends of the same game. Per home it is
+ * tier-invariant: 19 homes want 3.8 parks and a district has 4.
+ */
+export const HOMES_PER_PARK = 5;
+
+/**
+ * Recreation's share of happiness. With the three services above it sums to 1.
+ *
+ * The smallest of the four, deliberately. A park is the cheapest of the
+ * amenities and its land is the interior of a block that nothing else can use,
+ * so it should not be worth as much as a hospital — but a city that never
+ * builds one is capped at 0.82, which is a visible ceiling rather than a
+ * punishment, and still miles clear of HAPPINESS_MIN_BUILD.
+ */
+export const RECREATION_WEIGHT = 0.18;
+
+/**
+ * Parks earn nothing and compound gently.
+ *
+ * Priced against the civic curve rather than against housing, because that is
+ * what a park competes with for the same cash. A district holds 4 parks against
+ * about 2.33 buildings of any one civic type, so a matching *growth* is the one
+ * that compounds at the same rate per district: 4 x ln(1.18) = 0.66 against
+ * 2.33 x ln(1.35) = 0.70. Base 45 puts the first district's four parks at 235
+ * all told — about a third of what filling its housing costs, which makes
+ * recreation an early purchase rather than an endgame one.
+ */
+export const PARK_BASE = 45;
+export const PARK_GROWTH = 1.18;
 
 // ---------------------------------------------------------------------- fire
 

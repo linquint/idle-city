@@ -20,6 +20,7 @@ import {
   HAPPINESS_TAU,
   HOME_BASE,
   HOME_GROWTH,
+  HOMES_PER_PARK,
   INDUSTRIAL_OUTPUT,
   INDUSTRY_BASE,
   INDUSTRY_BONUS,
@@ -27,8 +28,11 @@ import {
   JOBS_PER_COMMERCIAL,
   JOBS_PER_INDUSTRIAL,
   MAX_DISTRICTS,
+  PARK_BASE,
+  PARK_GROWTH,
   PRICE_DISCOUNT_MAX,
   PRICE_SURCHARGE_MAX,
+  RECREATION_WEIGHT,
   RENT,
   REZONE_BASE,
   REZONE_GROWTH,
@@ -47,6 +51,7 @@ import {
 import {
   BUILDABLE_COMMERCIAL_PER_DISTRICT,
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
+  BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
 } from './layout.ts';
@@ -80,6 +85,13 @@ export const shopCapacity = (s: GameState): number =>
 export const industryCapacity = (s: GameState): number =>
   s.districts * BUILDABLE_INDUSTRIAL_PER_DISTRICT;
 
+/**
+ * Park land. Courtyard plots — the interior of a deep block — so it is the one
+ * capacity that costs the city no frontage at all.
+ */
+export const parkCapacity = (s: GameState): number =>
+  s.districts * BUILDABLE_PARKS_PER_DISTRICT;
+
 /** 2x2 civic sites the city owns, of every type. */
 export const civicSiteCapacity = (s: GameState): number =>
   s.districts * CIVIC_SITES_PER_DISTRICT;
@@ -88,7 +100,16 @@ export const civicSiteCapacity = (s: GameState): number =>
 export const plotCapacity = (s: GameState): number =>
   homeCapacity(s) + shopCapacity(s) + industryCapacity(s) + civicSiteCapacity(s);
 
-/** A civic building is development too, so it counts against the same total. */
+/**
+ * A civic building is development too, so it counts against the same total.
+ *
+ * Parks deliberately do not, on either side of the ratio. Courtyard land was
+ * never for sale, so counting it would silently re-scale a gate that was
+ * measured against the 65 sellable plots of a district — a tier that reached
+ * 72.3% build-out would drop to 68.1% and fall under ANNEX_MIN_OCCUPANCY the
+ * moment parks existed, gating a player out of annexing for not buying an
+ * amenity. Development is what the city sells; a park is what it keeps.
+ */
 export const plotsUsed = (s: GameState): number =>
   s.homes + s.shops + s.industry + civicBuildings(s);
 
@@ -179,6 +200,54 @@ export const serviceReadings = (s: GameState): readonly ServiceReading[] =>
   }));
 
 /**
+ * Share of the city's homes within reach of a park, capped at all of them.
+ *
+ * Measured against homes rather than residents, which is the whole reason this
+ * term is worth having. Park land is fixed at 4 plots to 19 housing plots a
+ * district and a rezone adds none of it while multiplying residents by up to
+ * 75x — so a per-resident denominator would be satisfied at tier 0 by two parks
+ * and unreachable at tier 3 by every park in the city. Per home it means the
+ * same thing at every tier. An empty city reads as covered for the same reason
+ * an unserved one does: there is nobody it fails.
+ */
+export const recreationCoverage = (s: GameState): number => {
+  if (s.homes <= 0) return 1;
+  return Math.min(1, (s.parks * HOMES_PER_PARK) / s.homes);
+};
+
+/**
+ * One line of the happiness panel: something the city can be short of, what it
+ * is called when it is the binding one, and what it is worth.
+ *
+ * Recreation is not a `Service` — no staffing ramp, no 2x2 site, no population
+ * capacity, and a denominator in homes rather than residents — but it is a
+ * happiness term, and the panel has to be able to name it. This is the shape
+ * the two have in common and nothing more.
+ */
+export interface HappinessTerm {
+  readonly key: ServiceKey | 'recreation';
+  readonly coverLabel: string;
+  readonly weight: number;
+  readonly coverage: number;
+}
+
+/** Every term happiness is made of, services first. The weights sum to 1. */
+export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
+  ...SERVICES.map((service) => ({
+    key: service.key,
+    coverLabel: service.coverLabel,
+    weight: service.weight,
+    coverage: coverage(s, service),
+  })),
+  {
+    key: 'recreation' as const,
+    coverLabel: 'Parks per home',
+    weight: RECREATION_WEIGHT,
+    coverage: recreationCoverage(s),
+  },
+];
+
+/**
  * Weighted coverage less what is currently on fire, in [0, 1]. Where
  * `s.happiness` is heading.
  *
@@ -187,26 +256,28 @@ export const serviceReadings = (s: GameState): readonly ServiceReading[] =>
  * it is happening and stop hurting the moment it is out.
  */
 export const happinessTarget = (s: GameState): number => {
-  const covered = SERVICES.reduce(
-    (sum, service) => sum + service.weight * coverage(s, service),
-    0,
-  );
+  const covered =
+    SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0) +
+    RECREATION_WEIGHT * recreationCoverage(s);
   return Math.max(0, covered - FIRE_UNHAPPINESS * s.fires.length);
 };
 
 /**
- * The service holding happiness back hardest — the one whose shortfall costs
- * the most weighted points. Naming it is the entire value of the panel: a bare
- * percentage tells the player nothing they can act on.
+ * The term holding happiness back hardest — the one whose shortfall costs the
+ * most weighted points. Naming it is the entire value of the panel: a bare
+ * percentage tells the player nothing they can act on, and with a fourth term
+ * in the sum a panel that could only ever name a *service* would leave a
+ * park-less city stuck at 82% with three green lines and no explanation.
  */
-export const bindingService = (s: GameState): Service => {
-  let worst = SERVICES[0] as Service;
+export const bindingTerm = (s: GameState): HappinessTerm => {
+  const terms = happinessTerms(s);
+  let worst = terms[0] as HappinessTerm;
   let cost = -1;
-  for (const service of SERVICES) {
-    const lost = service.weight * (1 - coverage(s, service));
+  for (const term of terms) {
+    const lost = term.weight * (1 - term.coverage);
     if (lost > cost) {
       cost = lost;
-      worst = service;
+      worst = term;
     }
   }
   return worst;
@@ -390,6 +461,13 @@ export const shopCost = (s: GameState): number =>
 export const industryCost = (s: GameState): number =>
   INDUSTRY_BASE * INDUSTRY_GROWTH ** s.industry * priceModifier(s.demandI);
 
+/**
+ * Parks are not demand-priced either, and earn nothing at all. What they buy is
+ * the recreation term, which is 18% of happiness, which multiplies every penny
+ * the city does earn.
+ */
+export const parkCost = (s: GameState): number => PARK_BASE * PARK_GROWTH ** s.parks;
+
 /** Services are not demand-priced: nobody haggles over a hospital. */
 export const serviceCost = (s: GameState, service: Service): number =>
   service.base * CIVIC_GROWTH ** serviceCount(s, service.key);
@@ -434,6 +512,9 @@ export const canBuildShop = (s: GameState): boolean =>
 export const canBuildIndustry = (s: GameState): boolean =>
   s.industry < industryCapacity(s) && s.cash >= industryCost(s);
 
+export const canBuildPark = (s: GameState): boolean =>
+  s.parks < parkCapacity(s) && s.cash >= parkCost(s);
+
 export const canBuildService = (s: GameState, service: Service): boolean =>
   serviceCount(s, service.key) < serviceAllowed(s, service) && s.cash >= serviceCost(s, service);
 
@@ -465,6 +546,11 @@ export function homeBlocker(s: GameState): string | null {
   if (s.homes >= homeCapacity(s)) return 'No housing land left';
   if (s.happiness < HAPPINESS_MIN_BUILD) return 'Residents are leaving';
   return null;
+}
+
+/** Why the park button is off. Land is the only gate a park has. */
+export function parkBlocker(s: GameState): string | null {
+  return s.parks >= parkCapacity(s) ? 'No courtyards left' : null;
 }
 
 /** Why a civic button is off. Land runs out before the population gate does. */

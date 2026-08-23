@@ -7,7 +7,7 @@ import {
   TIERS,
 } from '../src/sim/config';
 import {
-  bindingService,
+  bindingTerm,
   canBuildHome,
   civicBuildings,
   covered,
@@ -95,18 +95,27 @@ describe('coverage', () => {
   });
 
   it('goes short again when the city rezones under it', () => {
-    const before = state({ homes: 19, ...staffed() });
+    // A district's four parks cover its nineteen homes outright, so this is a
+    // city that has everything: 1 is reachable only with the fourth term too.
+    const before = state({ homes: 19, parks: 4, ...staffed() });
     const after = { ...before, tier: 3 };
     expect(happinessTarget(before)).toBeCloseTo(1, 12);
     expect(happinessTarget(after)).toBeLessThan(1);
   });
 
-  /** The panel's whole value: which shortfall is costing the most right now. */
-  it('names the service holding happiness back', () => {
-    const s = state({ homes: 19, tier: 3, ...staffed({ police: 3, fire: 4 }) });
-    expect(bindingService(s).key).toBe('hospital');
+  /**
+   * The panel's whole value: which shortfall is costing the most right now.
+   * Recreation is one of the four now, so the panel can name it too — without
+   * that, a fully served city with no parks would sit at 82% behind three green
+   * lines and no explanation.
+   */
+  it('names the term holding happiness back', () => {
+    const s = state({ homes: 19, tier: 3, parks: 4, ...staffed({ police: 3, fire: 4 }) });
+    expect(bindingTerm(s).key).toBe('hospital');
     const policed = { ...s, hospitals: 9, police: 0 };
-    expect(bindingService(policed).key).toBe('police');
+    expect(bindingTerm(policed).key).toBe('police');
+    const served = { ...s, hospitals: 9, police: 9, fire: 9, parks: 0 };
+    expect(bindingTerm(served).key).toBe('recreation');
   });
 });
 
@@ -264,10 +273,29 @@ describe('happiness as a gate on housing', () => {
     expect(game.buildHome()).toBe(true);
   });
 
-  it('one hospital is always enough to lift the gate', () => {
-    expect(hospital.weight).toBeGreaterThanOrEqual(HAPPINESS_MIN_BUILD);
+  /**
+   * A hospital used to be worth 0.4 on its own and so cleared the 0.35 gate by
+   * itself. Recreation's 0.18 came out of the three service weights, which puts
+   * a hospital at 0.34 — a hair under. The tutorial still works and is still
+   * short, it is just two purchases rather than one: a hospital plus either the
+   * park the panel is about to name or the police station it names first. Both
+   * pairs clear the gate with room, and every one of them is cheaper than the
+   * hospital was.
+   */
+  it('needs two purchases to lift the gate, and names one of them', () => {
     const s = state({ homes: 12, ...staffed({ police: 0, fire: 0 }) });
     expect(happinessTarget(s)).toBeCloseTo(hospital.weight, 12);
+    expect(happinessTarget(s)).toBeLessThan(HAPPINESS_MIN_BUILD);
+
+    // The panel points at the biggest shortfall, which is the police station.
+    expect(bindingTerm(s).key).toBe('police');
+    const policed = { ...s, police: 1, policeStaff: 1 };
+    expect(happinessTarget(policed)).toBeGreaterThan(HAPPINESS_MIN_BUILD);
+
+    // And the cheapest fix, a single park, clears it too: five homes covered
+    // out of twelve is 0.42 of the recreation term.
+    const planted = { ...s, parks: 1 };
+    expect(happinessTarget(planted)).toBeGreaterThan(HAPPINESS_MIN_BUILD);
   });
 
   it('caps residential demand at whatever coverage has reached', () => {
@@ -416,6 +444,10 @@ describe('the tier arc', () => {
       hospitalStaff: 1,
       policeStaff: 1,
       fireStaff: 1,
+      // Recreation is tier-invariant, so the endgame squeeze is entirely on the
+      // three services: the parks that covered this land at tier 0 still cover
+      // it at tier 3.
+      parks: 4 * districts,
     });
     expect(happinessTarget(s)).toBeGreaterThan(HAPPINESS_MIN_BUILD);
   });

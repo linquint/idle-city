@@ -36,6 +36,14 @@ export interface GameState {
   homes: number;
   shops: number;
   industry: number;
+  /**
+   * Parks. One courtyard plot each, four to a district, no income at all.
+   *
+   * The only thing the city builds that never fronts a street: the interior of
+   * a deep block is land nothing else can use, so recreation costs the economy
+   * no frontage whatsoever.
+   */
+  parks: number;
   /** Civic buildings, one 2x2 site each. They earn nothing; they gate income,
    *  demand and — below HAPPINESS_MIN_BUILD — housing itself. */
   hospitals: number;
@@ -116,6 +124,7 @@ export function createState(now = Date.now()): GameState {
     homes: 0,
     shops: 0,
     industry: 0,
+    parks: 0,
     hospitals: 0,
     police: 0,
     fire: 0,

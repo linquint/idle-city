@@ -5,6 +5,7 @@ import {
   happinessTarget,
   homeCapacity,
   industryCapacity,
+  parkCapacity,
   serviceAllowed,
   shopCapacity,
 } from './economy';
@@ -112,6 +113,9 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // A v1 save has none of these; every one defaults to nothing built and no
     // demand, which is exactly the state a fresh city starts in.
     industry: count(r['industry']),
+    // A v3 save has no parks, which is exactly the state a city that never
+    // built one is in. Clamped to the land below, like every other count.
+    parks: count(r['parks']),
     // v2 called them clinics, schools and stations and stood them on single
     // residential plots. They are the same slot — the building the city buys to
     // raise happiness — so the counts carry across by weight rather than being
@@ -148,6 +152,7 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   state.homes = Math.min(state.homes, homeCapacity(state));
   state.shops = Math.min(state.shops, shopCapacity(state));
   state.industry = Math.min(state.industry, industryCapacity(state));
+  state.parks = Math.min(state.parks, parkCapacity(state));
 
   // A doctored save with 400 hospitals gets the one its population is allowed,
   // and a save carried over from a smaller district count never keeps a

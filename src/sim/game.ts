@@ -17,6 +17,7 @@ import {
   canAnnex,
   canBuildHome,
   canBuildIndustry,
+  canBuildPark,
   canBuildService,
   canBuildShop,
   canRezone,
@@ -31,6 +32,8 @@ import {
   income,
   industryCost,
   isBurning,
+  parkCost,
+  recreationCoverage,
   residents,
   resolvesAt,
   rezoneCost,
@@ -83,6 +86,7 @@ export interface AwayReport {
   homes: number;
   shops: number;
   industry: number;
+  parks: number;
   services: number;
   /**
    * What burned, and how it went.
@@ -102,6 +106,7 @@ interface AutoBuilt {
   homes: number;
   shops: number;
   industry: number;
+  parks: number;
   services: number;
 }
 
@@ -389,6 +394,15 @@ export class Game {
     return true;
   }
 
+  /** A park pays nothing back directly. What it buys is the recreation term. */
+  buildPark(): boolean {
+    const s = this.inner;
+    if (!canBuildPark(s)) return false;
+    s.cash -= parkCost(s);
+    s.parks++;
+    return true;
+  }
+
   /** Civic buildings take a 2x2 site and pay nothing back directly. */
   buildService(service: Service): boolean {
     const s = this.inner;
@@ -470,7 +484,7 @@ export class Game {
    */
   private autoDevelop(budget: number): AutoBuilt {
     const s = this.inner;
-    const built: AutoBuilt = { homes: 0, shops: 0, industry: 0, services: 0 };
+    const built: AutoBuilt = { homes: 0, shops: 0, industry: 0, parks: 0, services: 0 };
 
     for (let i = 0; i < budget; i++) {
       const options: Array<{ cost: number; buy: () => void }> = [];
@@ -514,6 +528,20 @@ export class Game {
           },
         });
       }
+      // Recreation is a happiness term like the other three, so a shortfall in
+      // it belongs in the same priority pool. Without this an away city would
+      // be capped at 0.82 by the one amenity auto-development could not see,
+      // and "stops an away city coming back at the happiness floor" would only
+      // be three-quarters true.
+      if (s.homes > 0 && recreationCoverage(s) < 1 && canBuildPark(s)) {
+        shortfalls.push({
+          cost: parkCost(s),
+          buy: () => {
+            s.parks++;
+            built.parks++;
+          },
+        });
+      }
 
       const pool = shortfalls.length > 0 ? shortfalls : options;
       const best = pool.reduce<{ cost: number; buy: () => void } | undefined>(
@@ -547,6 +575,7 @@ export class Game {
       homes: this.inner.homes,
       shops: this.inner.shops,
       industry: this.inner.industry,
+      parks: this.inner.parks,
       services: civicBuildings(this.inner),
       spend: this.autoSpend,
       started: this.firesStarted,
@@ -581,6 +610,7 @@ export class Game {
       homes: s.homes - before.homes,
       shops: s.shops - before.shops,
       industry: s.industry - before.industry,
+      parks: s.parks - before.parks,
       services: civicBuildings(s) - before.services,
       firesStarted: this.firesStarted - before.started,
       firesExtinguished: this.firesExtinguished - before.extinguished,
