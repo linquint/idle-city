@@ -43,6 +43,19 @@ canvas {
 
 /* ------------------------------------------------------------- chrome */
 
+/* The three blocks of chrome that sit straight on the canvas rather than on a
+   panel. They were legible against a fixed dusk sky; the day/night cycle takes
+   the background from 0x05080f at midnight to 0x46618a at noon, and 10px dim
+   text on that is a wash. A shadow rather than a plate: it disappears entirely
+   against the night sky and does the work only when there is a bright one. */
+.masthead,
+.hint,
+.fps {
+  text-shadow:
+    0 1px 2px rgba(5, 8, 15, 0.95),
+    0 0 5px rgba(5, 8, 15, 0.8);
+}
+
 .masthead {
   position: fixed;
   top: 0;
@@ -75,7 +88,10 @@ canvas {
   z-index: 3;
   font-size: 10px;
   line-height: 1;
-  color: #5a6a80;
+  /* An instrument has to stay readable against a midday sky as well as against
+     midnight, so it takes the same --dim the rest of the canvas chrome does
+     rather than the darker grey it started at. */
+  color: var(--dim);
   letter-spacing: 0.08em;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
@@ -88,7 +104,11 @@ canvas {
   z-index: 3;
   margin: 0;
   font-size: 10px;
-  color: #5a6a80;
+  /* Was #5a6a80, which is a quarter of a stop off the midday sky the cycle now
+     paints (0x46618a) and unreadable against it. --dim is the tagline's colour
+     directly above, so the hint stays the quietest thing on screen without
+     disappearing for half the day. */
+  color: var(--dim);
   letter-spacing: 0.08em;
   line-height: 1.8;
   pointer-events: none;
