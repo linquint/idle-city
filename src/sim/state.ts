@@ -1,4 +1,4 @@
-import { LEVELS, OCCUPANCY_FULL, START_CASH } from './config.ts';
+import { LEVELS, OCCUPANCY_FULL, START_CASH, TAX_NEUTRAL } from './config.ts';
 
 /**
  * The three zones the player builds in, and the only three that can burn.
@@ -55,7 +55,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /**
  * The entire game, in a handful of fields.
@@ -81,6 +81,24 @@ export interface GameState {
   homeLevels: LevelCohort;
   shopLevels: LevelCohort;
   industryLevels: LevelCohort;
+  /**
+   * Parcels of each zone holding one merged building, per LEVEL_FOOTPRINT.
+   *
+   * The second number a zone's land needs, and the reason capacity is counted in
+   * plots rather than buildings: `homes` says how many buildings there are and
+   * this says how much land they are standing on, because a level-2 building
+   * covers the two plots its merge consumed. `homes + mergedR` is the plots
+   * used, which is the quantity `homeCapacity` bounds.
+   *
+   * Not derivable from the cohorts, and the case that makes it so is a ruin: a
+   * merged building that is written off keeps both its plots — it is a boarded
+   * -up tower, not a boarded-up house — so the parcel stays merged while the
+   * cohort it was counted in does not. See `ParcelBook` for what the count
+   * indexes, and `Game.recover` for how such a ruin comes back.
+   */
+  mergedR: number;
+  mergedC: number;
+  mergedI: number;
   /**
    * Share of each zone's capacity that is actually filled, in [0, 1].
    *
@@ -140,6 +158,11 @@ export interface GameState {
   schools: number;
   universities: number;
   /**
+   * Transit depots. The fifth type on the 2x2 interleave, and the only civic
+   * building that earns rather than gates — see SERVICES.
+   */
+  depots: number;
+  /**
    * Share of each type's buildings that are actually staffed, in [0, 1].
    *
    * In the save because it is integrated, not derived: a hospital opened ten
@@ -152,6 +175,7 @@ export interface GameState {
   fireStaff: number;
   schoolStaff: number;
   universityStaff: number;
+  depotStaff: number;
   /**
    * Happiness, lagged behind the coverage it is chasing. Same reasoning as the
    * demand signals: the lag is the mechanic, so it has to survive a reload.
@@ -200,6 +224,21 @@ export interface GameState {
   districts: number;
   /** Lifetime earnings, for the ledger. */
   earned: number;
+  /**
+   * The tax step the city is on, an index into TAX_STEPS.
+   *
+   * Persisted policy, not a preference: it multiplies income and moves the
+   * happiness target, so a city reopened on a different rate from the one it was
+   * left on would earn a different amount for reasons the player never chose.
+   */
+  taxRate: number;
+  /**
+   * Fares off, coverage up, mood up. Persisted policy for the same reason the
+   * tax rate is: it moves income and happiness, so a city reopened on a
+   * different setting from the one it was left on would earn a different amount
+   * for reasons the player never chose.
+   */
+  freeTransport: boolean;
   /** When on, surplus cash is spent on the cheapest available plot, awake or away. */
   autoDevelop: boolean;
   /** Epoch ms of the last save, used to compute time away. */
@@ -217,6 +256,9 @@ export function createState(now = Date.now()): GameState {
     homeLevels: cohortOf(),
     shopLevels: cohortOf(),
     industryLevels: cohortOf(),
+    mergedR: 0,
+    mergedC: 0,
+    mergedI: 0,
     // An empty zone is neither full nor empty. Starting at OCCUPANCY_FULL means
     // the first house opens full rather than spending two minutes filling up,
     // and it is the value a loaded save defaults to for the same reason.
@@ -238,11 +280,13 @@ export function createState(now = Date.now()): GameState {
     fire: 0,
     schools: 0,
     universities: 0,
+    depots: 0,
     hospitalStaff: 0,
     policeStaff: 0,
     fireStaff: 0,
     schoolStaff: 0,
     universityStaff: 0,
+    depotStaff: 0,
     // An empty city has nobody to be unhappy: coverage is a share of residents,
     // and the share of nobody is everybody. It lags down as the first homes fill.
     happiness: 1,
@@ -254,6 +298,8 @@ export function createState(now = Date.now()): GameState {
     fireHazard: 0,
     districts: 1,
     earned: 0,
+    taxRate: TAX_NEUTRAL,
+    freeTransport: false,
     autoDevelop: false,
     savedAt: now,
   };

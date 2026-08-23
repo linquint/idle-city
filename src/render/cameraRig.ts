@@ -1,5 +1,18 @@
 import * as THREE from 'three';
 
+/**
+ * What separates a click from a drag: the pointer came back up within this many
+ * pixels of where it went down, and within this many milliseconds.
+ *
+ * The rig owns pointer events, so a competing listener on the canvas would
+ * swallow the drags it is holding — every orbit starts as a pointerdown and
+ * would fire a click on the way out. Measuring it here instead means a drag
+ * stays a drag, and 5px is wide enough for a trackpad's wobble while staying
+ * far under the smallest orbit anyone makes on purpose.
+ */
+const CLICK_SLOP = 5;
+const CLICK_MS = 250;
+
 const MIN_PHI = 0.18;
 const MAX_PHI = 1.36;
 const MIN_RADIUS = 26;
@@ -26,6 +39,14 @@ const PAN_KEYS: Record<string, [number, number]> = {
 export class CameraRig {
   readonly target = new THREE.Vector3(0, 4, 0);
 
+  /**
+   * Called when a pointer went down and came back up in the same place, quickly
+   * — a click on the world rather than the start of an orbit.
+   *
+   * A hook rather than a second listener, for the reason CLICK_SLOP explains.
+   */
+  onClick: ((x: number, y: number) => void) | null = null;
+
   private theta = 0.72;
   private phi = 0.95;
   private radius = 92;
@@ -41,6 +62,11 @@ export class CameraRig {
   private interacting = false;
   private readonly pointers = new Map<number, { x: number; y: number }>();
   private pinch = 0;
+  /** Where and when the current gesture began, for the click test. */
+  private pressX = 0;
+  private pressY = 0;
+  private pressAt = 0;
+  private dragged = false;
   private readonly keys = new Set<string>();
   private readonly detach: Array<() => void> = [];
 
@@ -192,6 +218,11 @@ export class CameraRig {
       this.interacting = true;
       last = centre();
       this.pinch = last.spread;
+      // A second finger is never a click, however still it is held.
+      this.dragged = this.pointers.size > 1;
+      this.pressX = event.clientX;
+      this.pressY = event.clientY;
+      this.pressAt = event.timeStamp;
     });
 
     on(dom, 'pointermove', (event: PointerEvent) => {
@@ -211,14 +242,22 @@ export class CameraRig {
         this.orbit(dx, dy);
       }
       last = now;
+      if (Math.hypot(event.clientX - this.pressX, event.clientY - this.pressY) > CLICK_SLOP) {
+        this.dragged = true;
+      }
     });
 
     const release = (event: PointerEvent): void => {
+      const single = this.pointers.size === 1;
       this.pointers.delete(event.pointerId);
       if (dom.hasPointerCapture(event.pointerId)) dom.releasePointerCapture(event.pointerId);
       if (this.pointers.size === 0) this.interacting = false;
       else last = centre();
       this.pinch = 0;
+      if (event.type !== 'pointerup' || !single || this.dragged) return;
+      if (event.timeStamp - this.pressAt > CLICK_MS) return;
+      if (Math.hypot(event.clientX - this.pressX, event.clientY - this.pressY) > CLICK_SLOP) return;
+      this.onClick?.(event.clientX, event.clientY);
     };
     on(dom, 'pointerup', release);
     on(dom, 'pointercancel', release);

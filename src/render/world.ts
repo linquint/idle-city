@@ -44,7 +44,11 @@ export class World {
   private radius = 100;
   private fogDistance = -1;
 
+  /** The element the world is drawn into. Where a click's coordinates are measured from. */
+  readonly canvas: HTMLCanvasElement;
+
   constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,

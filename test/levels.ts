@@ -1,4 +1,4 @@
-import { LEVELS } from '../src/sim/config';
+import { LEVELS, MERGE_LEVEL } from '../src/sim/config';
 import { cohortOf, type GameState, type LevelCohort } from '../src/sim/state';
 
 /**
@@ -19,6 +19,17 @@ export function cohort(count: number, level = 0): LevelCohort {
 }
 
 /**
+ * How many parcels a cohort at one level has merged.
+ *
+ * The third field a level now implies. Every standing building at MERGE_LEVEL
+ * or above is one merged parcel, so a state built by hand has to say so or it
+ * describes a city whose land accounting disagrees with its skyline — which is
+ * exactly what the invariant sweep in cohorts.test.ts refuses.
+ */
+const mergedFor = (count: number, level: number): number =>
+  level >= MERGE_LEVEL ? Math.max(0, count) : 0;
+
+/**
  * The direct replacement for `{ homes: n, tier: l }`.
  *
  * Occupancy is pinned at 1 rather than left at its default, so `residents` is
@@ -28,18 +39,21 @@ export function cohort(count: number, level = 0): LevelCohort {
 export const housed = (homes: number, level = 0): Partial<GameState> => ({
   homes,
   homeLevels: cohort(homes, level),
+  mergedR: mergedFor(homes, level),
   occupancyR: 1,
 });
 
 export const trading = (shops: number, level = 0): Partial<GameState> => ({
   shops,
   shopLevels: cohort(shops, level),
+  mergedC: mergedFor(shops, level),
   occupancyC: 1,
 });
 
 export const making = (industry: number, level = 0): Partial<GameState> => ({
   industry,
   industryLevels: cohort(industry, level),
+  mergedI: mergedFor(industry, level),
   occupancyI: 1,
 });
 
@@ -53,4 +67,26 @@ export const built = (
   ...housed(homes, level),
   ...trading(shops, level),
   ...making(industry, level),
+});
+
+/**
+ * Everything a city can be covered by: happiness near 1 *and* education past
+ * every rung of LEVEL_EDUCATION, so promotion is gated only on what a test is
+ * actually about.
+ *
+ * Deliberately far more of each than any land could hold — `migrate` is what
+ * clamps a save, and a state built by hand for a test is not one.
+ */
+export const served = (): Partial<GameState> => ({
+  hospitals: 40,
+  police: 40,
+  fire: 40,
+  schools: 40,
+  universities: 40,
+  hospitalStaff: 1,
+  policeStaff: 1,
+  fireStaff: 1,
+  schoolStaff: 1,
+  universityStaff: 1,
+  parks: 200,
 });

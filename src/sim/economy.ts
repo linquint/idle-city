@@ -16,6 +16,9 @@ import {
   EXPORT_PER_DISTRICT,
   EXTINGUISH_MAX,
   EXTINGUISH_MIN,
+  FARE_PER_RIDER,
+  FREE_TRANSPORT_MOOD,
+  FREE_TRANSPORT_REACH,
   FIRE_SUPPRESSION,
   FIRE_UNHAPPINESS,
   HAPPINESS_FLOOR,
@@ -24,19 +27,21 @@ import {
   HOME_BASE,
   HOME_GROWTH,
   HOMES_PER_PARK,
-  INDUSTRIAL_OUTPUT,
   INDUSTRY_BASE,
   INDUSTRY_BONUS,
   INDUSTRY_GROWTH,
-  JOBS_PER_COMMERCIAL,
-  JOBS_PER_INDUSTRIAL,
-  LEVEL_CAPACITY,
+  INDUSTRY_JOBS,
+  INDUSTRY_OUTPUT,
+  LEVEL_EDUCATION,
+  LEVEL_FOOTPRINT,
+  LEVEL_HOUSING,
   LEVEL_SCALE,
   LEVEL_UP_HAPPINESS,
   LEVEL_UP_OCCUPANCY,
   LEVEL_UP_SECONDS,
   LEVELS,
   MAX_DISTRICTS,
+  MERGE_LEVEL,
   OCCUPANCY_DEMAND,
   OCCUPANCY_EMPTY,
   OCCUPANCY_FLOOR,
@@ -55,18 +60,24 @@ import {
   SHOP_BASE,
   SHOP_BONUS,
   SHOP_GROWTH,
-  SHOP_THROUGHPUT,
+  SHOP_JOBS,
+  SHOP_SUPPLY,
+  SHOP_TRIPS,
   SPEND_PER_RESIDENT,
-  SUPPLY_DRAW,
+  TAX_STEPS,
+  TRANSIT_LABOUR_DRAW,
+  TRANSIT_WORKFORCE,
   WORKING_SHARE,
   type Service,
 } from './config.ts';
+import { ZONE, type Zone } from './citygen.ts';
 import {
   BUILDABLE_COMMERCIAL_PER_DISTRICT,
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
+  parcelBook,
   UNIVERSITY_SITES_PER_DISTRICT,
 } from './layout.ts';
 import type { GameState, LevelCohort, ZoneKind } from './state.ts';
@@ -102,6 +113,27 @@ export const demandOf = (s: GameState, kind: ZoneKind): number =>
 
 export const driftOf = (s: GameState, kind: ZoneKind): number =>
   kind === 'home' ? s.driftR : kind === 'shop' ? s.driftC : s.driftI;
+
+/** Parcels of a zone holding one merged building. See `GameState.mergedR`. */
+export const mergedOf = (s: GameState, kind: ZoneKind): number =>
+  kind === 'home' ? s.mergedR : kind === 'shop' ? s.mergedC : s.mergedI;
+
+/**
+ * Plots a zone is standing on: one per building, plus one more for every parcel
+ * that has merged.
+ *
+ * The quantity every land number in this file is now counted in. A building
+ * count stopped being the same thing as a plot count the moment two buildings
+ * could become one, and the two diverge in opposite directions — merging drops
+ * the count and holds the land — so a readout that means "how full is the city"
+ * has to say plots or it will report a merging district emptying out.
+ */
+export const plotsOf = (s: GameState, kind: ZoneKind): number =>
+  countOf(s, kind) + mergedOf(s, kind);
+
+/** Which of the generator's zones a build kind draws its plots from. */
+export const zoneOf = (kind: ZoneKind): Zone =>
+  kind === 'home' ? ZONE.residential : kind === 'shop' ? ZONE.commercial : ZONE.industrial;
 
 /** The three zones, in the order the HUD and the renderer walk them. */
 export const ZONE_KINDS: readonly ZoneKind[] = ['home', 'shop', 'industry'];
@@ -171,16 +203,71 @@ export const effectiveOf = (s: GameState, kind: ZoneKind): number =>
   cohortScale(levelsOf(s, kind)) * occupancyOf(s, kind);
 
 /**
- * A zone's trading weight: how many of its buildings are actually open.
+ * Buildings of a cohort standing on a merged parcel — the top two levels.
  *
- * Per plot rather than per level. A shop employs a neighbourhood and serves the
- * trips its neighbourhood generates whatever is stacked on top of it, so the
- * number of shops a city needs grows with its population — which is what makes
- * a district's commercial land fillable and its annexation gate reachable.
+ * The invariant tying `mergedR` to the cohorts: a zone's standing merged
+ * buildings are `min(mergedR, standing)`, because merged parcels are the oldest
+ * slots and ruins are taken from the newest end. The two disagree only while a
+ * merged parcel is boarded up, which is what makes `mergedR` state of its own.
+ */
+export const mergedCohort = (levels: LevelCohort): number => {
+  let n = 0;
+  for (let l = MERGE_LEVEL; l < levels.length; l++) n += levels[l] ?? 0;
+  return n;
+};
+
+/** A cohort measured in plots — the land under it, not the count of it. */
+export const cohortFootprint = (levels: LevelCohort): number => {
+  let n = 0;
+  for (let l = 0; l < levels.length; l++) n += (levels[l] ?? 0) * (LEVEL_FOOTPRINT[l] ?? 1);
+  return n;
+};
+
+/**
+ * Plots a zone's *standing* buildings cover. Ruins are excluded, and they hold
+ * one plot each whatever they were: only a merged parcel holds two, and a ruin
+ * on one is counted by `plotsOf` through the merged parcel count instead.
+ */
+export const standingPlotsOf = (s: GameState, kind: ZoneKind): number =>
+  cohortFootprint(levelsOf(s, kind));
+
+/**
+ * A cohort measured against a per-level ladder — SHOP_JOBS, INDUSTRY_OUTPUT and
+ * their siblings. What the buildings are worth in whatever the ladder counts.
+ */
+export const cohortAgainst = (levels: LevelCohort, ladder: readonly number[]): number => {
+  let n = 0;
+  for (let l = 0; l < levels.length; l++) n += (levels[l] ?? 0) * (ladder[l] ?? 0);
+  return n;
+};
+
+/**
+ * What a zone's open buildings are worth against a per-level ladder.
+ *
+ * The ruins are already out — they hold no level, so no cohort counts them —
+ * and the empty share comes off, because a shop nobody is in serves nobody.
+ */
+export const openOf = (s: GameState, kind: ZoneKind, ladder: readonly number[]): number =>
+  cohortAgainst(levelsOf(s, kind), ladder) * occupancyOf(s, kind);
+
+/**
+ * A zone's trading weight: how much of its *land* is actually open.
+ *
+ * Per plot rather than per building, which is the same statement it always was
+ * and now needs saying differently. A shop employs a neighbourhood and serves
+ * the trips its neighbourhood generates whatever is stacked on top of it, so
+ * the number of shops a city needs grows with its population — that is what
+ * makes commercial land fillable and the annexation gate reachable. Counting
+ * buildings used to say that; since two shops can merge into one it says the
+ * opposite, and a merging high street would halve the city's jobs overnight.
  * Ruins are excluded and the empty share is taken off: neither trades.
+ *
+ * The per-level ladders in config.ts are this number spelled out a level at a
+ * time, and `openOf` is what reads them; this is the same quantity with the
+ * ladder held at one, which is what the plot counts and the HUD want.
  */
 export const activeOf = (s: GameState, kind: ZoneKind): number =>
-  standingOf(s, kind) * occupancyOf(s, kind);
+  standingPlotsOf(s, kind) * occupancyOf(s, kind);
 
 /**
  * The average level of the city's housing, in level-0 buildings.
@@ -188,9 +275,13 @@ export const activeOf = (s: GameState, kind: ZoneKind): number =>
  * The size term the demand model divides by. See `demandScale`.
  */
 export const cityScale = (s: GameState): number => {
-  const standing = cohortTotal(s.homeLevels);
-  if (standing <= 0) return 1;
-  return Math.max(1, cohortScale(s.homeLevels) / standing);
+  // Per plot, not per building. A merged tower is worth twice a plot's weight
+  // on both sides of this ratio, so measuring it per building would double the
+  // size term the moment a district merged — and DEMAND_SCALE was calibrated
+  // against a district's *land*, which merging does not change.
+  const plots = cohortFootprint(s.homeLevels);
+  if (plots <= 0) return 1;
+  return Math.max(1, cohortScale(s.homeLevels) / plots);
 };
 
 // ----------------------------------------------------------------- occupancy
@@ -284,12 +375,18 @@ export const promoteRate = (s: GameState, kind: ZoneKind): number =>
 /** Civic buildings, of every kind — the three that gate happiness and the two
  *  that gate levelling. */
 export const civicBuildings = (s: GameState): number =>
-  s.hospitals + s.police + s.fire + s.schools + s.universities;
+  s.hospitals + s.police + s.fire + s.schools + s.universities + s.depots;
 
 /**
- * Housing land. Civic buildings no longer come out of it: they stand on 2x2
- * sites reserved before the housing list is drawn, so the two can never collide
- * and this number does not move when a hospital opens.
+ * Housing land, in *plots*. Civic buildings no longer come out of it: they stand
+ * on 2x2 sites reserved before the housing list is drawn, so the two can never
+ * collide and this number does not move when a hospital opens.
+ *
+ * Plots, not buildings, and the distinction is the whole of the merging change.
+ * A district sells 24 residential plots however they are grouped; what varies is
+ * how many buildings stand on them, from 24 detached houses down to about 13
+ * once every pair that can merge has. Bounding buildings instead would let a
+ * merging district buy back the plots it had just consumed.
  */
 export const homeCapacity = (s: GameState): number =>
   s.districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT;
@@ -298,6 +395,43 @@ export const shopCapacity = (s: GameState): number =>
   s.districts * BUILDABLE_COMMERCIAL_PER_DISTRICT;
 export const industryCapacity = (s: GameState): number =>
   s.districts * BUILDABLE_INDUSTRIAL_PER_DISTRICT;
+
+/** A zone's plot capacity, through one key. */
+export const capacityOf = (s: GameState, kind: ZoneKind): number =>
+  kind === 'home' ? homeCapacity(s) : kind === 'shop' ? shopCapacity(s) : industryCapacity(s);
+
+/**
+ * Whether a zone has a plot free in the next open parcel.
+ *
+ * Buildings are laid down parcel by parcel and a merged parcel takes both of
+ * its plots with it, so "is there room" is exactly "have the plots run out" —
+ * `plotsOf` counts merged parcels twice, which is what makes this one
+ * comparison rather than a walk over the parcel list.
+ */
+export const hasFreePlot = (s: GameState, kind: ZoneKind): boolean =>
+  plotsOf(s, kind) < capacityOf(s, kind);
+
+/**
+ * Whether the next parcel of a zone could merge, given how many of its
+ * buildings have been standing at the level below since the pass began.
+ *
+ * Two conditions, and the second is the interesting one. There has to be an
+ * unmerged two-plot parcel left at all; and the two buildings on it have to be
+ * the ones ready to climb. Merging always takes the *next* pair, so the plots
+ * ahead of it in the list are unpairable singles that will never merge — they
+ * sit at the front holding level-1 buildings forever, and the pair behind them
+ * only climbs once there are enough level-1 buildings to cover both.
+ */
+export const canMergeParcel = (s: GameState, kind: ZoneKind, ready: number): boolean => {
+  const merged = mergedOf(s, kind);
+  const book = parcelBook(zoneOf(kind), s.districts);
+  if (merged >= book.pairs(s.districts)) return false;
+  return ready >= book.pairFront(merged) + 2;
+};
+
+/** Parcels of a zone that could ever merge. The ceiling on `mergedR`. */
+export const mergeCapacity = (s: GameState, kind: ZoneKind): number =>
+  parcelBook(zoneOf(kind), s.districts).pairs(s.districts);
 
 /**
  * Park land. Courtyard plots — the interior of a deep block — so it is the one
@@ -333,7 +467,7 @@ export const plotCapacity = (s: GameState): number =>
  * amenity. Development is what the city sells; a park is what it keeps.
  */
 export const plotsUsed = (s: GameState): number =>
-  s.homes + s.shops + s.industry + civicBuildings(s);
+  plotsOf(s, 'home') + plotsOf(s, 'shop') + plotsOf(s, 'industry') + civicBuildings(s);
 
 /**
  * Share of the city's plots with something on them.
@@ -390,7 +524,7 @@ export const residents = (s: GameState): number => population(s) * s.occupancyR;
 export const population = (s: GameState): number => {
   let people = 0;
   for (let l = 0; l < s.homeLevels.length; l++) {
-    people += (s.homeLevels[l] ?? 0) * (LEVEL_CAPACITY[l] ?? 0);
+    people += (s.homeLevels[l] ?? 0) * (LEVEL_HOUSING[l] ?? 0);
   }
   return people;
 };
@@ -404,6 +538,7 @@ export const serviceCount = (s: GameState, key: ServiceKey): number =>
   : key === 'police' ? s.police
   : key === 'fire' ? s.fire
   : key === 'school' ? s.schools
+  : key === 'transit' ? s.depots
   : s.universities;
 
 /** How much of a type's payroll is actually filled, in [0, 1]. See `staffStep`. */
@@ -412,6 +547,7 @@ export const staffing = (s: GameState, key: ServiceKey): number =>
   : key === 'police' ? s.policeStaff
   : key === 'fire' ? s.fireStaff
   : key === 'school' ? s.schoolStaff
+  : key === 'transit' ? s.depotStaff
   : s.universityStaff;
 
 /**
@@ -450,9 +586,49 @@ export const serviceAllowed = (s: GameState, service: Service): number =>
 export const serviceNeeded = (s: GameState, service: Service): number =>
   Math.ceil(population(s) / service.capacity);
 
-/** Residents a service actually reaches, staffing included. */
-export const covered = (s: GameState, service: Service): number =>
-  serviceCount(s, service.key) * staffing(s, service.key) * service.capacity;
+/**
+ * Residents a service actually reaches, staffing included.
+ *
+ * One special case, and it is the free-transport policy: the same depots reach
+ * a third further when nobody has to pay to board, because people ride when it
+ * is free. It belongs here rather than in a transit-only read so that the
+ * services panel, the coverage the labour term uses and the riders the fares
+ * are taken from all say the same number.
+ */
+export const covered = (s: GameState, service: Service): number => {
+  const reach = serviceCount(s, service.key) * staffing(s, service.key) * service.capacity;
+  return service.key === 'transit' && s.freeTransport ? reach * (1 + FREE_TRANSPORT_REACH) : reach;
+};
+
+/** The transit service, or undefined if the table is ever built without one. */
+export const TRANSIT = SERVICES.find((service) => service.key === 'transit');
+
+/** Share of the city's housing stock a transit network reaches, in [0, 1]. */
+export const transitCoverage = (s: GameState): number =>
+  TRANSIT ? coverage(s, TRANSIT) : 0;
+
+/**
+ * People actually on the buses: the network's reach, capped at who lives there.
+ *
+ * The one coverage measured against `residents` rather than `population`. Every
+ * other service is sized to the housing stock it stands among whether or not it
+ * is full — see `population` — but a fare is paid by somebody on a bus, and an
+ * empty district's depot carries nobody.
+ */
+export const riders = (s: GameState): number =>
+  TRANSIT ? Math.min(covered(s, TRANSIT), residents(s)) : 0;
+
+/**
+ * Fare income, per second, before tax.
+ *
+ * The first civic building in this game that earns anything at all. Every other
+ * one gates — coverage feeds happiness, or education decides how tall the city
+ * may build — so a reader arriving here with that rule in hand will assume the
+ * depot gates too, and it does not. Free transport takes this to exactly zero,
+ * which is the whole of what the policy costs.
+ */
+export const fareIncome = (s: GameState): number =>
+  s.freeTransport ? 0 : riders(s) * FARE_PER_RIDER;
 
 /**
  * Share of the population a service reaches, capped at everybody.
@@ -551,7 +727,12 @@ export const happinessTarget = (s: GameState): number => {
   const covered =
     HAPPINESS_SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0) +
     RECREATION_WEIGHT * recreationCoverage(s);
-  return Math.max(0, covered - FIRE_UNHAPPINESS * s.fires.length);
+  // The tax term joins the fire term as a *modifier* on earned coverage rather
+  // than as a fifth weight. The four weights sum to exactly 1 and go on doing
+  // so; what a tax rate changes is how the city feels about the coverage it has,
+  // which is a different statement from how much that coverage is worth.
+  const policy = taxStep(s).mood + (s.freeTransport ? FREE_TRANSPORT_MOOD : 0);
+  return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
 
 /**
@@ -573,6 +754,12 @@ export const bindingTerm = (s: GameState): HappinessTerm => {
     }
   }
   return worst;
+};
+
+/** The tax setting the city is on. Clamped, so a doctored save picks a real one. */
+export const taxStep = (s: GameState): (typeof TAX_STEPS)[number] => {
+  const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(s.taxRate)));
+  return TAX_STEPS[at] as (typeof TAX_STEPS)[number];
 };
 
 /**
@@ -702,7 +889,7 @@ export const exportMarket = (s: GameState): number =>
   EXPORT_BASE + EXPORT_PER_DISTRICT * (s.districts - 1);
 
 export const jobs = (s: GameState): number =>
-  activeOf(s, 'shop') * JOBS_PER_COMMERCIAL + activeOf(s, 'industry') * JOBS_PER_INDUSTRIAL;
+  openOf(s, 'shop', SHOP_JOBS) + openOf(s, 'industry', INDUSTRY_JOBS);
 
 /**
  * The imbalance that counts as "saturated", at the city's current level mix.
@@ -720,6 +907,34 @@ export const jobs = (s: GameState): number =>
 export const demandScale = (s: GameState): number => DEMAND_SCALE * cityScale(s);
 
 export const workers = (s: GameState): number => residents(s) * WORKING_SHARE;
+
+/**
+ * Workers an employer can actually hire: the labour force, plus the reach a
+ * transit network adds to it.
+ *
+ * The demand-side half of what a depot buys. A resident two districts from the
+ * nearest works is not labour that works can draw on, and a network is what
+ * turns them into it — so a covered city has up to a quarter more workers
+ * available than its population alone accounts for (TRANSIT_WORKFORCE).
+ */
+export const reachableWorkers = (s: GameState): number =>
+  workers(s) * (1 + TRANSIT_WORKFORCE * transitCoverage(s));
+
+/**
+ * Spare labour the network can deliver to a new employer.
+ *
+ * The term transport feeds into the cycle, and it is deliberately on the
+ * commercial and industrial side rather than on income: a district with people
+ * in it and nowhere for them to work is an argument for premises, and a bus
+ * route is what makes that argument reach. Zero for a job-rich city — a young
+ * one has no spare labour — and zero with no depots, so it turns on exactly
+ * when the two conditions that justify it are both true.
+ *
+ * Multiplied by the coverage as well as counted through it, because the network
+ * has to reach the *employer* too, not only the worker.
+ */
+export const labourReach = (s: GameState): number =>
+  Math.max(0, reachableWorkers(s) - jobs(s)) * transitCoverage(s) * TRANSIT_LABOUR_DRAW;
 
 export interface DemandTargets {
   readonly r: number;
@@ -742,13 +957,23 @@ export interface DemandTargets {
  */
 export const demandTargets = (s: GameState): DemandTargets => {
   const scale = demandScale(s);
-  const shops = activeOf(s, 'shop');
-  const industry = activeOf(s, 'industry');
   return {
-    r: Math.min(s.happiness, clampDemand((jobs(s) - workers(s)) / scale)),
-    c: clampDemand((residents(s) * SPEND_PER_RESIDENT - shops * SHOP_THROUGHPUT) / scale),
+    // Against the workers an employer can reach rather than the raw labour
+    // force: a network that has already put people within reach of a job has
+    // met some of the demand another house would have met.
+    r: Math.min(s.happiness, clampDemand((jobs(s) - reachableWorkers(s)) / scale)),
+    c: clampDemand(
+      (residents(s) * SPEND_PER_RESIDENT -
+        openOf(s, 'shop', SHOP_TRIPS) +
+        labourReach(s)) /
+        scale,
+    ),
     i: clampDemand(
-      (shops * SUPPLY_DRAW + exportMarket(s) - industry * INDUSTRIAL_OUTPUT) / scale,
+      (openOf(s, 'shop', SHOP_SUPPLY) +
+        exportMarket(s) -
+        openOf(s, 'industry', INDUSTRY_OUTPUT) +
+        labourReach(s)) /
+        scale,
     ),
   };
 };
@@ -777,12 +1002,22 @@ export const priceModifier = (d: number): number => {
   return bounded >= 0 ? 1 - PRICE_DISCOUNT_MAX * bounded : 1 + PRICE_SURCHARGE_MAX * -bounded;
 };
 
+/**
+ * Prices compound over *plots taken*, not buildings owned.
+ *
+ * Identical to the old curve for a city that has never merged, and it has to be
+ * — every constant in this file was calibrated against "what filling a
+ * district's 24 plots costs". Compounding over the building count instead would
+ * make every merge a discount on the next purchase: two houses become one, the
+ * exponent drops by one, and a city that had consumed exactly as much land as
+ * before would find housing cheaper for having grown.
+ */
 export const homeCost = (s: GameState): number =>
-  HOME_BASE * HOME_GROWTH ** s.homes * priceModifier(s.demandR);
+  HOME_BASE * HOME_GROWTH ** plotsOf(s, 'home') * priceModifier(s.demandR);
 export const shopCost = (s: GameState): number =>
-  SHOP_BASE * SHOP_GROWTH ** s.shops * priceModifier(s.demandC);
+  SHOP_BASE * SHOP_GROWTH ** plotsOf(s, 'shop') * priceModifier(s.demandC);
 export const industryCost = (s: GameState): number =>
-  INDUSTRY_BASE * INDUSTRY_GROWTH ** s.industry * priceModifier(s.demandI);
+  INDUSTRY_BASE * INDUSTRY_GROWTH ** plotsOf(s, 'industry') * priceModifier(s.demandI);
 
 /**
  * Parks are not demand-priced either, and earn nothing at all. What they buy is
@@ -813,23 +1048,33 @@ export const income = (s: GameState): number => {
   const shops = effectiveOf(s, 'shop') * (1 - alight(s, 'shop'));
   const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry'));
   return (
-    people *
-    RENT *
-    (1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (s.districts - 1)) *
-    incomeMultiplier(s)
+    (people *
+      RENT *
+      (1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (s.districts - 1)) *
+      incomeMultiplier(s) +
+      // Fares. Outside the bracket above rather than inside it, because they
+      // are not rent: a fare does not scale with the shop multiplier or the
+      // district bonus, and it is taken from the people on the buses rather
+      // than from the people in the houses. It *is* taxed, like everything else
+      // the city takes in.
+      fareIncome(s)) *
+    // The tax rate multiplies the whole ledger, which is why the happiness it
+    // costs is worth more than it looks: happiness multiplies this same line
+    // through `incomeMultiplier`, so the two terms compound against each other.
+    taxStep(s).income
   );
 };
 
 // ------------------------------------------------------------------ can-build
 
 export const canBuildHome = (s: GameState): boolean =>
-  s.homes < homeCapacity(s) && s.happiness >= HAPPINESS_MIN_BUILD && s.cash >= homeCost(s);
+  hasFreePlot(s, 'home') && s.happiness >= HAPPINESS_MIN_BUILD && s.cash >= homeCost(s);
 
 export const canBuildShop = (s: GameState): boolean =>
-  s.shops < shopCapacity(s) && s.cash >= shopCost(s);
+  hasFreePlot(s, 'shop') && s.cash >= shopCost(s);
 
 export const canBuildIndustry = (s: GameState): boolean =>
-  s.industry < industryCapacity(s) && s.cash >= industryCost(s);
+  hasFreePlot(s, 'industry') && s.cash >= industryCost(s);
 
 export const canBuildPark = (s: GameState): boolean =>
   s.parks < parkCapacity(s) && s.cash >= parkCost(s);
@@ -877,8 +1122,66 @@ export function annexBlocker(s: GameState): string | null {
  * saying, null when it is only a matter of money.
  */
 export function homeBlocker(s: GameState): string | null {
-  if (s.homes >= homeCapacity(s)) return 'No housing land left';
+  if (!hasFreePlot(s, 'home')) return 'No housing land left';
   if (s.happiness < HAPPINESS_MIN_BUILD) return 'Residents are leaving';
+  return null;
+}
+
+/**
+ * What one building of a kind and level adds to the ledger per second, holding
+ * the rest of the city exactly as it is.
+ *
+ * Marginal, and it has to be: the three zones earn in two different ways. A
+ * home earns rent from the people in it; a shop or a works earns nothing of its
+ * own and multiplies what the homes earn. Quoting a shop's "income" as a share
+ * of a multiplier would be true and useless, so this is what taking the
+ * building away would cost — the number a player can actually act on.
+ *
+ * Every term but the level is city-wide, which is why the inspector says so.
+ */
+export const buildingIncome = (s: GameState, kind: ZoneKind, level: number): number => {
+  if (level < 0) return 0;
+  const mood = incomeMultiplier(s);
+  if (kind === 'home') {
+    const bonuses =
+      1 +
+      SHOP_BONUS * effectiveOf(s, 'shop') +
+      INDUSTRY_BONUS * effectiveOf(s, 'industry') +
+      DISTRICT_BONUS * (s.districts - 1);
+    return (LEVEL_HOUSING[level] ?? 0) * s.occupancyR * RENT * bonuses * mood;
+  }
+  const share = kind === 'shop' ? SHOP_BONUS : INDUSTRY_BONUS;
+  return (
+    residents(s) * RENT * share * (LEVEL_SCALE[level] ?? 1) * occupancyOf(s, kind) * mood
+  );
+};
+
+/**
+ * Why one building is not climbing, phrased for the inspector.
+ *
+ * Same shape as `annexBlocker` and `homeBlocker`: a string when there is a
+ * reason worth saying, null when the building is simply waiting its turn in the
+ * promotion wave. Ordered by how permanent the answer is, so the one thing a
+ * player can never fix comes first — a plot with no neighbour is capped at the
+ * level below MERGE_LEVEL forever, and saying "needs 60% education" to such a
+ * building would be a lie of omission.
+ */
+export function promotionBlocker(
+  s: GameState,
+  kind: ZoneKind,
+  level: number,
+  /** Plots in this building's parcel. One means it can never merge. */
+  parcelPlots: number,
+): string | null {
+  if (level < 0) return 'Abandoned';
+  if (level >= LEVELS - 1) return 'At its top level';
+  if (level + 1 >= MERGE_LEVEL && parcelPlots < 2) return 'No neighbour to merge with';
+  const taught = LEVEL_EDUCATION[level + 1] ?? 0;
+  if (educationCoverage(s) < taught) {
+    return `Needs ${Math.round(taught * 100)}% education`;
+  }
+  if (occupancyOf(s, kind) < LEVEL_UP_OCCUPANCY) return 'Too empty to expand';
+  if (s.happiness < LEVEL_UP_HAPPINESS) return 'City is too unhappy';
   return null;
 }
 

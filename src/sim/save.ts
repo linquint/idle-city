@@ -1,4 +1,13 @@
-import { LEVELS, MAX_ACTIVE_FIRES, MAX_DISTRICTS, OCCUPANCY_FULL, SERVICES } from './config';
+import {
+  LEVELS,
+  MAX_ACTIVE_FIRES,
+  MAX_DISTRICTS,
+  MERGE_LEVEL,
+  OCCUPANCY_FULL,
+  SERVICES,
+  TAX_NEUTRAL,
+  TAX_STEPS,
+} from './config';
 import {
   burnableOf,
   clampDemand,
@@ -6,6 +15,8 @@ import {
   happinessTarget,
   homeCapacity,
   industryCapacity,
+  mergeCapacity,
+  mergedCohort,
   parkCapacity,
   serviceAllowed,
   shopCapacity,
@@ -20,16 +31,17 @@ import {
   type LevelCohort,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v5';
+export const SAVE_KEY = 'idle-city/save/v6';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v5 miss falls back through
+ * new build has not agreed to lose their city — so a v6 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v5',
   'idle-city/save/v4',
   'idle-city/save/v3',
   'idle-city/save/v2',
@@ -129,6 +141,85 @@ function migrateFires(raw: unknown, state: GameState): Fire[] {
 }
 
 /**
+ * Makes one zone's counts, cohorts, parcels and land agree, in that order of
+ * authority.
+ *
+ * Four numbers describe a zone now — how many buildings, how many are boarded
+ * up, what levels they stand at, and how many of its parcels have merged — and
+ * a save can arrive with them disagreeing in any direction: it may predate
+ * parcels entirely, it may have been edited, or it may describe a city taller
+ * than the land can now carry. The rules, in the order they are applied:
+ *
+ *   - a standing building above MERGE_LEVEL - 1 needs a two-plot parcel, and a
+ *     district only offers about ten of them per zone. Anything the cohorts
+ *     claim beyond that is demoted, tallest first;
+ *   - the parcel count then follows the cohorts. A v5 save carries none and its
+ *     towers are believed, which is what opens it with its skyline intact;
+ *   - a parcel with no standing building on it is a boarded-up merged building,
+ *     which only exists once nothing unmerged is still standing. A save claiming
+ *     more than that loses the surplus;
+ *   - and the land is the hard bound: `count + merged` plots, against the zone's
+ *     plot capacity. A city that no longer fits sheds buildings from the newest
+ *     end, exactly as `Game.demolish` does.
+ */
+interface ZoneFit {
+  count: number;
+  abandoned: number;
+  levels: LevelCohort;
+  merged: number;
+}
+
+function fitZone(
+  count: number,
+  abandoned: number,
+  raw: unknown,
+  tier: number,
+  wish: number,
+  capacity: number,
+  pairs: number,
+): ZoneFit {
+  // Pre-clamped so the shed loop below is bounded by the land rather than by
+  // whatever number a doctored save put in the field — and clamped *before* the
+  // cohort is built, since the cohort is reconciled to the standing stock and a
+  // stock of a billion would build one that agreed with nothing afterwards.
+  const held = Math.min(count, capacity);
+  const lost = Math.min(abandoned, held);
+  const levels = migrateCohort(raw, held - lost, tier);
+  const zone: ZoneFit = { count: held, abandoned: lost, levels, merged: 0 };
+
+  let over = mergedCohort(levels) - pairs;
+  for (let l = LEVELS - 1; l >= MERGE_LEVEL && over > 0; l--) {
+    const take = Math.min(over, levels[l] ?? 0);
+    levels[l] = (levels[l] ?? 0) - take;
+    levels[MERGE_LEVEL - 1] = (levels[MERGE_LEVEL - 1] ?? 0) + take;
+    over -= take;
+  }
+
+  const settle = (): void => {
+    const standing = cohortTotal(zone.levels);
+    const held = mergedCohort(zone.levels);
+    let merged = Math.max(held, Math.min(wish, pairs, zone.count));
+    if (merged > held && standing > held) merged = held;
+    zone.merged = merged;
+  };
+
+  settle();
+  while (zone.count + zone.merged > capacity && zone.count > 0) {
+    if (zone.abandoned > 0) zone.abandoned--;
+    else {
+      for (let l = 0; l < LEVELS; l++) {
+        if ((zone.levels[l] ?? 0) <= 0) continue;
+        zone.levels[l] = (zone.levels[l] ?? 0) - 1;
+        break;
+      }
+    }
+    zone.count--;
+    settle();
+  }
+  return zone;
+}
+
+/**
  * Rebuilds a state from untrusted JSON. Anything missing, malformed or out of
  * range is clamped rather than rejected: a save that has fallen behind a
  * balance change should still open, just legally.
@@ -158,6 +249,14 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     homeLevels: cohortOf(),
     shopLevels: cohortOf(),
     industryLevels: cohortOf(),
+    // Zero, and then reconciled below rather than trusted. A save older than v6
+    // has no parcels at all — but a v5 city of towers has buildings that a v6
+    // city could only have got by merging, so leaving these at zero would open
+    // it with its skyline intact and its land accounting a level behind. See
+    // the reconciliation after the capacity clamps.
+    mergedR: count(r['mergedR']),
+    mergedC: count(r['mergedC']),
+    mergedI: count(r['mergedI']),
     // Not zero. A save carrying no occupancy at all is every save written
     // before this version, and zero would read as a city in the middle of
     // being abandoned the instant it opened — the vacancy clock would start on
@@ -201,11 +300,15 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // built one is in.
     schools: count(version >= 5 ? r['schools'] : undefined),
     universities: count(r['universities']),
+    // A save older than v6 has no transport at all, which is the state a city
+    // that has never opened a depot is in.
+    depots: count(r['depots']),
     hospitalStaff: share(r['hospitalStaff'], 0),
     policeStaff: share(r['policeStaff'], 0),
     fireStaff: share(r['fireStaff'], 0),
     schoolStaff: share(r['schoolStaff'], 0),
     universityStaff: share(r['universityStaff'], 0),
+    depotStaff: share(r['depotStaff'], 0),
     // Filled in below, once the counts it is computed from are legal.
     happiness: 0,
     demandR: demand(r['demandR']),
@@ -220,6 +323,15 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     fireHazard: Math.max(0, num(r['fireHazard'], 0)),
     districts,
     earned: Math.max(0, num(r['earned'], 0)),
+    // Policy, defaulted to neutral. A save older than v6 was played on a build
+    // that had no rate at all, and neutral is exactly what it was earning at.
+    taxRate: Math.max(
+      0,
+      Math.min(TAX_STEPS.length - 1, Math.floor(num(r['taxRate'], TAX_NEUTRAL))),
+    ),
+    // Off, like every other policy a save may predate. Free transport is the
+    // one setting that would silently change what a reopened city earns.
+    freeTransport: r['freeTransport'] === true,
     autoDevelop: r['autoDevelop'] === true,
     savedAt: num(r['savedAt'], now),
   };
@@ -228,24 +340,31 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // population, so homes have to be legal before it can be trusted. Civic
   // buildings no longer take housing land, so unlike v2 the order is this way
   // round — there is no zone left for the two to fight over.
-  state.homes = Math.min(state.homes, homeCapacity(state));
-  state.shops = Math.min(state.shops, shopCapacity(state));
-  state.industry = Math.min(state.industry, industryCapacity(state));
+  //
+  // Against the *plot* capacities, which is the v6 change: a building count on
+  // its own no longer says how much land a zone has taken, so what is bounded is
+  // `count + merged` and `fitZone` is what bounds it. Write-offs and cohorts go
+  // through the same call, because all four numbers constrain each other.
   state.parks = Math.min(state.parks, parkCapacity(state));
 
-  // Write-offs cannot outnumber the buildings they are write-offs of, and the
-  // cohorts are then reconciled to what is left standing. This order is forced:
-  // `standing` is `count - abandoned`, so both have to be legal first.
-  state.abandonedR = Math.min(state.abandonedR, state.homes);
-  state.abandonedC = Math.min(state.abandonedC, state.shops);
-  state.abandonedI = Math.min(state.abandonedI, state.industry);
-  state.homeLevels = migrateCohort(r['homeLevels'], state.homes - state.abandonedR, tier);
-  state.shopLevels = migrateCohort(r['shopLevels'], state.shops - state.abandonedC, tier);
-  state.industryLevels = migrateCohort(
-    r['industryLevels'],
-    state.industry - state.abandonedI,
-    tier,
-  );
+  const fitted = [
+    fitZone(state.homes, state.abandonedR, r['homeLevels'], tier, state.mergedR, homeCapacity(state), mergeCapacity(state, 'home')),
+    fitZone(state.shops, state.abandonedC, r['shopLevels'], tier, state.mergedC, shopCapacity(state), mergeCapacity(state, 'shop')),
+    fitZone(state.industry, state.abandonedI, r['industryLevels'], tier, state.mergedI, industryCapacity(state), mergeCapacity(state, 'industry')),
+  ] as const;
+  const [home, shop, works] = fitted;
+  state.homes = home.count;
+  state.abandonedR = home.abandoned;
+  state.homeLevels = home.levels;
+  state.mergedR = home.merged;
+  state.shops = shop.count;
+  state.abandonedC = shop.abandoned;
+  state.shopLevels = shop.levels;
+  state.mergedC = shop.merged;
+  state.industry = works.count;
+  state.abandonedI = works.abandoned;
+  state.industryLevels = works.levels;
+  state.mergedI = works.merged;
 
   // A doctored save with 400 hospitals gets the one its population is allowed,
   // and a save carried over from a smaller district count never keeps a
@@ -256,6 +375,7 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     else if (service.key === 'police') state.police = Math.min(state.police, allowed);
     else if (service.key === 'fire') state.fire = Math.min(state.fire, allowed);
     else if (service.key === 'school') state.schools = Math.min(state.schools, allowed);
+    else if (service.key === 'transit') state.depots = Math.min(state.depots, allowed);
     else state.universities = Math.min(state.universities, allowed);
   }
 

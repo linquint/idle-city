@@ -17,6 +17,10 @@ export const PALETTE = {
   tile: 0x8b5c42,
   parapet: 0x2e3e55,
   shop: 0x27364c,
+  // Shopfront dressing: a canvas canopy at street level or a sign fin above the
+  // roofline. Warm and pale against the dark shop blue, so a parade of shops
+  // reads as a parade from the play camera rather than as one long block.
+  awning: 0xb9c2cf,
   sodium: 0xf0a64b,
   // Zone overlay (the Z key). Distinct at dusk and distinct from each other,
   // which matters more here than fitting the city's own palette.
@@ -28,6 +32,9 @@ export const PALETTE = {
   industry: 0x232d3d,
   industryRoof: 0x46566f,
   stack: 0x54637c,
+  // Plant equipment: vents, hoppers and housings on an industrial roof. A shade
+  // off the stack it stands beside, so the two read as two things.
+  vent: 0x3c4a60,
   // Civic buildings span 2x2 plots, so unlike the rest of the city they can
   // afford a silhouette each. Roof colour is the second signal, not the only one.
   hospital: 0xd8dee8,
@@ -42,6 +49,14 @@ export const PALETTE = {
   schoolRoof: 0x8d7f63,
   university: 0xd6c9a8,
   universityRoof: 0x9a7f4e,
+  // Transport. The depot is a shed and an apron rather than a civic slab, and
+  // the buses that leave it wear the same colour so the two read as one system.
+  depot: 0x3d5a52,
+  // Not another teal: the hospital's roof is mint and the two 2x2 sheds would
+  // read as the same building from the play camera. A transport livery instead
+  // — the one hue nothing else in the city wears.
+  depotRoof: 0xc2d24f,
+  bus: 0x5f8f5a,
   // Zoned land nobody will ever build on: the interior of a deep block, and the
   // civic sites still standing empty. Drawn, or the blocks read as holes.
   courtyard: 0x5b7f57,
@@ -60,6 +75,9 @@ export const PALETTE = {
   // burning roof has to be the thing you look at first.
   flame: 0xff7a2e,
   flameGlow: 0xff4a1c,
+  // The selection outline. Deliberately not a colour anything else in the city
+  // uses: it has to read as chrome laid over the world rather than as part of it.
+  select: 0xffffff,
   // Demand overlay (the Z key, second press). Green where a discount is live,
   // red where the zone is oversupplied, grey at the balance point.
   demandHigh: 0x5fd08a,

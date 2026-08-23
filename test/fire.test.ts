@@ -162,9 +162,15 @@ describe('ignition is reproducible', () => {
     // That leaves 72% of the base rate over 622 buildings, about 22 fires an
     // hour. Every ignition attempt costs exactly three draws, so the cursor is
     // the fire history in one number. Measured: 22 ignitions either way, gap 0.
+    //
+    // The counts moved when merging arrived and the shape did not. A top-level
+    // building stands on two plots, so the same 622 buildings need far more land
+    // than 21 districts hold — and the same 5,400 residents come from 9 homes
+    // rather than 22. Commerce and industry carry the building count instead,
+    // which is what keeps the ignition rate exactly where it was.
     const patch = (): Partial<GameState> => ({
-      districts: 21,
-      ...built(22, 400, 200, 3),
+      districts: 49,
+      ...built(9, 473, 140, 3),
       occupancyR: 0.7,
       occupancyC: 0.7,
       occupancyI: 0.7,
@@ -184,7 +190,7 @@ describe('ignition is reproducible', () => {
 
     const ignitions = (g: Game): number => g.state.fireCursor / 3;
     expect(ignitions(watched)).toBeGreaterThan(10);
-    expect(away.state.homes).toBe(22);
+    expect(away.state.homes).toBe(9);
     expect(away.state.homeLevels).toEqual(watched.state.homeLevels);
     const gap = Math.abs(ignitions(away) - ignitions(watched));
     expect(gap).toBeLessThanOrEqual(Math.max(1, ignitions(watched) * 0.01));

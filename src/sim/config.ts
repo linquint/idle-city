@@ -112,19 +112,60 @@ export const ZONE_SHARE = {
 export const MAX_DISTRICTS = 49;
 
 /**
- * Residents one home houses, per building level.
+ * Residents one *plot* of housing holds, per building level.
  *
  * The four numbers the old global rezoning tiers carried, kept exactly: a
  * level-0 house holds 4, an apartment block 16, a tower 70, an arcology 300.
  * Keeping them means every constant that was solved against those capacities —
- * RENT against the opening minute, WORKING_SHARE against the labour market —
- * still means what it meant. What changed is *who* holds them: a level is a
- * property of a cohort of buildings now, not of the whole city at once.
+ * RENT against the opening minute, WORKING_SHARE against the labour market,
+ * LEVEL_EDUCATION against what a district of towers holds — still means what it
+ * meant.
+ *
+ * Per plot, and that qualifier is what merging cost this comment. A tower
+ * covers two plots (LEVEL_FOOTPRINT), so the *building* holds 140 and the land
+ * under it still holds 70 a plot. Reading these as per-building instead would
+ * halve the population of every merged district, which is not a small change to
+ * one number: it is a change to the denominator of every coverage in the game.
+ * Measured, it lets a district of towers be covered by schools alone and takes
+ * the top of the skyline away from the university. See LEVEL_HOUSING.
  */
 export const LEVEL_CAPACITY = [4, 16, 70, 300] as const;
 
 /** How many levels a building can climb through. */
 export const LEVELS = LEVEL_CAPACITY.length;
+
+/**
+ * Plots a building covers at each level.
+ *
+ * The two ones and the two twos are the whole of the merging mechanic: levels 0
+ * and 1 stand on a single plot, climbing to level 2 merges a building with its
+ * neighbour, and level 3 grows upward on that same footprint. It stops at two
+ * because two is what the land offers — see `parcelOrder` in layout.ts, which
+ * carries the measurement. A [1, 1, 2, 4] ladder was measured and is not
+ * buildable: a district holds 0.0 residential quads.
+ */
+export const LEVEL_FOOTPRINT = [1, 1, 2, 2] as const;
+
+/**
+ * The first level that stands on a merged parcel.
+ *
+ * Derived rather than typed, so the ladder above is the only place the shape of
+ * the mechanic is stated. Promotion *to* this level is the merge; everything
+ * above it grows on the footprint the merge bought.
+ */
+export const MERGE_LEVEL = LEVEL_FOOTPRINT.findIndex((f) => f > 1);
+
+/**
+ * Residents one *building* holds at each level: its plots times what a plot of
+ * that level holds.
+ *
+ * Derived rather than typed for the same reason LEVEL_SCALE is: the ladder and
+ * the footprint are each stated once, and a change to either cannot leave the
+ * other behind.
+ */
+export const LEVEL_HOUSING = LEVEL_CAPACITY.map(
+  (c, l) => c * (LEVEL_FOOTPRINT[l] ?? 1),
+) as readonly number[];
 
 /**
  * What a building at each level *earns*, in level-0 buildings.
@@ -147,12 +188,31 @@ export const LEVELS = LEVEL_CAPACITY.length;
  * A district still needs more shops as its towers fill, which is what fills the
  * land, and the land filling is what makes annexation reachable.
  *
- * Derived from LEVEL_CAPACITY rather than typed out, so the two can never drift.
+ * Derived from LEVEL_CAPACITY rather than typed out, so the two can never drift,
+ * and multiplied by the footprint for the same reason LEVEL_HOUSING is: this is
+ * what one *building* earns, and a merged one is standing on two plots.
  */
-export const LEVEL_SCALE = LEVEL_CAPACITY.map((c) => c / LEVEL_CAPACITY[0]) as readonly number[];
+export const LEVEL_SCALE = LEVEL_CAPACITY.map(
+  (c, l) => (c / LEVEL_CAPACITY[0]) * (LEVEL_FOOTPRINT[l] ?? 1),
+) as readonly number[];
 
 /** What the zoning readout calls a level, and the verb on the build button. */
 export const LEVEL_NAMES = ['detached housing', 'apartments', 'towers', 'arcologies'] as const;
+
+/**
+ * What each zone calls its levels.
+ *
+ * Names rather than numbers, because "retail park" says what a level-2 shop is
+ * and "level 2" says only that it is above level 1. Commerce and industry climb
+ * the same four rungs housing does and merge at the same one, so a level-2 shop
+ * is a pair of shopfronts knocked together and a level-2 works is a plant that
+ * has taken the yard next door — which is what these names are trying to say.
+ */
+export const ZONE_LEVEL_NAMES = {
+  home: LEVEL_NAMES,
+  shop: ['corner shops', 'high street', 'retail park', 'exchange'],
+  industry: ['workshops', 'factory', 'plant', 'refinery'],
+} as const;
 
 // --------------------------------------------------------------- occupancy
 
@@ -556,6 +616,34 @@ export const JOBS_PER_COMMERCIAL = 8;
 export const JOBS_PER_INDUSTRIAL = 20;
 
 /**
+ * What one commercial or industrial *building* is worth to the labour market
+ * and to the goods cycle at each level.
+ *
+ * The commerce-and-industry answer to LEVEL_CAPACITY, and the ladder is the
+ * footprint rather than the income scale. That is not a shortcut; it is the only
+ * ladder that survives the two measurements in LEVEL_SCALE. Scaling trips with
+ * *capacity* means a level-2 shop serves 17.5x the trade, the city needs 17.5x
+ * fewer shops, commercial land can never be filled and the annexation gate can
+ * never be reached — measured, auto-develop stalled at 7 shops of 31. Scaling
+ * with footprint says the honest thing instead: a retail park is two shopfronts
+ * knocked together, so it employs two shopfronts' worth and serves two
+ * shopfronts' worth of trips.
+ *
+ * The consequence worth stating plainly, because it is what keeps ZONE_SHARE
+ * true: jobs, trips, supply and output are all constant *per plot* at every
+ * level. Merging changes how many buildings a district holds and never how much
+ * land they cover, so the tier-0 equilibrium 14R = 8C + 20I is the equilibrium
+ * at every level, not just the first. What levels buy commerce and industry is
+ * LEVEL_SCALE — a retail park earns 17.5x a corner shop's keep per plot — and
+ * the land still fills, which is the pair of things the old build could not have
+ * at once.
+ */
+export const SHOP_JOBS = LEVEL_FOOTPRINT.map((f) => JOBS_PER_COMMERCIAL * f) as readonly number[];
+export const INDUSTRY_JOBS = LEVEL_FOOTPRINT.map(
+  (f) => JOBS_PER_INDUSTRIAL * f,
+) as readonly number[];
+
+/**
  * Shopping trips generated per resident, against trips one shop can serve.
  *
  * Calibrated so commerce clears exactly at the zoning budget: 43 plots x 14
@@ -567,6 +655,9 @@ export const JOBS_PER_INDUSTRIAL = 20;
 export const SPEND_PER_RESIDENT = 0.5;
 export const SHOP_THROUGHPUT = 11;
 
+/** Trips one shop serves at each level. Per plot, as SHOP_JOBS explains. */
+export const SHOP_TRIPS = LEVEL_FOOTPRINT.map((f) => SHOP_THROUGHPUT * f) as readonly number[];
+
 /**
  * Goods one shop pulls from industry, against what one industrial plot makes.
  *
@@ -575,6 +666,12 @@ export const SHOP_THROUGHPUT = 11;
  */
 export const SUPPLY_DRAW = 4;
 export const INDUSTRIAL_OUTPUT = 9;
+
+/** Goods one shop draws and one works makes, per level. Per plot, as above. */
+export const SHOP_SUPPLY = LEVEL_FOOTPRINT.map((f) => SUPPLY_DRAW * f) as readonly number[];
+export const INDUSTRY_OUTPUT = LEVEL_FOOTPRINT.map(
+  (f) => INDUSTRIAL_OUTPUT * f,
+) as readonly number[];
 
 /**
  * The external tap on industrial demand.
@@ -618,7 +715,7 @@ export const PRICE_SURCHARGE_MAX = 0.6;
 
 export interface Service {
   /** Matches the GameState counter, the staffing scalar and the coverage key. */
-  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university';
+  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university' | 'transit';
   readonly name: string;
   readonly buildLabel: string;
   /** How the HUD names this service's coverage when it is the binding one. */
@@ -645,8 +742,8 @@ export interface Service {
  * outright below HAPPINESS_MIN_BUILD — or, for the two education types, it
  * decides how tall the city is allowed to build.
  *
- * Four of the five stand on a 2x2 site, of which a district has six, so those
- * types share 1.5 buildings a district. The university is the exception: its own
+ * Five of the six stand on a 2x2 site, of which a district has six, so those
+ * types share 1.2 buildings a district. The university is the exception: its own
  * 3x3 site, exactly one to a district, which is what makes it a landmark rather
  * than another row in the panel.
  *
@@ -667,6 +764,23 @@ export const SERVICES: readonly Service[] = [
    */
   { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    capacity: 700,   base: 180,    growth: 1.35, weight: 0,    span: 2 },
   /**
+   * The transit depot: the fifth 2x2 type, and the first civic building in the
+   * game that *earns*.
+   *
+   * Every other civic building gates — coverage feeds happiness, or it decides
+   * how tall the city may build — and a reader who has learned that rule will
+   * assume this one gates too. It does not: it takes fares, it raises the
+   * labour a district can reach, and it carries no happiness weight at all.
+   * See FARE_PER_RIDER and TRANSIT_WORKFORCE for the two, and the weight of 0
+   * below for the third: the four happiness weights were calibrated to sum to
+   * exactly 1 two cycles ago, and a fifth would re-open that calibration to buy
+   * something transport already has two better routes to.
+   *
+   * 2,200 against a hospital's 900: a network reaches further than a building,
+   * and a district that has bought one depot should feel covered by it.
+   */
+  { key: 'transit',    name: 'Transit',     buildLabel: 'Open depot',          coverLabel: 'Transit coverage',   capacity: 2_200, base: 260,    growth: 1.35, weight: 0,    span: 2 },
+  /**
    * Five schools' worth of teaching in one building, on nine plots, one to a
    * district, at forty times a school's opening price and compounding half again
    * as fast. Every one of those is doing the same job: making a university a
@@ -683,7 +797,7 @@ export const EDUCATION_SERVICES: readonly Service[] = SERVICES.filter(
   (s) => s.key === 'school' || s.key === 'university',
 );
 
-/** The four that share the 2x2 civic sites, in interleave order. */
+/** The five that share the 2x2 civic sites, in interleave order. */
 export const CIVIC_SERVICES: readonly Service[] = SERVICES.filter((s) => s.span === 2);
 
 /** Civic buildings compound like everything else, and faster than housing. */
@@ -789,6 +903,116 @@ export const RECREATION_WEIGHT = 0.18;
  */
 export const PARK_BASE = 45;
 export const PARK_GROWTH = 1.18;
+
+// ----------------------------------------------------------------- transport
+
+/**
+ * Cash per covered rider per second.
+ *
+ * Against RENT's 0.14 a resident: a fare is about a seventh of what the same
+ * person pays in rent, so a depot covering its own district adds roughly 14% to
+ * the ledger. Enough that the first one is worth buying for the money alone,
+ * far short of making transport the way a city earns.
+ *
+ * Riders are capped at the people who actually live there rather than at the
+ * housing stock, which is the one place transport differs from every other
+ * coverage: a hospital is sized to the houses it stands among whether or not
+ * they are full, and a bus is only paid by somebody on it.
+ */
+export const FARE_PER_RIDER = 0.02;
+
+/**
+ * How much further a fully covered workforce can reach for a job.
+ *
+ * The second thing a depot does, and the one that feeds the demand cycle rather
+ * than the ledger: a network turns residents into workers an employer can
+ * actually hire, so a covered district has a quarter more labour available than
+ * its population alone would suggest. That spare labour is then an argument for
+ * premises — see `demandTargets`, where it lifts commercial and industrial
+ * demand rather than income.
+ */
+export const TRANSIT_WORKFORCE = 0.25;
+
+/**
+ * How much of the spare labour a network reaches counts as an argument for
+ * premises.
+ *
+ * A coefficient rather than the raw pool, because the raw pool is enormous. A
+ * mature worker-rich city has thousands of workers with nowhere to work, and
+ * `demandScale` is a district's labour pool — so feeding the whole surplus in
+ * doubles commercial demand and pins it. Measured over 24 hours: at 1.0 the
+ * discount-chasing policy sat at +1 commercial for 628 minutes of the run,
+ * against a build that pinned nothing at all. At 0.35 the term is worth about
+ * 0.14 of a demand point to that same city — a lift a player can see on the
+ * bar, and nothing pins.
+ */
+export const TRANSIT_LABOUR_DRAW = 0.35;
+
+/**
+ * What free transport does, and what it costs.
+ *
+ * A policy trade, not a strict upgrade: fares fall to zero — which is most of a
+ * depot's direct return — and in exchange the same depots reach a third further
+ * because people ride when it is free, and the city is measurably happier for
+ * it. What the coverage buys is labour reach, which lifts commercial and
+ * industrial demand; what the mood buys is income through the multiplier and
+ * headroom under HAPPINESS_MIN_BUILD.
+ *
+ * The mood term is added to the happiness *target*, exactly as the tax term and
+ * the fire term are, and for the same reason: the four happiness weights sum to
+ * 1 and go on doing so. This is a modifier on the coverage a city has earned,
+ * not a fifth thing to be covered by.
+ */
+export const FREE_TRANSPORT_REACH = 0.33;
+export const FREE_TRANSPORT_MOOD = 0.05;
+
+// -------------------------------------------------------------------- policy
+
+/**
+ * What the city may set its tax rate to.
+ *
+ * Four discrete steps rather than a slider, and that is a decision about what
+ * the control feeds rather than about taste. The rate moves happiness, which is
+ * a lagged signal on a 45-second constant — a slider invites a player to drag
+ * it, which would push a stream of values into an integrator that answers none
+ * of them for the best part of a minute, and the reading they get back would
+ * be of wherever the drag happened to stop rather than of what they chose. Four
+ * named steps are also readable at a glance, which a percentage is not.
+ *
+ * `income` multiplies the ledger. `mood` is added to the happiness *target*, in
+ * the same way the fire term is subtracted from it: it is a modifier on the
+ * coverage the city has earned, not a fifth weight. The four happiness weights
+ * were calibrated to sum to exactly 1 and still do.
+ *
+ * The multipliers are far wider than they look, because happiness is expensive.
+ * It is worth 45% of the ledger through HAPPINESS_FLOOR, it moves occupancy
+ * across a 0.84 range, and occupancy moves the shop multiplier on top — so the
+ * three compound and a tenth of a point of mood costs roughly a fifth of the
+ * income. A first pass at 1.18 for eight points was measured and was *strictly
+ * worse* than neutral on a fully covered city, which is a control with three
+ * dead options on it.
+ *
+ * Measured on two cities settled for half an hour, against the neutral step:
+ *
+ *                    fully covered        short of a hospital and its parks
+ *   Low               x0.92  h 1.00        x1.15  h 0.77
+ *   High              x1.13  h 0.94        x1.08  h 0.63
+ *   Punitive          x1.15  h 0.86        x1.02  h 0.55
+ *
+ * Which is the trade the control exists to offer, and it points both ways: a
+ * covered city has mood to sell and should raise the rate, and a struggling one
+ * is better off buying mood back — Low is what lifts a neglected city over
+ * HAPPINESS_MIN_BUILD when it cannot yet afford the hospital that would.
+ */
+export const TAX_STEPS = [
+  { label: 'Low', income: 0.92, mood: 0.08 },
+  { label: 'Standard', income: 1, mood: 0 },
+  { label: 'High', income: 1.3, mood: -0.06 },
+  { label: 'Punitive', income: 1.6, mood: -0.14 },
+] as const;
+
+/** The step a fresh city starts on, and the one a save without a rate defaults to. */
+export const TAX_NEUTRAL = TAX_STEPS.findIndex((step) => step.mood === 0);
 
 // ---------------------------------------------------------------------- fire
 

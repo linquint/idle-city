@@ -11,7 +11,7 @@ import {
   bindingTerm,
   canBuildService,
   civicSiteCapacity,
-  cohortTotal,
+  plotsOf,
   coverage,
   educationCoverage,
   happinessTarget,
@@ -86,7 +86,8 @@ describe('education is a gate, not a mood', () => {
 describe('education coverage', () => {
   it('pools schools and universities against the housing stock', () => {
     const s = state({ ...housed(24, 2), schools: 2, schoolStaff: 1 });
-    const people = 24 * 70;
+    // A tower stands on two plots and holds both plots' worth. See LEVEL_HOUSING.
+    const people = 24 * 140;
     expect(educationCoverage(s)).toBeCloseTo((2 * (school?.capacity ?? 0)) / people, 9);
 
     const withUni = { ...s, universities: 1, universityStaff: 1 };
@@ -144,7 +145,9 @@ describe('the education gate on levelling', () => {
     expect(educationCoverage(game.state)).toBeGreaterThanOrEqual(LEVEL_EDUCATION[1] ?? 0);
     run(game, 900);
     expect(game.state.homeLevels[0]).toBeLessThan(24);
-    expect(cohortTotal(game.state.homeLevels)).toBe(24);
+    // Plots, not buildings: climbing past LEVEL_FOOTPRINT's first 2 merges
+    // pairs, so the count falls while the land under it does not.
+    expect(plotsOf(game.state, 'home')).toBe(24);
   });
 
   /**
@@ -180,22 +183,29 @@ describe('the education gate on levelling', () => {
     expect(educationCoverage(game.state)).toBeGreaterThanOrEqual(LEVEL_EDUCATION[LEVELS - 1] ?? 1);
     for (let i = 0; i < 200; i++) game.catchUp(60);
     expect(game.state.homeLevels[LEVELS - 1]).toBeGreaterThan(0);
-    expect(cohortTotal(game.state.homeLevels)).toBe(homes);
+    expect(plotsOf(game.state, 'home')).toBe(homes);
   });
 });
 
 describe('education land', () => {
   it('gives schools the fourth slot of the 2x2 interleave', () => {
-    expect(CIVIC_SERVICES.map((s) => s.key)).toEqual(['hospital', 'police', 'fire', 'school']);
+    expect(CIVIC_SERVICES.map((s) => s.key)).toEqual([
+      'hospital',
+      'police',
+      'fire',
+      'school',
+      'transit',
+    ]);
     for (const districts of [1, 2, 5, 9]) {
       const s = state({ districts });
       const shared = CIVIC_SERVICES.reduce((sum, svc) => sum + siteCapacity(s, svc.key), 0);
       // Divides the shared list exactly: nothing stranded, nothing shared.
       expect(shared).toBe(civicSiteCapacity(s));
     }
-    // The first district's six sites split 2/2/1/1 across the four types.
+    // The first district's six sites split 2/1/1/1/1 across the five types, so
+    // a young city can open one of each and still have a site to spare.
     const one = state({ districts: 1 });
-    expect(CIVIC_SERVICES.map((svc) => siteCapacity(one, svc.key))).toEqual([2, 2, 1, 1]);
+    expect(CIVIC_SERVICES.map((svc) => siteCapacity(one, svc.key))).toEqual([2, 1, 1, 1, 1]);
   });
 
   it('gives the university its own list, one to a district', () => {

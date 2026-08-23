@@ -9,8 +9,10 @@ import {
   MAX_ACTIVE_FIRES,
   LEVEL_EDUCATION,
   LEVELS,
+  MERGE_LEVEL,
   OFFLINE_CAP_SECONDS,
   SERVICES,
+  TAX_STEPS,
   TICK_RATE,
   type Service,
 } from './config.ts';
@@ -24,6 +26,7 @@ import {
   canBuildPark,
   canBuildService,
   canBuildShop,
+  canMergeParcel,
   civicBuildings,
   clampDemand,
   demandStep,
@@ -41,6 +44,7 @@ import {
   abandonedOf,
   isVacant,
   levelsOf,
+  mergedOf,
   driftOf,
   occupancyOf,
   vacantOf,
@@ -54,6 +58,8 @@ import {
   residents,
   resolvesAt,
   standingOf,
+  cohortTotal,
+  countOf,
   serviceCost,
   serviceCount,
   serviceNeeded,
@@ -128,6 +134,18 @@ const setDrift = (s: GameState, kind: ZoneKind, v: number): void => {
   else s.driftI = v;
 };
 
+const setMerged = (s: GameState, kind: ZoneKind, v: number): void => {
+  if (kind === 'home') s.mergedR = v;
+  else if (kind === 'shop') s.mergedC = v;
+  else s.mergedI = v;
+};
+
+const setCount = (s: GameState, kind: ZoneKind, v: number): void => {
+  if (kind === 'home') s.homes = v;
+  else if (kind === 'shop') s.shops = v;
+  else s.industry = v;
+};
+
 /** Adds one building to a zone, at level 0. The only way a cohort grows. */
 const addBuilding = (levels: LevelCohort): void => {
   levels[0] = (levels[0] ?? 0) + 1;
@@ -154,11 +172,21 @@ export interface AwayReport {
    * fact now that a price depends on the demand at the moment of purchase.
    */
   spent: number;
+  /**
+   * Net change in each zone's building count.
+   *
+   * Net, and signed, because a count can now fall without anything being lost:
+   * two buildings that merge are one building fewer standing on the same land.
+   * `merges` below is the half of that story the player is owed — a city that
+   * came back with two fewer homes and five merges grew.
+   */
   homes: number;
   shops: number;
   industry: number;
   parks: number;
   services: number;
+  /** Parcels merged while away, across every zone. */
+  merges: number;
   /**
    * What burned, and how it went.
    *
@@ -220,6 +248,8 @@ export class Game {
   private abandoned = 0;
   private recovered = 0;
   private annexed = 0;
+  /** Lifetime parcels merged. Differenced by `catchUp` like the tallies above. */
+  private merged = 0;
   /**
    * Buildings this run of the simulation may still destroy.
    *
@@ -349,14 +379,17 @@ export class Game {
    */
   private demolish(kind: ZoneKind): void {
     const s = this.inner;
-    if (kind === 'home') s.homes = Math.max(0, s.homes - 1);
-    else if (kind === 'shop') s.shops = Math.max(0, s.shops - 1);
-    else s.industry = Math.max(0, s.industry - 1);
+    setCount(s, kind, Math.max(0, countOf(s, kind) - 1));
     // The count and the cohort are two views of one thing, so they move
     // together or the invariant breaks. A ruin is taken first — the newest
     // plots are the ruins, and the newest plot is the one the count drops.
     if (abandonedOf(s, kind) > 0) setAbandoned(s, kind, abandonedOf(s, kind) - 1);
     else removeBuilding(levelsOf(s, kind));
+    // Merged parcels are the oldest slots, so the building that just went is
+    // only one of them when it was the last thing standing. Clamping says that
+    // in one line and cannot leave more merged parcels than there are buildings
+    // to stand on them.
+    setMerged(s, kind, Math.min(mergedOf(s, kind), countOf(s, kind)));
   }
 
   /** A fire whose building no longer exists stops being a fire. */
@@ -443,6 +476,7 @@ export class Game {
     s.schoolStaff = s.schools > 0 ? s.schoolStaff + (1 - s.schoolStaff) * k : 0;
     s.universityStaff =
       s.universities > 0 ? s.universityStaff + (1 - s.universityStaff) * k : 0;
+    s.depotStaff = s.depots > 0 ? s.depotStaff + (1 - s.depotStaff) * k : 0;
   }
 
   /**
@@ -619,6 +653,13 @@ export class Game {
     let left = budget;
     for (let l = 0; l < LEVELS - 1 && left > 0; l++) {
       if (!this.educated(l + 1)) continue;
+      // The one rung that is not a rung: climbing to MERGE_LEVEL takes two
+      // buildings off one parcel and puts one back, so it is spent a parcel at
+      // a time rather than in a single subtraction.
+      if (l + 1 === MERGE_LEVEL) {
+        while (left > 0 && this.merge(kind, before)) left--;
+        continue;
+      }
       const take = Math.min(left, before[l] ?? 0);
       if (take <= 0) continue;
       levels[l] = (levels[l] ?? 0) - take;
@@ -626,6 +667,37 @@ export class Game {
       left -= take;
     }
     return budget - left;
+  }
+
+  /**
+   * Merges the next parcel: two neighbours at MERGE_LEVEL - 1 become one
+   * building at MERGE_LEVEL, standing on both their plots.
+   *
+   * `before` is the pass's snapshot and is spent as well as read, which is what
+   * keeps the two rules of the promotion pass true at once: a building that
+   * climbed to MERGE_LEVEL - 1 in this same pass is not eligible to be merged
+   * by it, and no pair is merged twice.
+   *
+   * One merge costs *one* of the pass's budget, not two. The budget is a rate of
+   * promotions and a merge is one promotion — one parcel climbing. Charging two
+   * would deadlock any zone whose drift never banks a whole second one, since a
+   * short pass drops its remainder rather than carrying it.
+   */
+  private merge(kind: ZoneKind, before: number[]): boolean {
+    const s = this.inner;
+    const ready = before[MERGE_LEVEL - 1] ?? 0;
+    if (ready < 2 || !canMergeParcel(s, kind, ready)) return false;
+    const levels = levelsOf(s, kind);
+    levels[MERGE_LEVEL - 1] = (levels[MERGE_LEVEL - 1] ?? 0) - 2;
+    levels[MERGE_LEVEL] = (levels[MERGE_LEVEL] ?? 0) + 1;
+    before[MERGE_LEVEL - 1] = ready - 2;
+    setMerged(s, kind, mergedOf(s, kind) + 1);
+    // Two buildings became one. Every readout that assumed a count only rises
+    // is wrong from here, which is why land is measured in plots: `plotsOf`
+    // adds the merged parcel back and comes out exactly where it started.
+    setCount(s, kind, countOf(s, kind) - 1);
+    this.merged++;
+    return true;
   }
 
   /**
@@ -651,13 +723,25 @@ export class Game {
     return moved;
   }
 
-  /** Brings up to `budget` ruins back, at level 0. Nothing here is lost for good. */
+  /**
+   * Brings up to `budget` ruins back. Nothing here is lost for good.
+   *
+   * A ruin comes back as whatever its parcel can hold. Ruins are the newest
+   * slots and merged parcels are the oldest, so the only ruins standing on a
+   * merged parcel are the ones a zone reaches once every unmerged building is
+   * already boarded up — and those reopen at MERGE_LEVEL, because the parcel
+   * under them is still two plots. Handing them back at level 0 would put a
+   * detached house on a merged parcel, which is a shape the land cannot hold.
+   */
   private recover(kind: ZoneKind, budget: number): number {
     const s = this.inner;
     const take = Math.min(budget, abandonedOf(s, kind));
     if (take <= 0) return 0;
     const levels = levelsOf(s, kind);
-    levels[0] = (levels[0] ?? 0) + take;
+    const standing = cohortTotal(levels);
+    const onMerged = Math.max(0, Math.min(mergedOf(s, kind), standing + take) - standing);
+    levels[MERGE_LEVEL] = (levels[MERGE_LEVEL] ?? 0) + onMerged;
+    levels[0] = (levels[0] ?? 0) + (take - onMerged);
     setAbandoned(s, kind, abandonedOf(s, kind) - take);
     this.recovered += take;
     return take;
@@ -737,6 +821,9 @@ export class Game {
     } else if (service.key === 'school') {
       s.schoolStaff = staffAfterBuild(s.schoolStaff, s.schools);
       s.schools++;
+    } else if (service.key === 'transit') {
+      s.depotStaff = staffAfterBuild(s.depotStaff, s.depots);
+      s.depots++;
     } else {
       s.universityStaff = staffAfterBuild(s.universityStaff, s.universities);
       s.universities++;
@@ -793,6 +880,19 @@ export class Game {
     this.inner.autoDevelop = on;
   }
 
+  /**
+   * Moves the city to one of TAX_STEPS. Clamped rather than trusted, so a HUD
+   * bug cannot put the simulation on a rate that does not exist.
+   */
+  setTaxRate(step: number): void {
+    this.inner.taxRate = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(step)));
+  }
+
+  /** Fares off, reach up, mood up. A trade, not an upgrade — see the constants. */
+  setFreeTransport(on: boolean): void {
+    this.inner.freeTransport = on;
+  }
+
   reset(): void {
     this.inner = createState();
     this.accumulator = 0;
@@ -803,6 +903,7 @@ export class Game {
     this.abandoned = 0;
     this.recovered = 0;
     this.annexed = 0;
+    this.merged = 0;
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
     this.annexesLeft = Number.POSITIVE_INFINITY;
@@ -930,6 +1031,7 @@ export class Game {
       lost: this.firesLost,
       abandoned: this.abandoned,
       recovered: this.recovered,
+      merged: this.merged,
     };
 
     // The hard guard, for the length of this call and no longer. However many
@@ -972,6 +1074,7 @@ export class Game {
       firesLost: this.firesLost - before.lost,
       abandoned: this.abandoned - before.abandoned,
       recovered: this.recovered - before.recovered,
+      merges: this.merged - before.merged,
       districts: s.districts - before.districts,
     };
   }

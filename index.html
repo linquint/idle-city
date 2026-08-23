@@ -22,130 +22,206 @@
 
 <p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z for the zoning plan, again for demand</p>
 
-<section class="hud ledger" aria-label="City ledger">
-  <div class="row"><span class="k">Treasury</span><span class="v cash" id="cash">0</span></div>
-  <div class="row"><span class="k">Per second</span><span class="v rate" id="rate">0</span></div>
-  <div class="row"><span class="k">Residents</span><span class="v" id="residents">0</span></div>
-  <div class="row"><span class="k">Plots</span><span class="v zones" id="plots" role="img">
-    <span class="zone-count"><i class="dot r"></i><span id="plots-r">0/0</span></span>
-    <span class="zone-count"><i class="dot c"></i><span id="plots-c">0/0</span></span>
-    <span class="zone-count"><i class="dot i"></i><span id="plots-i">0/0</span></span>
-  </span></div>
-  <div class="row"><span class="k">Districts</span><span class="v" id="districts">1</span></div>
-  <div class="row"><span class="k">Happiness</span><span class="v" id="happiness">0%</span></div>
+<!-- One docked control in the bottom-left corner, with the selected building's
+     card stacked above it. A wrapper rather than two fixed panels, because the
+     control's height moves with what the city has unlocked and anything pinned
+     above it by an offset would have to guess. -->
+<div class="corner">
+
+<aside class="hud card" id="inspect" hidden aria-label="Selected building">
+  <div class="card-head">
+    <p class="card-title" id="inspect-title">Detached housing</p>
+    <button class="card-close" id="inspect-close" type="button" aria-label="Close the inspector">×</button>
+  </div>
+  <p class="card-sub" id="inspect-where">Residential · district 1</p>
+  <dl class="card-rows" id="inspect-rows"></dl>
+  <p class="card-note">Occupancy, happiness and demand are city-wide, not per building.</p>
+</aside>
+
+<section class="hud dock" aria-label="City controls">
+  <!-- Always painted, whichever tab is open: an idle game whose treasury is one
+       click away is an idle game you misplay. Everything else is in a tab. -->
+  <div class="dock-head">
+    <span class="dock-cash" id="cash">0</span>
+    <span class="dock-rate" id="rate">0</span>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="Control panels">
+    <button class="tab" type="button" role="tab" id="tab-build"
+      aria-controls="panel-build" aria-selected="true">Build</button>
+    <button class="tab" type="button" role="tab" id="tab-treasury"
+      aria-controls="panel-treasury" aria-selected="false" tabindex="-1">Treasury</button>
+    <button class="tab" type="button" role="tab" id="tab-demand"
+      aria-controls="panel-demand" aria-selected="false" tabindex="-1">Demand</button>
+    <button class="tab" type="button" role="tab" id="tab-taxes"
+      aria-controls="panel-taxes" aria-selected="false" tabindex="-1">Taxes</button>
+  </div>
+
+  <div class="panels">
+
+  <div class="panel" id="panel-build" role="tabpanel" aria-labelledby="tab-build" tabindex="0">
+    <p class="zone" role="img" aria-label="Zoning">
+      <span class="zone-count"><i class="dot r"></i><b id="zone-name">detached housing</b></span>
+      <span class="zone-count"><i class="dot c"></i><b id="zone-shop">corner shops</b></span>
+      <span class="zone-count"><i class="dot i"></i><b id="zone-industry">workshops</b></span></p>
+
+    <div class="meter" role="img" aria-label="Land developed" id="occupancy">
+      <span class="meter-fill" id="occupancy-fill"></span>
+      <span class="meter-mark" id="occupancy-mark"></span>
+    </div>
+
+    <button id="build-home" type="button">
+      <span id="build-home-label">Build home</span>
+      <span class="price"><span class="chip" id="build-home-chip"></span><i class="trend" id="build-home-trend"></i><span class="cost" id="build-home-cost">15</span></span>
+    </button>
+    <button id="build-shop" type="button">
+      <span>Open shop</span>
+      <span class="price"><span class="chip" id="build-shop-chip"></span><i class="trend" id="build-shop-trend"></i><span class="cost" id="build-shop-cost">9</span></span>
+    </button>
+    <button id="build-industry" type="button">
+      <span>Break ground</span>
+      <span class="price"><span class="chip" id="build-industry-chip"></span><i class="trend" id="build-industry-trend"></i><span class="cost" id="build-industry-cost">240</span></span>
+    </button>
+
+    <div class="civic-row">
+      <button class="civic" id="build-hospital" type="button">
+        <span>Hospital</span><span class="built" id="build-hospital-built">0/1</span>
+        <span class="cost" id="build-hospital-cost">130</span>
+      </button>
+      <button class="civic" id="build-police" type="button">
+        <span>Police</span><span class="built" id="build-police-built">0/1</span>
+        <span class="cost" id="build-police-cost">210</span>
+      </button>
+      <button class="civic" id="build-fire" type="button">
+        <span>Fire</span><span class="built" id="build-fire-built">0/1</span>
+        <span class="cost" id="build-fire-cost">320</span>
+      </button>
+      <button class="civic park" id="build-park" type="button">
+        <span>Park</span><span class="built" id="build-park-built">0/4</span>
+        <span class="cost" id="build-park-cost">45</span>
+      </button>
+    </div>
+
+    <div class="civic-row">
+      <button class="civic school" id="build-school" type="button">
+        <span>School</span><span class="built" id="build-school-built">0/1</span>
+        <span class="cost" id="build-school-cost">180</span>
+      </button>
+      <button class="civic school" id="build-university" type="button">
+        <span>University</span><span class="built" id="build-university-built">0/1</span>
+        <span class="cost" id="build-university-cost">7.2K</span>
+      </button>
+      <button class="civic transit" id="build-transit" type="button">
+        <span>Depot</span><span class="built" id="build-transit-built">0/1</span>
+        <span class="cost" id="build-transit-cost">260</span>
+      </button>
+    </div>
+
+    <button id="annex" class="annex" type="button">
+      <span id="annex-label">Annex district</span><span class="cost" id="annex-cost">60.0K</span>
+    </button>
+
+    <div class="split">
+      <button class="ghost" id="auto" type="button" aria-pressed="false">Auto-develop · off</button>
+      <button class="ghost" id="reset" type="button">Clear city</button>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-treasury" role="tabpanel" aria-labelledby="tab-treasury" tabindex="0" hidden>
+    <div class="row"><span class="k">Treasury</span><span class="v cash" id="ledger-cash">0</span></div>
+    <div class="row"><span class="k">Per second</span><span class="v rate" id="ledger-rate">0</span></div>
+    <div class="row"><span class="k">Earned</span><span class="v" id="earned">0</span></div>
+    <div class="row"><span class="k">Residents</span><span class="v" id="residents">0</span></div>
+    <div class="row"><span class="k">Plots</span><span class="v zones" id="plots" role="img">
+      <span class="zone-count"><i class="dot r"></i><span id="plots-r">0/0</span></span>
+      <span class="zone-count"><i class="dot c"></i><span id="plots-c">0/0</span></span>
+      <span class="zone-count"><i class="dot i"></i><span id="plots-i">0/0</span></span>
+    </span></div>
+    <div class="row"><span class="k">Districts</span><span class="v" id="districts">1</span></div>
+    <div class="row"><span class="k">Happiness</span><span class="v" id="happiness">0%</span></div>
+  </div>
+
+  <div class="panel" id="panel-demand" role="tabpanel" aria-labelledby="tab-demand" tabindex="0" hidden>
+    <p class="cap">Demand</p>
+    <div class="rci" id="rci" role="img">
+      <div class="rci-row"><span class="k">R</span>
+        <span class="bar"><i class="bar-fill" id="demand-r-fill"></i></span>
+        <span class="num" id="demand-r-num">0</span></div>
+      <div class="rci-row"><span class="k">C</span>
+        <span class="bar"><i class="bar-fill" id="demand-c-fill"></i></span>
+        <span class="num" id="demand-c-num">0</span></div>
+      <div class="rci-row"><span class="k">I</span>
+        <span class="bar"><i class="bar-fill" id="demand-i-fill"></i></span>
+        <span class="num" id="demand-i-num">0</span></div>
+    </div>
+
+    <p class="cap">Happiness</p>
+    <div class="mood" id="mood" role="img">
+      <div class="mood-head"><span class="num" id="mood-pct">0%</span>
+        <span class="why" id="mood-why">Health coverage 0%</span></div>
+      <span class="bar"><i class="mood-fill" id="mood-fill"></i></span>
+    </div>
+
+    <p class="cap">Services</p>
+    <div class="services" id="services" role="img">
+      <div class="svc"><span class="k">Hospitals</span>
+        <span class="built" id="svc-hospital-built">0/0</span>
+        <span class="covers" id="svc-hospital-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Police</span>
+        <span class="built" id="svc-police-built">0/0</span>
+        <span class="covers" id="svc-police-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Fire</span>
+        <span class="built" id="svc-fire-built">0/0</span>
+        <span class="covers" id="svc-fire-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Parks</span>
+        <span class="built" id="svc-parks-built">0/0</span>
+        <span class="covers" id="svc-parks-covers">0 of 0 homes</span></div>
+    </div>
+
+    <p class="cap">Transport</p>
+    <div class="services" id="transit" role="img">
+      <div class="svc"><span class="k">Depots</span>
+        <span class="built" id="svc-transit-built">0/0</span>
+        <span class="covers" id="svc-transit-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Fares</span>
+        <span class="built" id="transit-fares">0</span>
+        <span class="covers" id="transit-labour">no spare labour reached</span></div>
+    </div>
+
+    <p class="cap">Education</p>
+    <div class="services" id="education" role="img">
+      <div class="svc"><span class="k">Schools</span>
+        <span class="built" id="svc-school-built">0/0</span>
+        <span class="covers" id="svc-school-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Universities</span>
+        <span class="built" id="svc-university-built">0/0</span>
+        <span class="covers" id="svc-university-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Unlocks</span>
+        <span class="built" id="education-reach">0%</span>
+        <span class="covers" id="education-next">next level needs 35%</span></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-taxes" role="tabpanel" aria-labelledby="tab-taxes" tabindex="0" hidden>
+    <p class="cap">Tax rate</p>
+    <div class="steps" id="tax-steps" role="radiogroup" aria-label="Tax rate"></div>
+    <div class="svc"><span class="k">Ledger</span>
+      <span class="built" id="tax-income">x1.00</span>
+      <span class="covers" id="tax-mood">no effect on mood</span></div>
+
+    <p class="cap">Free transport</p>
+    <button class="ghost wide" id="free-transport" type="button" aria-pressed="false">
+      Free transport · off
+    </button>
+    <div class="svc"><span class="k">Trade</span>
+      <span class="built" id="free-fares">0/s in fares</span>
+      <span class="covers" id="free-effect">reach +33%, mood +5</span></div>
+  </div>
+
+  </div>
 </section>
 
-<section class="hud demand" aria-label="Demand">
-  <p class="cap">Demand</p>
-  <div class="rci" id="rci" role="img">
-    <div class="rci-row"><span class="k">R</span>
-      <span class="bar"><i class="bar-fill" id="demand-r-fill"></i></span>
-      <span class="num" id="demand-r-num">0</span></div>
-    <div class="rci-row"><span class="k">C</span>
-      <span class="bar"><i class="bar-fill" id="demand-c-fill"></i></span>
-      <span class="num" id="demand-c-num">0</span></div>
-    <div class="rci-row"><span class="k">I</span>
-      <span class="bar"><i class="bar-fill" id="demand-i-fill"></i></span>
-      <span class="num" id="demand-i-num">0</span></div>
-  </div>
-
-  <p class="cap">Happiness</p>
-  <div class="mood" id="mood" role="img">
-    <div class="mood-head"><span class="num" id="mood-pct">0%</span>
-      <span class="why" id="mood-why">Health coverage 0%</span></div>
-    <span class="bar"><i class="mood-fill" id="mood-fill"></i></span>
-  </div>
-
-  <p class="cap">Services</p>
-  <div class="services" id="services" role="img">
-    <div class="svc"><span class="k">Hospitals</span>
-      <span class="built" id="svc-hospital-built">0/0</span>
-      <span class="covers" id="svc-hospital-covers">0 of 0</span></div>
-    <div class="svc"><span class="k">Police</span>
-      <span class="built" id="svc-police-built">0/0</span>
-      <span class="covers" id="svc-police-covers">0 of 0</span></div>
-    <div class="svc"><span class="k">Fire</span>
-      <span class="built" id="svc-fire-built">0/0</span>
-      <span class="covers" id="svc-fire-covers">0 of 0</span></div>
-    <div class="svc"><span class="k">Parks</span>
-      <span class="built" id="svc-parks-built">0/0</span>
-      <span class="covers" id="svc-parks-covers">0 of 0 homes</span></div>
-  </div>
-
-  <p class="cap">Education</p>
-  <div class="services" id="education" role="img">
-    <div class="svc"><span class="k">Schools</span>
-      <span class="built" id="svc-school-built">0/0</span>
-      <span class="covers" id="svc-school-covers">0 of 0</span></div>
-    <div class="svc"><span class="k">Universities</span>
-      <span class="built" id="svc-university-built">0/0</span>
-      <span class="covers" id="svc-university-covers">0 of 0</span></div>
-    <div class="svc"><span class="k">Unlocks</span>
-      <span class="built" id="education-reach">0%</span>
-      <span class="covers" id="education-next">next level needs 35%</span></div>
-  </div>
-</section>
-
-<section class="hud controls" aria-label="City controls">
-  <p class="zone">Zoning — <b id="zone-name">detached housing</b></p>
-
-  <div class="meter" role="img" aria-label="Land developed" id="occupancy">
-    <span class="meter-fill" id="occupancy-fill"></span>
-    <span class="meter-mark" id="occupancy-mark"></span>
-  </div>
-
-  <button id="build-home" type="button">
-    <span id="build-home-label">Build home</span>
-    <span class="price"><span class="chip" id="build-home-chip"></span><i class="trend" id="build-home-trend"></i><span class="cost" id="build-home-cost">15</span></span>
-  </button>
-  <button id="build-shop" type="button">
-    <span>Open shop</span>
-    <span class="price"><span class="chip" id="build-shop-chip"></span><i class="trend" id="build-shop-trend"></i><span class="cost" id="build-shop-cost">9</span></span>
-  </button>
-  <button id="build-industry" type="button">
-    <span>Break ground</span>
-    <span class="price"><span class="chip" id="build-industry-chip"></span><i class="trend" id="build-industry-trend"></i><span class="cost" id="build-industry-cost">240</span></span>
-  </button>
-
-  <div class="civic-row">
-    <button class="civic" id="build-hospital" type="button">
-      <span>Hospital</span><span class="built" id="build-hospital-built">0/1</span>
-      <span class="cost" id="build-hospital-cost">130</span>
-    </button>
-    <button class="civic" id="build-police" type="button">
-      <span>Police</span><span class="built" id="build-police-built">0/1</span>
-      <span class="cost" id="build-police-cost">210</span>
-    </button>
-    <button class="civic" id="build-fire" type="button">
-      <span>Fire</span><span class="built" id="build-fire-built">0/1</span>
-      <span class="cost" id="build-fire-cost">320</span>
-    </button>
-    <button class="civic park" id="build-park" type="button">
-      <span>Park</span><span class="built" id="build-park-built">0/4</span>
-      <span class="cost" id="build-park-cost">45</span>
-    </button>
-  </div>
-
-  <div class="civic-row">
-    <button class="civic school" id="build-school" type="button">
-      <span>School</span><span class="built" id="build-school-built">0/1</span>
-      <span class="cost" id="build-school-cost">180</span>
-    </button>
-    <button class="civic school" id="build-university" type="button">
-      <span>University</span><span class="built" id="build-university-built">0/1</span>
-      <span class="cost" id="build-university-cost">7.2K</span>
-    </button>
-  </div>
-
-  <button id="annex" class="annex" type="button">
-    <span id="annex-label">Annex district</span><span class="cost" id="annex-cost">60.0K</span>
-  </button>
-
-  <div class="split">
-    <button class="ghost" id="auto" type="button" aria-pressed="false">Auto-develop · off</button>
-    <button class="ghost" id="reset" type="button">Clear city</button>
-  </div>
-</section>
+</div>
 
 <div class="scrim" id="welcome" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="welcome-title">

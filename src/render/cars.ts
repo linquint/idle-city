@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mixSeed, rng } from '../core/rng';
-import { DISTRICT_SPAN, SEED } from '../sim/config';
+import { CELL, DISTRICT_SPAN, SEED } from '../sim/config';
 import { residents } from '../sim/economy';
 import {
   DISTRICT_WIDTH,
@@ -83,6 +83,32 @@ const ROUTE_TRIES = 5;
 /** Headlights are geometry, so they cost nothing to leave off in daylight. */
 const HEADLIGHT_NIGHT = 0.15;
 
+/**
+ * Buses, out of the same pool.
+ *
+ * Not a second fleet and not a second router: a bus is a car with a longer body
+ * and a route that stops. It shares the pool, the lane offsets, the culling and
+ * the headlights, and costs exactly one more instanced mesh — a separate
+ * traffic layer for eight vehicles would be a second copy of all of that for
+ * nothing anyone can see from the play camera.
+ *
+ * Nothing about a bus reaches `GameState`. They are a readout of `depots` in
+ * precisely the way a building is a readout of `homes`.
+ */
+const BUS_LENGTH = 3.4;
+const BUS_HEIGHT = 0.95;
+const BUS_WIDTH = 0.95;
+
+/** Buses put on the road per depot, once the depot is staffed. */
+const BUSES_PER_DEPOT = 3;
+
+/** How far a bus runs between stops, and how long it sits at one. */
+const STOP_SPACING = CELL * 3;
+const STOP_SECONDS = 1.6;
+
+/** Buses run slower than cars, which is most of what makes them read as buses. */
+const BUS_SPEED = 4.2;
+
 /** One vehicle's whole state. Pooled and mutated; never allocated in a frame. */
 interface Car {
   /** The lane's constant coordinate: z for a car driving along x, x for one along z. */
@@ -101,6 +127,12 @@ interface Car {
   travelled: number;
   /** False until the car has been given its first route. */
   routed: boolean;
+  /** True for a bus: a longer body, a slower run and a route that stops. */
+  bus: boolean;
+  /** Seconds left at the current stop. Only ever non-zero for a bus. */
+  waiting: number;
+  /** How far along the run the next stop is. */
+  nextStop: number;
 }
 
 /** The full row and column streets of one district, in global grid coordinates. */
@@ -152,6 +184,8 @@ function roadLines(district: District): RoadLines {
  */
 export class Cars {
   private readonly bodies: GrowableInstancedMesh;
+  /** The one extra mesh buses cost. Same pool, same lanes, a longer box. */
+  private readonly coaches: GrowableInstancedMesh;
   private readonly lamps: GrowableInstancedMesh;
   private readonly headlights = new Glow(PALETTE.headlight, 0);
   private readonly dummy = new THREE.Object3D();
@@ -161,6 +195,8 @@ export class Cars {
 
   private districts = 0;
   private active = 0;
+  /** How many of the pool are buses. They take the front of it. */
+  private buses = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -173,7 +209,7 @@ export class Cars {
       new THREE.BoxGeometry(CAR_LENGTH, CAR_HEIGHT, CAR_WIDTH),
       new THREE.MeshLambertMaterial({ color: PALETTE.car }),
       MAX_CARS,
-      { castShadow: true },
+      { castShadow: true, name: 'traffic:car' },
     );
     // 160 point lights would take the frame rate apart. A lit quad on the nose
     // is the whole effect at this camera distance, and it costs one material.
@@ -182,6 +218,13 @@ export class Cars {
       new THREE.BoxGeometry(0.08, 0.18, CAR_WIDTH * 0.78),
       this.headlights.material,
       MAX_CARS,
+    );
+    this.coaches = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(BUS_LENGTH, BUS_HEIGHT, BUS_WIDTH),
+      new THREE.MeshLambertMaterial({ color: PALETTE.bus }),
+      MAX_CARS,
+      { castShadow: true, name: 'traffic:bus' },
     );
     this.lamps.mesh.visible = false;
 
@@ -196,6 +239,9 @@ export class Cars {
         speed: SPEED_MIN,
         travelled: 0,
         routed: false,
+        bus: false,
+        waiting: 0,
+        nextStop: STOP_SPACING,
       });
     }
   }
@@ -212,6 +258,17 @@ export class Cars {
     return Math.min(MAX_CARS, Math.max(MIN_CARS, wanted));
   }
 
+  /**
+   * How many buses the depots put on the road.
+   *
+   * Staffed depots, not built ones: a depot that opened ten seconds ago has no
+   * drivers, and its buses arriving instantly would be the one place the view
+   * disagreed with the ramp the simulation is running. Nothing here is stored.
+   */
+  private static coaches(state: Readonly<GameState>): number {
+    return Math.round(state.depots * state.depotStaff * BUSES_PER_DEPOT);
+  }
+
   /** Reads the counts. Nothing here is stored; it is all recomputed from state. */
   sync(state: Readonly<GameState>): void {
     if (state.districts !== this.districts) {
@@ -222,6 +279,22 @@ export class Cars {
       this.districts = state.districts;
     }
     this.active = Math.min(Cars.fleet(state), this.lines.length > 0 ? MAX_CARS : 0);
+    const wanted = Math.min(Cars.coaches(state), this.active);
+    // Buses take the front of the pool, so a fleet that shrinks loses cars
+    // before it loses buses — a route that stops running because the population
+    // dipped would be a service the city never cancelled.
+    if (wanted !== this.buses) {
+      for (let i = 0; i < MAX_CARS; i++) {
+        const car = this.pool[i] as Car;
+        const bus = i < wanted;
+        if (car.bus === bus) continue;
+        car.bus = bus;
+        // Re-routed rather than left mid-run: a car that became a bus would
+        // otherwise finish its run at the wrong speed and stop nowhere.
+        car.routed = false;
+      }
+      this.buses = wanted;
+    }
   }
 
   /**
@@ -253,7 +326,11 @@ export class Cars {
     car.alongX = useX;
     car.dir = dir;
     car.length = DISTRICT_WIDTH;
-    car.speed = SPEED_MIN + this.random() * (SPEED_MAX - SPEED_MIN);
+    car.speed = car.bus ? BUS_SPEED : SPEED_MIN + this.random() * (SPEED_MAX - SPEED_MIN);
+    car.waiting = 0;
+    // The first stop is a fraction of the way in, so a line of buses on one
+    // street does not pull up in formation.
+    car.nextStop = car.bus ? STOP_SPACING * (0.4 + this.random() * 0.6) : Infinity;
     // Start and finish at the district's own edges, which are streets in their
     // own right: a car is only ever created or retired at a junction on the
     // boundary, never halfway down a block with nothing to have come from.
@@ -287,6 +364,7 @@ export class Cars {
   update(dt: number, focus: THREE.Vector3, night: number): void {
     if (this.lines.length === 0 || this.active === 0) {
       this.bodies.count = 0;
+      this.coaches.count = 0;
       this.lamps.count = 0;
       return;
     }
@@ -299,12 +377,25 @@ export class Cars {
     const fx = focus.x;
     const fz = focus.z;
     let drawn = 0;
+    let coaches = 0;
+    let lights = 0;
 
     for (let i = 0; i < this.active; i++) {
       const car = this.pool[i] as Car;
       if (!car.routed) this.route(car, fx, fz);
       if (this.moving) {
-        car.travelled += car.speed * dt;
+        if (car.waiting > 0) {
+          // At a stop. The one thing that makes a bus a bus rather than a long
+          // car: it is the only vehicle in the city that ever stands still on
+          // a street, which is what reads as a service at this distance.
+          car.waiting -= dt;
+        } else {
+          car.travelled += car.speed * dt;
+          if (car.bus && car.travelled >= car.nextStop) {
+            car.waiting = STOP_SECONDS;
+            car.nextStop += STOP_SPACING;
+          }
+        }
         if (car.travelled >= car.length) this.route(car, fx, fz);
       }
 
@@ -315,29 +406,34 @@ export class Cars {
       const dz = z - fz;
       if (dx * dx + dz * dz > VIEW_RADIUS * VIEW_RADIUS) continue;
 
-      dummy.position.set(x, CAR_Y, z);
+      const length = car.bus ? BUS_LENGTH : CAR_LENGTH;
+      dummy.position.set(x, car.bus ? ROAD_H + BUS_HEIGHT / 2 : CAR_Y, z);
       dummy.rotation.set(0, car.heading, 0);
       dummy.updateMatrix();
-      this.bodies.setMatrixAt(drawn, dummy.matrix);
+      if (car.bus) this.coaches.setMatrixAt(coaches++, dummy.matrix);
+      else this.bodies.setMatrixAt(drawn++, dummy.matrix);
 
       if (lit) {
         // The nose, in the direction of travel. Same rotation, so the quad
-        // faces the way the car is going without a second trig call.
+        // faces the way the vehicle is going without a second trig call. Buses
+        // and cars share the lamp mesh — an instance index there answers to
+        // nothing but its own count.
         dummy.position.set(
-          car.alongX ? x + car.dir * (CAR_LENGTH / 2) : x,
+          car.alongX ? x + car.dir * (length / 2) : x,
           CAR_Y,
-          car.alongX ? z : z + car.dir * (CAR_LENGTH / 2),
+          car.alongX ? z : z + car.dir * (length / 2),
         );
         dummy.updateMatrix();
-        this.lamps.setMatrixAt(drawn, dummy.matrix);
+        this.lamps.setMatrixAt(lights++, dummy.matrix);
       }
-      drawn++;
     }
 
     this.bodies.count = drawn;
     this.bodies.flush();
+    this.coaches.count = coaches;
+    this.coaches.flush();
     if (lit) {
-      this.lamps.count = drawn;
+      this.lamps.count = lights;
       this.lamps.flush();
     } else {
       this.lamps.count = 0;

@@ -8,6 +8,7 @@ import {
   EDUCATION_SERVICES,
   HAPPINESS_SERVICES,
   LEVEL_CAPACITY,
+  LEVEL_HOUSING,
   RECREATION_WEIGHT,
   SERVICES,
 } from '../src/sim/config';
@@ -160,7 +161,7 @@ describe('recreation coverage', () => {
       const reach = recreationCoverage(state({ ...housed(19), parks }));
       for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
         const climbed = state({ ...housed(19, level), parks });
-        expect(residents(climbed)).toBe(19 * (LEVEL_CAPACITY[level] ?? 0));
+        expect(residents(climbed)).toBe(19 * (LEVEL_HOUSING[level] ?? 0));
         expect(recreationCoverage(climbed)).toBe(reach);
       }
     }

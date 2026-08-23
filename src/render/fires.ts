@@ -3,8 +3,15 @@ import { CELL, CIVIC_SERVICES, LEVELS, MAX_ACTIVE_FIRES } from '../sim/config';
 
 /** Where fire stations sit in the 2x2 site interleave. See `civicSiteFor`. */
 const FIRE_SITE_OFFSET = CIVIC_SERVICES.findIndex((service) => service.key === 'fire');
+import { ZONE } from '../sim/citygen';
 import { levelAt } from '../sim/economy';
-import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
+import {
+  createPlacement,
+  worldX,
+  worldZ,
+  type CityLayout,
+  type Placement,
+} from '../sim/layout';
 import type { Fire, GameState } from '../sim/state';
 import { roofline } from './buildings';
 import { Glow } from './glow';
@@ -90,6 +97,8 @@ export class Fires {
   private readonly dummy = new THREE.Object3D();
   private readonly blazes: Blaze[] = [];
   private readonly fleet: Truck[] = [];
+  /** One reusable placement, filled in place. See `Buildings`. */
+  private readonly at = createPlacement();
   private burning = 0;
   /**
    * What the rooflines were last computed against.
@@ -153,11 +162,20 @@ export class Fires {
     }
   }
 
-  /** Plot centre of the building an ordinal names, whatever kind it is. */
-  private plotOf(fire: Fire): Coord {
-    if (fire.kind === 'shop') return this.layout.shopCell(fire.index);
-    if (fire.kind === 'industry') return this.layout.industryCell(fire.index);
-    return this.layout.homeCell(fire.index);
+  /**
+   * Centre of the building an ordinal names, whatever kind it is.
+   *
+   * The parcel's centre, not a plot's: a merged building spans two plots and a
+   * flame on one of them would be burning half a tower.
+   */
+  private placeOf(fire: Fire, state: Readonly<GameState>): Placement {
+    if (fire.kind === 'shop') {
+      return this.layout.place(ZONE.commercial, fire.index, state.mergedC, this.at);
+    }
+    if (fire.kind === 'industry') {
+      return this.layout.place(ZONE.industrial, fire.index, state.mergedI, this.at);
+    }
+    return this.layout.place(ZONE.residential, fire.index, state.mergedR, this.at);
   }
 
   /**
@@ -244,9 +262,9 @@ export class Fires {
       if (same && !grown) continue;
 
       this.layout.ensure(state.districts);
-      const plot = this.plotOf(fire);
-      blaze.x = worldX(plot.x);
-      blaze.z = worldZ(plot.z);
+      const at = this.placeOf(fire, state);
+      blaze.x = at.x;
+      blaze.z = at.z;
       blaze.top = roofline(fire.kind, fire.index, levelAt(state.homeLevels, fire.index));
       if (same) continue;
       blaze.kind = fire.kind;

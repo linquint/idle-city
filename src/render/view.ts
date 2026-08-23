@@ -1,6 +1,8 @@
+import * as THREE from 'three';
 import { cityCentre, cityRadius, CityLayout } from '../sim/layout';
+import { countOf } from '../sim/economy';
 import type { GameState } from '../sim/state';
-import { Buildings } from './buildings';
+import { Buildings, type BuildingRef } from './buildings';
 import { CameraRig } from './cameraRig';
 import { Cars } from './cars';
 import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight';
@@ -32,6 +34,18 @@ export class View {
   private elapsed = 0;
   private shownDistricts = 0;
   /**
+   * The building the player has clicked on, or null.
+   *
+   * View state, and it stays view state: it names an ordinal, it is never
+   * written to the save, and a reload opens with nothing selected. Anything
+   * else would be the renderer holding a number the simulation cannot
+   * reproduce, which is the failure this whole layer is arranged to avoid.
+   */
+  private selected: BuildingRef | null = null;
+  /** Reused across clicks. A raycast must not allocate, per frame or otherwise. */
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly pointer = new THREE.Vector2();
+  /**
    * One reusable sky, filled in place every sync. The cycle runs forever, so a
    * fresh reading per frame would be a per-frame allocation.
    */
@@ -59,17 +73,63 @@ export class View {
     // to be looked at in.
     this.cycling = !reducedMotion;
 
+    this.rig.onClick = (x, y) => this.pick(x, y);
+
     window.addEventListener('resize', this.onResize);
     window.addEventListener('keydown', this.onKey);
+  }
+
+  /**
+   * Told when the selection changes, so the HUD can open or close its card.
+   *
+   * A hook rather than the view reaching into the HUD: the view knows what was
+   * clicked and nothing about what a panel is.
+   */
+  onSelect: ((ref: BuildingRef | null) => void) | null = null;
+
+  get selection(): BuildingRef | null {
+    return this.selected;
+  }
+
+  /** Casts through a screen point and selects whatever building is under it. */
+  private pick(x: number, y: number): void {
+    const rect = this.world.canvas.getBoundingClientRect();
+    // Normalised device coordinates, which is what `setFromCamera` wants.
+    this.pointer.set(
+      ((x - rect.left) / rect.width) * 2 - 1,
+      -((y - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(this.pointer, this.world.camera);
+    // Ground and sky both come back as nothing, which is the same answer: a
+    // click on land the player owns but has not built on clears the card.
+    this.select(this.buildings.pick(this.raycaster));
+  }
+
+  select(ref: BuildingRef | null): void {
+    const same =
+      ref === this.selected ||
+      (ref !== null &&
+        this.selected !== null &&
+        ref.kind === this.selected.kind &&
+        ref.slot === this.selected.slot);
+    if (same) return;
+    this.selected = ref;
+    this.onSelect?.(ref);
   }
 
   private readonly onResize = (): void => this.world.resize();
 
   private readonly onKey = (event: KeyboardEvent): void => {
-    if (event.key !== 'z' && event.key !== 'Z') return;
     if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target as HTMLElement | null;
     if (target?.isContentEditable || target instanceof HTMLInputElement) return;
+    // Escape clears the selection, which is the one thing every panel in every
+    // application agrees it should do.
+    if (event.key === 'Escape') {
+      this.select(null);
+      return;
+    }
+    if (event.key !== 'z' && event.key !== 'Z') return;
     this.toggleZones();
   };
 
@@ -108,6 +168,13 @@ export class View {
       this.ground.sync(state.districts, this.elapsed, annexed);
     }
     this.buildings.sync(state, this.elapsed);
+    // After the skyline, and every sync rather than only on a click: a selected
+    // building can climb a level, merge with its neighbour or be boarded up
+    // while the card is open, and the outline has to follow it.
+    if (this.selected && this.selected.slot >= countOf(state, this.selected.kind)) {
+      this.select(null);
+    }
+    this.buildings.highlight(this.selected, state);
     this.zones.sync(state);
     this.courtyards.sync(state);
     this.parks.sync(state);

@@ -126,14 +126,94 @@ canvas {
   -webkit-backdrop-filter: blur(8px);
 }
 
-/* ------------------------------------------------------------- ledger */
+/* --------------------------------------------------------------- dock */
 
-.ledger {
-  top: var(--gutter);
-  right: var(--gutter);
-  width: 212px;
-  padding: 14px 16px;
+/* One control in the bottom-left corner, with the inspector card stacked above
+   it. The wrapper is what is positioned; the panels inside it are in flow, so
+   the card always sits directly on top of a control whose height changes as the
+   city unlocks things. Bounded to the viewport, and the tab bodies scroll
+   inside it rather than pushing the corner off screen. */
+.corner {
+  position: fixed;
+  left: var(--gutter);
+  bottom: var(--gutter);
+  z-index: 3;
+  width: 300px;
+  /* The masthead, the FPS readout and the hint own the top of this same lane —
+     they are canvas chrome with no plate behind them, so anything that reached
+     them would be text over text. 116px is where the hint's last line ends. */
+  max-height: calc(100dvh - var(--gutter) * 2 - 116px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 10px;
+  /* The FPS readout and the masthead own the top-left; nothing here reaches
+     them, and the canvas keeps the pointer events this column does not. */
+  pointer-events: none;
 }
+.corner > * { pointer-events: auto; }
+.corner .hud { position: static; }
+
+.dock {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Treasury and rate, outside the tabs and painted on every frame the rest is:
+   they are the two numbers a decision is made against. */
+.dock-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.dock-cash {
+  flex: 1 1 auto;
+  font-size: 17px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--signal);
+}
+.dock-rate {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sodium);
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+button.tab {
+  flex: 1 1 0;
+  width: auto;
+  margin: 0;
+  padding: 8px 4px;
+  justify-content: center;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+button.tab:hover:not([aria-selected='true']) { background: rgba(240, 166, 75, 0.07); }
+button.tab[aria-selected='true'] {
+  color: var(--concrete);
+  border-bottom-color: var(--sodium);
+}
+
+.panels {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.panel { padding: 12px 16px 14px; }
+.panel[hidden] { display: none; }
+.panel .row:last-child { border-bottom: 0; }
+
 .row {
   display: flex;
   justify-content: space-between;
@@ -178,14 +258,6 @@ canvas {
 
 /* -------------------------------------------------------- demand panel */
 
-/* Its own panel rather than more ledger rows: the ledger states what the city
-   *is*, this one states what it *wants*, and they are read at different times. */
-.demand {
-  top: calc(var(--gutter) + 210px);
-  right: var(--gutter);
-  width: 212px;
-  padding: 12px 16px;
-}
 .cap {
   margin: 0 0 8px;
   font-size: 10px;
@@ -194,7 +266,8 @@ canvas {
   color: var(--dim);
 }
 .cap + .services,
-.cap + .rci { margin-bottom: 14px; }
+.cap + .rci,
+.cap + .steps { margin-bottom: 14px; }
 .services:last-child { margin-bottom: 0; }
 
 .rci-row {
@@ -296,24 +369,22 @@ canvas {
 .mood.short .mood-head .why { color: var(--sodium); }
 .mood.short .mood-fill { background: var(--sodium); }
 
-/* ----------------------------------------------------------- controls */
+/* --------------------------------------------------------- build panel */
 
-.controls {
-  left: var(--gutter);
-  bottom: var(--gutter);
-  width: 296px;
-  padding: 14px 16px;
-}
+/* What the city has climbed to, one name per zone, with the same dots the Z
+   overlay and the plots row use. Three names do not fit on one 300px line in
+   the display face at tracking, so they wrap as a list rather than as a
+   sentence — and the dot is what says which name belongs to which zone. */
 .zone {
-  font-family: var(--display);
-  font-weight: 600;
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--dim);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
   margin: 0 0 10px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
 }
-.zone b { color: var(--concrete); font-weight: 600; }
+.zone b { color: var(--concrete); font-weight: 500; }
 
 /* Land developed, against the threshold that unlocks the next district. */
 .meter {
@@ -434,6 +505,13 @@ button.civic.school { border-color: rgba(99, 198, 168, 0.4); }
 button.civic.school:hover:not(:disabled) { border-color: var(--signal); }
 button.civic.school .cost { color: var(--signal); }
 
+/* Transport is the one civic type that earns rather than gates, so it reads in
+   its own colour rather than in the civic blue the gating four share. */
+button.civic.transit { border-color: rgba(95, 191, 164, 0.4); }
+button.civic.transit:hover:not(:disabled) { border-color: #5fbfa4; }
+button.civic.transit .cost { color: #5fbfa4; }
+button.civic.transit:disabled { border-color: #1c2739; }
+
 button.civic:disabled { border-color: #1c2739; }
 button.civic:disabled .cost,
 button.civic:disabled .built { color: var(--off); }
@@ -456,10 +534,111 @@ button.ghost {
   color: var(--dim);
   justify-content: center;
 }
+/* A toggle that owns its row rather than sharing a split with another. */
+button.ghost.wide { width: 100%; margin-bottom: 10px; }
 button.ghost[aria-pressed='true'] {
   border-style: solid;
   border-color: var(--signal);
   color: var(--signal);
+}
+
+/* ---------------------------------------------------------- taxes panel */
+
+/* Discrete steps, not a slider. See TAX_STEPS: the rate feeds a lagged signal,
+   and a control you drag would push a stream of values into an integrator that
+   answers none of them. Four buttons in a row, one of them pressed. */
+.steps {
+  display: flex;
+  gap: 6px;
+}
+button.step {
+  flex: 1 1 0;
+  width: auto;
+  margin: 0;
+  padding: 8px 4px;
+  justify-content: center;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+button.step[aria-checked='true'] {
+  border-color: var(--sodium);
+  color: var(--concrete);
+  background: rgba(240, 166, 75, 0.1);
+}
+
+/* ----------------------------------------------------------- inspector */
+
+/* The selected building's card. It sits above the controls rather than inside
+   them: it is about one thing on the map and appears only when there is one,
+   where the control below it is always there and always says the same things. */
+.card {
+  /* In flow inside `.corner`, so it sits directly on the control however tall
+     the open tab happens to be. */
+  padding: 12px 16px 10px;
+}
+.card[hidden] { display: none; }
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.card-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.card-close {
+  width: auto;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--dim);
+}
+.card-close:hover:not(:disabled) { background: transparent; color: var(--concrete); }
+.card-sub {
+  margin: 2px 0 8px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.card-rows { margin: 0; }
+.card-rows div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(37, 52, 75, 0.8);
+}
+.card-rows div:last-child { border-bottom: 0; }
+.card-rows dt {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.card-rows dd {
+  margin: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+/* The disclaimer the inspector needs: two buildings of one level are identical
+   by construction, so every scalar in the card belongs to the whole city. */
+.card-note {
+  margin: 8px 0 0;
+  font-size: 9px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--off);
 }
 
 /* ------------------------------------------------- while you were away */
@@ -531,31 +710,28 @@ button.primary {
 
 /* -------------------------------------------------------------- small */
 
+/* The reflow the ledger used to do, now that it is a tab: below this width a
+   300px column is most of the screen, so the corner takes all of it and the
+   ledger goes back to being a dense two-column grid. The demand tab stays one
+   column — its rows are caption-and-body pairs rather than key-and-value ones,
+   and two columns break the pairing rather than tightening it. */
 @media (max-width: 760px) {
   :root { --gutter: 12px; }
-  .ledger {
-    top: var(--gutter);
-    bottom: auto;
+  .corner {
     right: var(--gutter);
-    left: var(--gutter);
     width: auto;
+    /* Half the viewport at most: the city is the other half, and a control that
+       covered it would leave nothing to control. */
+    max-height: 62dvh;
+  }
+  /* `:not([hidden])` because an id beats `.panel[hidden]` on specificity, and a
+     grid display on a hidden panel is a hidden panel that is not hidden. */
+  #panel-treasury:not([hidden]) {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0 18px;
   }
-  .ledger .row:nth-last-child(1) { border-bottom: 0; }
-  /* Demand goes across the top under the ledger; the controls own the bottom. */
-  .demand {
-    top: calc(var(--gutter) + 128px);
-    right: var(--gutter);
-    left: var(--gutter);
-    width: auto;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 18px;
-  }
-  .demand .cap { grid-column: span 1; }
-  .controls { left: var(--gutter); right: var(--gutter); width: auto; }
+  #panel-treasury .row { border-bottom: 1px dashed rgba(37, 52, 75, 0.8); }
   .hint { display: none; }
 }
 
