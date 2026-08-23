@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { hash01 } from '../core/rng';
-import { TIERS, type Tier } from '../sim/config';
+import { CELL, SERVICES, TIERS, type Service, type Tier } from '../sim/config';
 import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
 import type { GameState } from '../sim/state';
 import { GrowableInstancedMesh } from './growable';
@@ -349,45 +349,68 @@ class IndustryMeshes {
   }
 }
 
-const CIVIC_W = 2.9;
-const CIVIC_H = 2.0;
+/**
+ * A civic building spans two plots on each axis, less the usual street margin —
+ * the same 1-unit gutter a shop leaves, so a hospital sits in its block the way
+ * everything else does rather than rendering as a slab pushed into the kerb.
+ */
+const CIVIC_W = 2 * CELL - 1;
 
-/** Roof colour per service, in the order civic plots are handed out. */
-const CIVIC_ROOF = [PALETTE.civicSchool, PALETTE.civicClinic, PALETTE.civicSafety] as const;
+interface CivicStyle {
+  readonly body: number;
+  readonly roof: number;
+  /** Body height in world units. */
+  readonly height: number;
+}
 
 /**
- * Schools, clinics and stations, told apart by roof colour alone.
+ * Hospital, police station, fire station — one mesh set each.
  *
- * They stand on residential plots, so giving each its own mass would make the
- * neighbourhood read as three unrelated zones. One block with a lit roof says
- * "civic" from above and stays part of the street from ground level.
+ * The other types are told apart by colour because they all stand on one plot
+ * and there is no room to do better. A 2x2 footprint is room, so each of these
+ * gets a shape: the hospital is pale and carries a tower off its slab, the
+ * police station is a low dark block with a deep parapet, and the fire station
+ * is squat with a lit bay-door face on one side. Silhouette first, colour
+ * second — that is what makes them findable from the play camera.
  */
 class CivicMeshes {
   private readonly body: GrowableInstancedMesh;
   private readonly roof: GrowableInstancedMesh;
+  /** Tower for the hospital, parapet for police, bay door for fire. */
+  private readonly mark: GrowableInstancedMesh;
   private overlay: number | null = null;
 
-  constructor(scene: THREE.Scene, capacity: number) {
+  constructor(
+    scene: THREE.Scene,
+    private readonly style: CivicStyle,
+    mark: THREE.BufferGeometry,
+    markMaterial: THREE.Material,
+    private readonly markOffset: THREE.Vector3,
+    capacity: number,
+  ) {
     this.body = new GrowableInstancedMesh(
       scene,
-      new THREE.BoxGeometry(CIVIC_W, CIVIC_H, CIVIC_W),
-      new THREE.MeshLambertMaterial({ color: PALETTE.civic }),
+      new THREE.BoxGeometry(CIVIC_W, style.height, CIVIC_W),
+      new THREE.MeshLambertMaterial({ color: style.body }),
       capacity,
       { castShadow: true, receiveShadow: true },
     );
-    // White material, so the per-instance roof colour comes through unmultiplied.
     this.roof = new GrowableInstancedMesh(
       scene,
-      new THREE.BoxGeometry(CIVIC_W + 0.2, 0.3, CIVIC_W + 0.2),
-      new THREE.MeshLambertMaterial({ color: 0xffffff }),
+      new THREE.BoxGeometry(CIVIC_W + 0.3, 0.34, CIVIC_W + 0.3),
+      new THREE.MeshLambertMaterial({ color: style.roof }),
       capacity,
       { castShadow: true },
     );
+    this.mark = new GrowableInstancedMesh(scene, mark, markMaterial, capacity, {
+      castShadow: true,
+    });
   }
 
   ensure(capacity: number): void {
     this.body.ensure(capacity);
     this.roof.ensure(capacity);
+    this.mark.ensure(capacity);
   }
 
   setOverlay(hex: number | null): void {
@@ -395,7 +418,7 @@ class CivicMeshes {
   }
 
   private bodyColor(out: THREE.Color): THREE.Color {
-    return this.overlay === null ? out.setRGB(1, 1, 1) : against(this.overlay, PALETTE.civic, out);
+    return this.overlay === null ? out.setRGB(1, 1, 1) : against(this.overlay, this.style.body, out);
   }
 
   recolor(count: number, tint: THREE.Color): void {
@@ -403,39 +426,85 @@ class CivicMeshes {
     this.body.flush();
   }
 
-  write(
-    index: number,
-    cell: Coord,
-    kind: number,
-    scale: number,
-    dummy: THREE.Object3D,
-    tint: THREE.Color,
-  ): void {
-    const x = worldX(cell.x);
-    const z = worldZ(cell.z);
+  /**
+   * `cell` is the site's lower-left plot; the building straddles all four, so
+   * the instance sits half a cell along each axis from it.
+   */
+  write(index: number, cell: Coord, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
+    const x = worldX(cell.x) + CELL / 2;
+    const z = worldZ(cell.z) + CELL / 2;
+    const h = this.style.height;
+
     dummy.rotation.set(0, 0, 0);
-    dummy.position.set(x, (CIVIC_H / 2) * scale, z);
+    dummy.position.set(x, (h / 2) * scale, z);
     dummy.scale.set(1, scale, 1);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
     this.body.setColorAt(index, this.bodyColor(tint));
 
     dummy.scale.setScalar(scale);
-    dummy.position.y = (CIVIC_H + 0.15) * scale;
+    dummy.position.y = (h + 0.17) * scale;
     dummy.updateMatrix();
     this.roof.setMatrixAt(index, dummy.matrix);
-    this.roof.setColorAt(index, tint.setHex(CIVIC_ROOF[kind] ?? PALETTE.civicSchool));
+
+    dummy.position.set(
+      x + this.markOffset.x,
+      (h + this.markOffset.y) * scale,
+      z + this.markOffset.z,
+    );
+    dummy.updateMatrix();
+    this.mark.setMatrixAt(index, dummy.matrix);
   }
 
   setCount(n: number): void {
     this.body.count = n;
     this.roof.count = n;
+    this.mark.count = n;
   }
 
   flush(): void {
     this.body.flush();
     this.roof.flush();
+    this.mark.flush();
   }
+}
+
+const TOWER_H = 3.4;
+
+/** One mesh set per service, in SERVICES order. */
+function civicSet(scene: THREE.Scene, service: Service, capacity: number): CivicMeshes {
+  if (service.key === 'hospital') {
+    return new CivicMeshes(
+      scene,
+      { body: PALETTE.hospital, roof: PALETTE.hospitalRoof, height: 2.6 },
+      new THREE.BoxGeometry(2.4, TOWER_H, 2.4),
+      new THREE.MeshLambertMaterial({ color: PALETTE.hospital }),
+      // Off-centre, so the tower reads as a wing rather than as a spire.
+      new THREE.Vector3(-1.4, TOWER_H / 2, -1.4),
+      capacity,
+    );
+  }
+  if (service.key === 'police') {
+    return new CivicMeshes(
+      scene,
+      { body: PALETTE.police, roof: PALETTE.policeRoof, height: 1.7 },
+      // A deep parapet ringing the roof: low and closed, the opposite of the
+      // hospital's tower at the same footprint.
+      new THREE.BoxGeometry(CIVIC_W + 0.7, 0.7, CIVIC_W + 0.7),
+      new THREE.MeshLambertMaterial({ color: PALETTE.police }),
+      new THREE.Vector3(0, 0.6, 0),
+      capacity,
+    );
+  }
+  return new CivicMeshes(
+    scene,
+    { body: PALETTE.fire, roof: PALETTE.fireRoof, height: 2.0 },
+    // The bay doors: a lit band across one face, at ground level.
+    new THREE.BoxGeometry(CIVIC_W - 0.6, 1.2, 0.3),
+    new THREE.MeshBasicMaterial({ color: PALETTE.sodium }),
+    new THREE.Vector3(0, -1.4, CIVIC_W / 2),
+    capacity,
+  );
 }
 
 /**
@@ -446,11 +515,22 @@ export class Buildings {
   private readonly tiers: TierMeshes[];
   private readonly shops: ShopMeshes;
   private readonly industry: IndustryMeshes;
-  private readonly civic: CivicMeshes;
+  /**
+   * One entry per service, in SERVICES order, each owning its own mesh set,
+   * growth schedule and shown count. Civic sites are reserved up front and
+   * indexed by a fixed interleave, so unlike every earlier version of this the
+   * three types never move and never need rewriting as a block.
+   */
+  private readonly civic: ReadonlyArray<{
+    readonly service: Service;
+    readonly meshes: CivicMeshes;
+    readonly growth: GrowthSchedule;
+    readonly site: (i: number) => Coord;
+    shown: number;
+  }>;
   private readonly homeGrowth: GrowthSchedule;
   private readonly shopGrowth: GrowthSchedule;
   private readonly industryGrowth: GrowthSchedule;
-  private readonly civicGrowth: GrowthSchedule;
   private readonly dummy = new THREE.Object3D();
   private readonly tint = new THREE.Color();
 
@@ -458,9 +538,6 @@ export class Buildings {
   private shownShops = 0;
   private shownIndustry = 0;
   private shownTier = 0;
-  /** Civic plots are handed out from the back of a growing list, so every one
-   *  of these moving is a reason to rewrite the whole civic set. */
-  private shownCivic = { schools: 0, clinics: 0, stations: 0, districts: 0 };
 
   constructor(
     scene: THREE.Scene,
@@ -470,11 +547,30 @@ export class Buildings {
     this.homeGrowth = new GrowthSchedule(duration);
     this.shopGrowth = new GrowthSchedule(duration);
     this.industryGrowth = new GrowthSchedule(duration);
-    this.civicGrowth = new GrowthSchedule(duration);
     this.tiers = TIERS.map((tier) => new TierMeshes(scene, tier, 64));
     this.shops = new ShopMeshes(scene, 32);
     this.industry = new IndustryMeshes(scene, 24);
-    this.civic = new CivicMeshes(scene, 12);
+    this.civic = SERVICES.map((service) => ({
+      service,
+      meshes: civicSet(scene, service, 8),
+      growth: new GrowthSchedule(duration),
+      site:
+        service.key === 'hospital'
+          ? (i: number) => this.layout.hospitalSite(i)
+          : service.key === 'police'
+            ? (i: number) => this.layout.policeSite(i)
+            : (i: number) => this.layout.fireSite(i),
+      shown: 0,
+    }));
+  }
+
+  /** How many of a service the state has, without a lookup table per caller. */
+  private static count(state: Readonly<GameState>, service: Service): number {
+    return service.key === 'hospital'
+      ? state.hospitals
+      : service.key === 'police'
+        ? state.police
+        : state.fire;
   }
 
   private get active(): TierMeshes {
@@ -525,37 +621,17 @@ export class Buildings {
     }
     this.shownIndustry = state.industry;
 
-    this.syncCivic(state, now);
-  }
-
-  /**
-   * Civic buildings are the one type whose plots are not fixed for life: they
-   * are allocated from the back of the residential list, so annexing land moves
-   * every one of them. Rewriting the whole set is cheap — there are never more
-   * than a handful — and re-staging them makes the move read as the civic
-   * programme following the city out rather than as a pop.
-   */
-  private syncCivic(state: Readonly<GameState>, now: number): void {
-    const seen = this.shownCivic;
-    const total = state.schools + state.clinics + state.stations;
-    const before = seen.schools + seen.clinics + seen.stations;
-    const moved = state.districts !== seen.districts;
-    if (!moved && total === before) return;
-
-    const grew = total > before;
-    this.writeCivic(state, now);
-    if (moved || !grew) {
-      this.civicGrowth.clear();
-      if (moved && grew) this.civicGrowth.stage(0, total, now, 1.2, WAVE_BUDGET);
-    } else {
-      this.civicGrowth.stage(before, total, now, 1.4, WAVE_BUDGET);
+    for (const set of this.civic) {
+      const count = Buildings.count(state, set.service);
+      if (count > set.shown) {
+        set.growth.stage(set.shown, count, now, 1.4, WAVE_BUDGET);
+        this.writeCivic(set, set.shown, count, now);
+      } else if (count < set.shown) {
+        set.growth.clear();
+        this.writeCivic(set, 0, count, now);
+      }
+      set.shown = count;
     }
-    this.shownCivic = {
-      schools: state.schools,
-      clinics: state.clinics,
-      stations: state.stations,
-      districts: state.districts,
-    };
   }
 
   private writeHomes(from: number, to: number, now: number, rewrite: boolean): void {
@@ -602,29 +678,19 @@ export class Buildings {
     this.industry.flush();
   }
 
-  /** Slot -> which service stands there. Matches how `civicCell` packs them. */
-  private civicKind(state: Readonly<GameState>, slot: number): number {
-    if (slot < state.schools) return 0;
-    if (slot < state.schools + state.clinics) return 1;
-    return 2;
-  }
-
-  private writeCivic(state: Readonly<GameState>, now: number): void {
-    const total = state.schools + state.clinics + state.stations;
-    this.civic.ensure(total);
-    this.civicGrowth.ensure(total);
-    for (let i = 0; i < total; i++) {
-      this.civic.write(
-        i,
-        this.layout.civicCell(i),
-        this.civicKind(state, i),
-        this.civicGrowth.scaleAt(i, now),
-        this.dummy,
-        this.tint,
-      );
+  private writeCivic(
+    set: (typeof this.civic)[number],
+    from: number,
+    to: number,
+    now: number,
+  ): void {
+    set.meshes.ensure(to);
+    set.growth.ensure(to);
+    for (let i = from; i < to; i++) {
+      set.meshes.write(i, set.site(i), set.growth.scaleAt(i, now), this.dummy, this.tint);
     }
-    this.civic.setCount(total);
-    this.civic.flush();
+    set.meshes.setCount(to);
+    set.meshes.flush();
   }
 
   /**
@@ -636,14 +702,15 @@ export class Buildings {
     for (const tier of this.tiers) tier.setOverlay(on ? PALETTE.zoneResidential : null);
     this.shops.setOverlay(on ? PALETTE.zoneCommercial : null);
     this.industry.setOverlay(on ? PALETTE.zoneIndustrial : null);
-    // Civic buildings stand on residential land, so under the plan they are
-    // residential — the overlay states zoning, not what happens to be built.
-    this.civic.setOverlay(on ? PALETTE.zoneResidential : null);
+    // A civic site is carved out of the zone it sits in, so under the plan it
+    // reads as that zone — the overlay states zoning, not what stands there.
+    for (const set of this.civic) {
+      set.meshes.setOverlay(on ? PALETTE.zoneResidential : null);
+    }
     this.active.recolor(this.shownHomes, this.tint);
     this.shops.recolor(this.shownShops, this.tint);
     this.industry.recolor(this.shownIndustry, this.tint);
-    const civic = this.shownCivic;
-    this.civic.recolor(civic.schools + civic.clinics + civic.stations, this.tint);
+    for (const set of this.civic) set.meshes.recolor(set.shown, this.tint);
   }
 
   /** Advances in-flight growth animations. Returns true while any are running. */
@@ -664,12 +731,14 @@ export class Buildings {
     });
     if (industryMoving) this.industry.flush();
 
-    const seen = this.shownCivic;
-    const civicMoving = this.civicGrowth.update(now, (i, s) => {
-      const kind = i < seen.schools ? 0 : i < seen.schools + seen.clinics ? 1 : 2;
-      this.civic.write(i, this.layout.civicCell(i), kind, s, this.dummy, this.tint);
-    });
-    if (civicMoving) this.civic.flush();
+    let civicMoving = false;
+    for (const set of this.civic) {
+      const moving = set.growth.update(now, (i, s) => {
+        set.meshes.write(i, set.site(i), s, this.dummy, this.tint);
+      });
+      if (moving) set.meshes.flush();
+      civicMoving = civicMoving || moving;
+    }
 
     return homesMoving || shopsMoving || industryMoving || civicMoving;
   }

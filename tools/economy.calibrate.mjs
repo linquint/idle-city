@@ -32,8 +32,8 @@ import {
   canBuildService,
   canBuildShop,
   canRezone,
+  civicBuildings,
   coverage,
-  happiness,
   homeCost,
   industryCost,
   occupancy,
@@ -157,9 +157,9 @@ function run(policy) {
     pins.I.sample(s.demandI, STEP);
     if (firsts.rezone === null && s.tier > 0) firsts.rezone = t;
     if (firsts.annex === null && s.districts > 1) firsts.annex = t;
-    if (firsts.service === null && s.schools + s.clinics + s.stations > 0) firsts.service = t;
+    if (firsts.service === null && civicBuildings(s) > 0) firsts.service = t;
     for (const mark of [3600, 6 * 3600, 24 * 3600]) {
-      if (happy[mark] === undefined && t >= mark) happy[mark] = happiness(s);
+      if (happy[mark] === undefined && t >= mark) happy[mark] = s.happiness;
     }
   }
   return { game, pins, firsts, happy };
@@ -203,7 +203,7 @@ for (const [name, policy] of POLICIES) {
   console.log(`policy: ${name}`);
   console.log(
     `  built:          ${s.homes}R / ${s.shops}C / ${s.industry}I / ` +
-      `${s.schools + s.clinics + s.stations} civic, tier ${s.tier}, ${s.districts} district(s)`,
+      `${civicBuildings(s)} civic, tier ${s.tier}, ${s.districts} district(s)`,
   );
   console.log(
     `  occupancy:      ${(occupancy(s) * 100).toFixed(1)}% (annex gate ${(ANNEX_MIN_OCCUPANCY * 100).toFixed(0)}%)`,
@@ -228,7 +228,8 @@ for (const [name, policy] of POLICIES) {
   );
   console.log(
     `  costs at end:   home ${homeCost(s).toExponential(2)}  shop ${shopCost(s).toExponential(2)}  ` +
-      `industry ${industryCost(s).toExponential(2)}  school ${serviceCost(s, SERVICES[0]).toExponential(2)}`,
+      `industry ${industryCost(s).toExponential(2)}  ` +
+      `${SERVICES[0].key} ${serviceCost(s, SERVICES[0]).toExponential(2)}`,
   );
   console.log('');
 }
@@ -276,7 +277,7 @@ for (let tier = 0; tier < TIERS.length; tier++) {
   const pct = occupancy(s) * 100;
   console.log(
     `  ${TIERS[tier].name.padEnd(17)} ${pct.toFixed(1).padStart(5)}%  ` +
-      `${s.homes}R / ${s.shops}C / ${s.industry}I / ${s.schools + s.clinics + s.stations} civic` +
+      `${s.homes}R / ${s.shops}C / ${s.industry}I / ${civicBuildings(s)} civic` +
       (pct >= ANNEX_MIN_OCCUPANCY * 100 ? '' : '   <- under the gate'),
   );
 }

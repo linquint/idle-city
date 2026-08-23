@@ -49,17 +49,24 @@
       <span class="num" id="demand-i-num">0</span></div>
   </div>
 
+  <p class="cap">Happiness</p>
+  <div class="mood" id="mood" role="img">
+    <div class="mood-head"><span class="num" id="mood-pct">0%</span>
+      <span class="why" id="mood-why">Health coverage 0%</span></div>
+    <span class="bar"><i class="mood-fill" id="mood-fill"></i></span>
+  </div>
+
   <p class="cap">Services</p>
   <div class="services" id="services" role="img">
-    <div class="svc"><span class="k">School</span>
-      <span class="built" id="svc-school-built">0/0</span>
-      <span class="pct" id="svc-school-pct">0%</span></div>
-    <div class="svc"><span class="k">Clinic</span>
-      <span class="built" id="svc-clinic-built">0/0</span>
-      <span class="pct" id="svc-clinic-pct">0%</span></div>
-    <div class="svc"><span class="k">Station</span>
-      <span class="built" id="svc-station-built">0/0</span>
-      <span class="pct" id="svc-station-pct">0%</span></div>
+    <div class="svc"><span class="k">Hospitals</span>
+      <span class="built" id="svc-hospital-built">0/0</span>
+      <span class="covers" id="svc-hospital-covers">0 of 0</span></div>
+    <div class="svc"><span class="k">Police</span>
+      <span class="built" id="svc-police-built">0/0</span>
+      <span class="covers" id="svc-police-covers">0 of 0</span></div>
+    <div class="svc"><span class="k">Fire</span>
+      <span class="built" id="svc-fire-built">0/0</span>
+      <span class="covers" id="svc-fire-covers">0 of 0</span></div>
   </div>
 </section>
 
@@ -85,14 +92,17 @@
   </button>
 
   <div class="civic-row">
-    <button class="civic" id="build-school" type="button">
-      <span>School</span><span class="cost" id="build-school-cost">1.20K</span>
+    <button class="civic" id="build-hospital" type="button">
+      <span>Hospital</span><span class="built" id="build-hospital-built">0/1</span>
+      <span class="cost" id="build-hospital-cost">130</span>
     </button>
-    <button class="civic" id="build-clinic" type="button">
-      <span>Clinic</span><span class="cost" id="build-clinic-cost">2.00K</span>
+    <button class="civic" id="build-police" type="button">
+      <span>Police</span><span class="built" id="build-police-built">0/1</span>
+      <span class="cost" id="build-police-cost">210</span>
     </button>
-    <button class="civic" id="build-station" type="button">
-      <span>Station</span><span class="cost" id="build-station-cost">1.60K</span>
+    <button class="civic" id="build-fire" type="button">
+      <span>Fire</span><span class="built" id="build-fire-built">0/1</span>
+      <span class="cost" id="build-fire-cost">320</span>
     </button>
   </div>
 

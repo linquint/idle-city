@@ -38,6 +38,39 @@ export const ROAD_GAP_MAX = 7;
 export const TARGET_PLOTS = 90;
 
 /**
+ * What one district must offer once frontage and civic land are taken out.
+ *
+ * Every building fronts a street, so only the 72 road-adjacent plots of a
+ * district's 90 are ever for sale, and `civicSites` claims 2x2 quads out of
+ * those before housing sees them. Neither number falls where the brief for this
+ * change assumed. Measured by enumerating all 240 street plans the generator
+ * can produce (60 skeletons x 4 rail sides — the complete space, not a sample):
+ *
+ *   - road-adjacent plots: 72 of 90, invariant;
+ *   - of those, commercial is invariant at 28, because `zoneBlocks` lays shops
+ *     along block rings and a ring is exactly the frontage;
+ *   - residential and industrial split the remaining 44 *variably* — R lands on
+ *     one of {25, 26, 28, 29, 31, 33, 34} and I on {19, 18, 16, 15, 13, 11, 10}.
+ *     30/14 never occurs; it is the mean of the two distributions, not a value
+ *     either one takes.
+ *
+ * `homeCapacity` multiplies a per-district constant by the district count, so a
+ * variable split would either strand land or sell plots that do not exist. The
+ * fix is the one this codebase already uses one level down: reject and reseed.
+ * `districtPlanAt` samples district seeds until the district lands on the triple
+ * below, which 8.8% of accepted layouts do — about 11 tries, and it still leaves
+ * 32 distinct street plans in play. Taking the guaranteed minimum instead would
+ * mean 9 residential and 3 industrial plots a district, which is not a game.
+ */
+export const FRONTAGE_TARGET = {
+  residential: 19,
+  commercial: 28,
+  industrial: 11,
+  /** 2x2 civic quads per district. 7 x 4 = 28 plots, mostly dead interior. */
+  civicSites: 7,
+} as const;
+
+/**
  * Zoning budget, as fractions of a district's buildable plots.
  *
  * These are not a tidy 50/30/20 and must not be "cleaned up" into one. They
@@ -132,22 +165,26 @@ export const ANNEX_GROWTH = 3.4;
 /**
  * You must have built out this share of your land before you may annex more.
  *
- * Left at 0.7 through the change that folded industry into the denominator,
- * which grew a district from 71 buildable plots to 90 — the gate went from 50
- * buildings to 63. Re-measured rather than assumed:
+ * Left at 0.7 through the change that took interior plots off the market, which
+ * shrank a district from 90 sellable plots to 65 (58 for sale plus 7 civic
+ * sites) — the gate went from 63 buildings to 46. Re-measured rather than
+ * assumed, and deliberately not retuned:
  *
- *   - Demand-neutral build-out of one district, per tier: 68.9% at detached
- *     housing, 98.9% at apartments, 84.4% at towers, 71.1% at arcologies. Every
- *     tier but the first clears the gate on demand alone, so annexation stays
- *     reachable for as long as the city keeps expanding.
- *   - Tier 0 falls 1.1 points short, which puts a rezone before the first annex.
- *     That is the ordering the game should teach anyway, and REZONE_MIN_HOMES is
- *     reachable long before a district fills.
- *   - A player who respects the demand floors and does rezone reaches the first
- *     annex at 3.8 hours; one chasing discounts reaches it at 1.8.
+ *   - Demand-neutral build-out of one district, per tier: 53.8% at detached
+ *     housing, 72.3% at apartments, 83.1% at towers, 70.8% at arcologies.
+ *   - Tier 0 now falls 16 points short rather than 1, because the residential
+ *     zone lost 24 plots to frontage and commerce lost none: 19 homes house 76
+ *     people, and 76 people are served by 4 shops. That puts a rezone firmly
+ *     before the first annex, which is the ordering the game should teach.
+ *   - The first annex lands at 1.25h disciplined and 1.61h greedy, against 3.8h
+ *     and 1.8h before. It arrived earlier, but not because of this gate: at 1h
+ *     an attentive player is at 94% developed with 63.7K banked, so what they
+ *     are waiting on is ANNEX_BASE, not occupancy.
  *
- * 3.8 hours into a 24-hour arc is a sensible place for the first annex, so this
- * needs no retune. See tools/economy.calibrate.mjs.
+ * Raising it is the obvious response and the wrong one: 0.8 would put both
+ * apartments (72.3%) and arcologies (70.8%) under the gate, so the tiers where
+ * a player most wants more land would be the tiers that cannot reach it. The
+ * pacing lever here is ANNEX_BASE. See tools/economy.calibrate.mjs.
  */
 export const ANNEX_MIN_OCCUPANCY = 0.7;
 
@@ -294,11 +331,13 @@ export const PRICE_SURCHARGE_MAX = 0.6;
 // ------------------------------------------------------------------ services
 
 export interface Service {
-  /** Matches the GameState counter and the coverage key. */
-  readonly key: 'school' | 'clinic' | 'station';
+  /** Matches the GameState counter, the staffing scalar and the coverage key. */
+  readonly key: 'hospital' | 'police' | 'fire';
   readonly name: string;
   readonly buildLabel: string;
-  /** Residents one of these covers. */
+  /** How the HUD names this service's coverage when it is the binding one. */
+  readonly coverLabel: string;
+  /** Residents one of these covers, once it is fully staffed. */
   readonly capacity: number;
   readonly base: number;
   /** Share of the happiness score. The three sum to 1. */
@@ -307,22 +346,54 @@ export interface Service {
 
 /**
  * Civic buildings earn nothing at all. They gate: coverage feeds happiness,
- * happiness multiplies income and caps residential demand. A city that never
- * builds one still works, it just runs at the floor forever — neglect reads as
- * a ceiling on what the city can become, not as a punishment for playing.
+ * happiness multiplies income, caps residential demand and stops housing
+ * outright below HAPPINESS_MIN_BUILD. A city that never builds one still works,
+ * it just runs at the floor — neglect reads as a ceiling on what the city can
+ * become, not as a punishment for playing.
  *
- * Capacities are set against a tier-0 district (43 plots x 4 = 172 residents)
- * so the first of each is due at roughly the same time, and a rezone to
- * apartments makes all three short at once.
+ * Each stands on a 2x2 site, of which a district has seven, so the three types
+ * share about 2.3 buildings a district. Capacities are set against that supply
+ * rather than against a population: at towers a district holds 1,330 people and
+ * its share of the sites covers all of them, while arcologies (5,700 a district)
+ * outrun the land. Measured over 24 hours of discount-chasing, that endgame
+ * settles at 53% happiness — a real squeeze, and still comfortably clear of
+ * HAPPINESS_MIN_BUILD, so housing is never bricked by land the city cannot buy.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'school',  name: 'Schools',  buildLabel: 'Open school',  capacity: 220, base: 1_200, weight: 0.35 },
-  { key: 'clinic',  name: 'Clinics',  buildLabel: 'Open clinic',  capacity: 320, base: 2_000, weight: 0.4  },
-  { key: 'station', name: 'Stations', buildLabel: 'Open station', capacity: 400, base: 1_600, weight: 0.25 },
+  { key: 'hospital', name: 'Hospitals', buildLabel: 'Open hospital',      coverLabel: 'Health coverage', capacity: 900,  base: 130, weight: 0.4  },
+  { key: 'police',   name: 'Police',    buildLabel: 'Open police station', coverLabel: 'Police coverage', capacity: 1_200, base: 210, weight: 0.35 },
+  { key: 'fire',     name: 'Fire',      buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',   capacity: 1_500, base: 320, weight: 0.25 },
 ];
 
 /** Civic buildings compound like everything else, and faster than housing. */
 export const CIVIC_GROWTH = 1.35;
+
+/**
+ * Seconds for a new civic building to reach full effect.
+ *
+ * A hospital covers nobody the instant its roof goes on; it hires. Without the
+ * ramp, opening one snaps happiness — and therefore income and the whole
+ * residential demand ceiling — inside a single tick, which reads as a bug
+ * rather than as a service opening. 90s is long enough to see and short enough
+ * that the purchase still feels like it did something.
+ *
+ * Staffing is stored per *type*, not per building, and re-averaged when one
+ * lands: a fifth hospital drops the type's staffing to 4/5. That is the honest
+ * average, so the four already running keep their cover and only the new one
+ * ramps — coverage holds and climbs rather than stepping down.
+ */
+export const CIVIC_RAMP_SECONDS = 90;
+
+/**
+ * Seconds for happiness to close ~63% of the gap to its coverage.
+ *
+ * The staffing ramp already stops a *new* building from snapping the number,
+ * but nothing else does: a rezone quadruples the population between one tick
+ * and the next and coverage falls off a cliff under it. Residents do not change
+ * their minds that fast. Same exponential form as DEMAND_TAU, and the same
+ * reason — it survives a 60-second offline catch-up step without overshooting.
+ */
+export const HAPPINESS_TAU = 45;
 
 /**
  * What a city with no services at all still earns.
@@ -330,9 +401,23 @@ export const CIVIC_GROWTH = 1.35;
  * 0.55 is the number the opening minute was re-checked against: the first house
  * pays for itself in 26 seconds instead of 14, which is slower but still inside
  * "a decision rather than a wait" — the pacing guard in test/game.test.ts still
- * clears its floor of eight homes in the first minute, with two to spare.
- *
- * Measured at 24 hours: a city that never builds a service sits at the floor
- * forever, and one that keeps up reaches 100% happiness by the sixth hour.
+ * clears its floor of eight homes in the first minute.
  */
 export const HAPPINESS_FLOOR = 0.55;
+
+/**
+ * Below this, nobody new will move in and the home button says so.
+ *
+ * This is the tutorial, and it has no text: housing stalls, the happiness panel
+ * names the service that is short, and the player works out why. One hospital
+ * is worth 0.4 on its own, so the fix is always exactly one purchase away.
+ *
+ * An empty city is at 1, not 0 — coverage is the share of residents a service
+ * reaches, and with no residents there is nobody it fails. Happiness then lags
+ * down from there as the first houses fill (HAPPINESS_TAU), which is what buys
+ * the opening enough room to earn the hospital that lifts the gate. Measured
+ * against a player who buys the moment they can: the gate first bites at 47s
+ * and 11 homes, and the first hospital opens at 116s. The stall is not dead
+ * time — shops and industry are both still buildable through it.
+ */
+export const HAPPINESS_MIN_BUILD = 0.35;

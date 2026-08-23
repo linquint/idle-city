@@ -64,14 +64,21 @@ export interface DistrictLayout {
   readonly block: Int16Array;
   /**
    * Per local cell: 1 when the plot touches a road, 0 when it is buried inside
-   * a block. Nothing reads this yet — it is here for the height cap that keeps
-   * large blocks from rendering as solid mesas.
+   * a block. This is what the three build-order lists are filtered on, so an
+   * interior plot stays zoned but is never offered as a building site.
    */
   readonly perimeter: Uint8Array;
   readonly blocks: readonly Block[];
   readonly buildable: number;
   readonly railSide: RailSide;
-  /** Build order per zone: local cell indices, shuffled within the zone. */
+  /**
+   * Build order per zone: local cell indices, shuffled within the zone.
+   *
+   * Road-adjacent plots only. Every building in this game fronts a street, so
+   * the interior of a deep block is zoned land that will never be built on —
+   * `civicSites` in layout.ts claims most of it for 2x2 civic buildings and the
+   * renderer draws whatever is left as a courtyard.
+   */
   readonly residential: readonly number[];
   readonly commercial: readonly number[];
   readonly industrial: readonly number[];
@@ -370,6 +377,9 @@ export function generateAttempt(seed: number): Omit<DistrictLayout, 'attempts'> 
   const commercial: number[] = [];
   const industrial: number[] = [];
   for (let i = 0; i < zone.length; i++) {
+    // Frontage is the filter. `zone` keeps the interior plots — they are still
+    // residential or industrial land, they are simply not for sale.
+    if (perimeter[i] !== 1) continue;
     if (zone[i] === ZONE.residential) residential.push(i);
     else if (zone[i] === ZONE.commercial) commercial.push(i);
     else if (zone[i] === ZONE.industrial) industrial.push(i);

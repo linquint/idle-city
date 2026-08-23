@@ -21,11 +21,13 @@ import {
 } from '../src/sim/citygen.ts';
 import {
   DISTRICT_SPAN as SPAN,
+  FRONTAGE_TARGET,
   ROAD_GAP_MAX,
   ROAD_GAP_MIN,
   TARGET_PLOTS,
   ZONE_SHARE,
 } from '../src/sim/config.ts';
+import { civicSites, districtPlan, planFor } from '../src/sim/layout.ts';
 import { rng } from '../src/core/rng.ts';
 
 let failures = 0;
@@ -180,10 +182,11 @@ check('zone split: R/C/I within 2 plots of the target fractions', () => {
       drift = Math.max(drift, off);
       assert(off <= 2, `seed ${i}: ${key} ${got[key]}, wanted ~${want[key].toFixed(1)}`);
     }
-    // The three lists the renderer draws from must agree with the map itself.
-    assert(layout.residential.length === got.residential, `seed ${i}: R list disagrees`);
-    assert(layout.commercial.length === got.commercial, `seed ${i}: C list disagrees`);
-    assert(layout.industrial.length === got.industrial, `seed ${i}: I list disagrees`);
+    // The build lists are the road-adjacent subset now, so they can only ever
+    // be shorter than the zone. Their exact lengths are asserted in section 8.
+    assert(layout.residential.length <= got.residential, `seed ${i}: R list exceeds the zone`);
+    assert(layout.commercial.length <= got.commercial, `seed ${i}: C list exceeds the zone`);
+    assert(layout.industrial.length <= got.industrial, `seed ${i}: I list exceeds the zone`);
   }
   const budget = zoneBudget(TARGET_PLOTS);
   return `R ${budget.residential} / C ${budget.commercial} / I ${budget.industrial}, worst drift ${drift.toFixed(1)}`;
@@ -215,13 +218,13 @@ check('coverage: one zone per buildable plot, none on a road, none empty', () =>
     for (const zone of [ZONE.residential, ZONE.commercial, ZONE.industrial]) {
       assert(counts[zone] > 0, `seed ${i}: zone ${zone} is empty`);
     }
-    // Exactly one zone each: the three lists partition the buildable plots.
+    // Exactly one zone each: the three lists are disjoint, and every plot they
+    // name is a plot rather than a street.
     const listed = new Set([...layout.residential, ...layout.commercial, ...layout.industrial]);
     assert(
       listed.size === layout.residential.length + layout.commercial.length + layout.industrial.length,
       `seed ${i}: a plot appears in more than one zone list`,
     );
-    assert(listed.size === TARGET_PLOTS, `seed ${i}: ${listed.size} plots listed, wanted ${TARGET_PLOTS}`);
     for (const cell of listed) {
       assert(layout.zone[cell] !== ZONE.road, `seed ${i}: cell ${cell} is listed but is a road`);
     }
@@ -247,7 +250,7 @@ check('coverage: perimeter flag matches touching a road', () => {
       }
     }
   }
-  return 'interior plots are the ones a later height cap will need';
+  return 'interior plots are the ones the build lists drop';
 });
 
 // -------------------------------------------------------- 6. industrial coherence
@@ -300,17 +303,163 @@ check('industrial coherence: at most 3 connected clusters', () => {
   return `worst case ${worst} clusters over ${SEEDS} seeds`;
 });
 
+// -------------------------------------------------------------- 8. frontage
+
+check(`frontage: every plot offered for sale touches a road, ${SEEDS} seeds`, () => {
+  let offered = 0;
+  for (let i = 0; i < SEEDS; i++) {
+    const layout = generateDistrict(seedOf(i));
+    for (const [zone, cells] of [
+      ['residential', layout.residential],
+      ['commercial', layout.commercial],
+      ['industrial', layout.industrial],
+    ]) {
+      for (const cell of cells) {
+        assert(
+          layout.perimeter[cell] === 1,
+          `seed ${i}: ${zone} plot ${cell} is offered but is buried inside a block`,
+        );
+        offered++;
+      }
+    }
+    // 72 of the 90 is invariant across every seed, even though how the 44 that
+    // are neither commercial nor road split between R and I is not.
+    const total = layout.residential.length + layout.commercial.length + layout.industrial.length;
+    assert(total === 72, `seed ${i}: ${total} road-adjacent plots, wanted 72`);
+    assert(layout.commercial.length === 28, `seed ${i}: ${layout.commercial.length} shop plots`);
+  }
+  return `${offered} plots, all on a street`;
+});
+
+check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TARGET.commercial}/${FRONTAGE_TARGET.industrial} for sale, every seed`, () => {
+  // The brief for this change expected 30/28/14 straight out of the generator.
+  // It is not there to be had: over all 240 street plans the generator can
+  // produce, R takes one of {25,26,28,29,31,33,34} and I the complement out of
+  // 44 — 30 and 14 never occur. `planFor` reseeds until a district lands on the
+  // triple the economy needs, which is the same trick generateDistrict already
+  // uses for TARGET_PLOTS, one level up.
+  let worst = 0;
+  for (let i = 0; i < SEEDS; i++) {
+    const plan = planFor(seedOf(i));
+    assert(
+      plan.residential.length === FRONTAGE_TARGET.residential,
+      `seed ${i}: ${plan.residential.length} residential plots for sale`,
+    );
+    assert(
+      plan.commercial.length === FRONTAGE_TARGET.commercial,
+      `seed ${i}: ${plan.commercial.length} commercial plots for sale`,
+    );
+    assert(
+      plan.industrial.length === FRONTAGE_TARGET.industrial,
+      `seed ${i}: ${plan.industrial.length} industrial plots for sale`,
+    );
+    assert(
+      plan.sites.length === FRONTAGE_TARGET.civicSites,
+      `seed ${i}: ${plan.sites.length} civic sites`,
+    );
+    const accounted =
+      plan.residential.length +
+      plan.commercial.length +
+      plan.industrial.length +
+      plan.sites.length * 4 +
+      plan.courtyards.length;
+    assert(accounted === TARGET_PLOTS, `seed ${i}: ${accounted} plots accounted for, not ${TARGET_PLOTS}`);
+    worst = Math.max(worst, plan.layout.attempts);
+  }
+  return `${SEEDS} districts on target, worst inner sampling ${worst} attempts`;
+});
+
+// ------------------------------------------------------------ 9. civic sites
+
+check(`civic sites: one zone, road-adjacent, disjoint, at least 5, ${SEEDS} seeds`, () => {
+  let fewest = Infinity;
+  let most = 0;
+  for (let i = 0; i < SEEDS; i++) {
+    const layout = generateDistrict(seedOf(i));
+    const sites = civicSites(layout);
+    fewest = Math.min(fewest, sites.length);
+    most = Math.max(most, sites.length);
+    assert(sites.length >= 5, `seed ${i}: only ${sites.length} civic sites`);
+
+    const taken = new Set();
+    for (const site of sites) {
+      assert(site.cells.length === 4, `seed ${i}: site ${site.cell} is not a quad`);
+      // The quad has to be a quad on the grid, not four cells that happen to be
+      // listed together: lower-left, +x, +z, +x+z.
+      const [a, b, c, d] = site.cells;
+      assert(
+        b === a + 1 && c === a + SPAN && d === a + SPAN + 1,
+        `seed ${i}: site ${site.cell} is not contiguous`,
+      );
+      assert(site.zone !== ZONE.commercial, `seed ${i}: site ${site.cell} is on shop frontage`);
+      for (const cell of site.cells) {
+        assert(layout.zone[cell] === site.zone, `seed ${i}: site ${site.cell} spans two zones`);
+        assert(!taken.has(cell), `seed ${i}: sites overlap at cell ${cell}`);
+        taken.add(cell);
+      }
+      assert(
+        site.cells.some((cell) => layout.perimeter[cell] === 1),
+        `seed ${i}: site ${site.cell} touches no road`,
+      );
+    }
+  }
+  return `${fewest} to ${most} sites a district`;
+});
+
+check('civic sites: nothing is ever both a civic site and for sale', () => {
+  for (let i = 0; i < SEEDS; i++) {
+    const plan = districtPlan(generateDistrict(seedOf(i)));
+    const reserved = new Set(plan.sites.flatMap((site) => site.cells));
+    const forSale = [...plan.residential, ...plan.commercial, ...plan.industrial];
+    for (const cell of forSale) {
+      assert(!reserved.has(cell), `seed ${i}: cell ${cell} is both a civic site and for sale`);
+    }
+    // And the courtyards are exactly what is left, with nothing double-counted.
+    const seen = new Set([...forSale, ...reserved, ...plan.courtyards]);
+    assert(
+      seen.size === forSale.length + reserved.size + plan.courtyards.length,
+      `seed ${i}: a plot is counted twice across sale, site and courtyard`,
+    );
+  }
+  return `${SEEDS} seeds, sale and site sets disjoint`;
+});
+
+check('civic sites: ranked so they eat dead land before they eat frontage', () => {
+  // The whole point of the scoring. If a later site swallows more interior land
+  // than an earlier one, the greedy pass is picking in the wrong order and the
+  // sites are coming out of housing frontage instead of out of the courtyards.
+  let dead = 0;
+  let frontage = 0;
+  for (let i = 0; i < SEEDS; i++) {
+    const layout = generateDistrict(seedOf(i));
+    const sites = civicSites(layout);
+    for (let k = 1; k < sites.length; k++) {
+      assert(
+        sites[k - 1].dead >= sites[k].dead,
+        `seed ${i}: site ${k} swallows more dead land than site ${k - 1}`,
+      );
+    }
+    for (const site of sites) {
+      dead += site.dead;
+      frontage += 4 - site.dead;
+    }
+  }
+  const perDistrict = (n) => (n / SEEDS).toFixed(1);
+  assert(dead > frontage / 2, 'sites are eating more frontage than they save');
+  return `${perDistrict(dead)} interior and ${perDistrict(frontage)} street plots a district`;
+});
+
 // ---------------------------------------------------------------------- 7. perf
 
-check('perf: a full generation including rejection sampling under 20ms', () => {
+check('perf: a full on-target district, both sampling passes, under 20ms', () => {
   // Warm the JIT, then take the worst single district rather than the mean —
   // one district over budget is one visible hitch when land is annexed.
-  for (let i = 0; i < 200; i++) generateDistrict(seedOf(i));
+  for (let i = 0; i < 200; i++) planFor(seedOf(i));
   let worst = 0;
   let total = 0;
   for (let i = 0; i < SEEDS; i++) {
     const start = performance.now();
-    generateDistrict(seedOf(i));
+    planFor(seedOf(i));
     const took = performance.now() - start;
     worst = Math.max(worst, took);
     total += took;

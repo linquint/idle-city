@@ -14,12 +14,12 @@ import {
   canBuildService,
   canBuildShop,
   canRezone,
+  civicBuildings,
   clampDemand,
-  coverage,
   demandStep,
   demandTargets,
-  happiness,
-  homeCapacity,
+  happinessStep,
+  happinessTarget,
   homeCost,
   income,
   industryCost,
@@ -29,6 +29,8 @@ import {
   serviceCount,
   serviceNeeded,
   shopCost,
+  staffAfterBuild,
+  staffStep,
 } from './economy.ts';
 import { createState, type GameState } from './state.ts';
 
@@ -101,8 +103,44 @@ export class Game {
     s.cash += gain;
     s.earned += gain;
     s.elapsed += dt;
+    // Staffing before happiness before demand: happiness reads coverage, and
+    // the residential ceiling reads happiness. Integrating them out of order
+    // would leave each one a tick behind the thing it is supposed to follow.
+    this.integrateStaffing(dt);
+    this.integrateHappiness(dt);
     this.integrateDemand(dt);
     if (s.autoDevelop) this.autoDevelop(8);
+  }
+
+  /**
+   * Fills the payroll of each civic type, exponentially toward fully staffed.
+   *
+   * A type with nothing built has no payroll to fill, so it stays at zero — and
+   * `staffAfterBuild` is what keeps the ramp honest when a building lands: the
+   * scalar is re-averaged down rather than reset, so opening the fifth hospital
+   * leaves the four that were running exactly as they were and ramps the new
+   * one in from empty.
+   */
+  private integrateStaffing(dt: number): void {
+    const s = this.inner;
+    const k = staffStep(dt);
+    s.hospitalStaff = s.hospitals > 0 ? s.hospitalStaff + (1 - s.hospitalStaff) * k : 0;
+    s.policeStaff = s.police > 0 ? s.policeStaff + (1 - s.policeStaff) * k : 0;
+    s.fireStaff = s.fire > 0 ? s.fireStaff + (1 - s.fireStaff) * k : 0;
+  }
+
+  /**
+   * Eases happiness toward the coverage the city currently has.
+   *
+   * Clamped as well as stepped, for the same reason the demand signals are: the
+   * step preserves [0, 1] only if the state arrived inside it, and a doctored
+   * save is exactly where it would not have.
+   */
+  private integrateHappiness(dt: number): void {
+    const s = this.inner;
+    const target = happinessTarget(s);
+    const moved = s.happiness + (target - s.happiness) * happinessStep(dt);
+    s.happiness = Math.max(0, Math.min(1, moved));
   }
 
   /**
@@ -128,11 +166,11 @@ export class Game {
     // residential demand has to be under the new ceiling that same tick rather
     // than easing down through a discount it is no longer entitled to.
     //
-    // Against `happiness`, not against `target.r` — `target.r` is already
+    // Against happiness, not against `target.r` — `target.r` is already
     // capped by it, and clamping to the target would snap the signal onto its
     // target every tick it was falling, which is the lag the whole model is
     // built out of.
-    s.demandR = Math.min(s.demandR, happiness(s));
+    s.demandR = Math.min(s.demandR, s.happiness);
   }
 
   // ---------------------------------------------------------------- actions
@@ -161,15 +199,28 @@ export class Game {
     return true;
   }
 
-  /** Civic buildings take a residential plot and pay nothing back directly. */
+  /** Civic buildings take a 2x2 site and pay nothing back directly. */
   buildService(service: Service): boolean {
     const s = this.inner;
     if (!canBuildService(s, service)) return false;
     s.cash -= serviceCost(s, service);
-    if (service.key === 'school') s.schools++;
-    else if (service.key === 'clinic') s.clinics++;
-    else s.stations++;
+    this.openService(service);
     return true;
+  }
+
+  /** The one place a civic counter moves, so the ramp can never be skipped. */
+  private openService(service: Service): void {
+    const s = this.inner;
+    if (service.key === 'hospital') {
+      s.hospitalStaff = staffAfterBuild(s.hospitalStaff, s.hospitals);
+      s.hospitals++;
+    } else if (service.key === 'police') {
+      s.policeStaff = staffAfterBuild(s.policeStaff, s.police);
+      s.police++;
+    } else {
+      s.fireStaff = staffAfterBuild(s.fireStaff, s.fire);
+      s.fire++;
+    }
   }
 
   /**
@@ -217,14 +268,11 @@ export class Game {
    *   - it will not buy a type whose demand has gone negative, or it builds
    *     straight into oversupply, tanks happiness and hands back a worse city
    *     than the one it was left;
-   *   - housing leaves room for the services the city is short of, and a short
-   *     service is then bought ahead of anything else it could afford. Both
-   *     halves are needed: services share the residential zone with housing, and
-   *     priority alone does not help while the school is still unaffordable —
-   *     cheapest-first simply fills the zone with houses first. Measured over a
-   *     24-hour run without the reservation: 42 homes, one school, and a
-   *     permanent 35% happiness ceiling with 1.3M in the bank and nothing legal
-   *     left to spend it on.
+   *   - a service the city is short of is bought ahead of anything else it could
+   *     afford. Civic buildings stand on their own reserved sites now, so
+   *     housing can no longer crowd them out of the zone — but cheapest-first
+   *     still would, since a home is always the cheapest thing on the list.
+   *     Priority is what stops an away city coming back at the happiness floor.
    */
   private autoDevelop(budget: number): AutoBuilt {
     const s = this.inner;
@@ -234,14 +282,7 @@ export class Game {
       const options: Array<{ cost: number; buy: () => void }> = [];
       const shortfalls: Array<{ cost: number; buy: () => void }> = [];
 
-      // Plots the services still short of cover are going to need. Housing may
-      // spend everything above this line and nothing below it.
-      const reserved = SERVICES.reduce(
-        (sum, service) => sum + Math.max(0, serviceNeeded(s, service) - serviceCount(s, service.key)),
-        0,
-      );
-
-      if (s.demandR >= 0 && canBuildHome(s) && homeCapacity(s) - s.homes > reserved) {
+      if (s.demandR >= 0 && canBuildHome(s)) {
         options.push({
           cost: homeCost(s),
           buy: () => {
@@ -269,14 +310,12 @@ export class Game {
         });
       }
       for (const service of SERVICES) {
-        if (residents(s) <= 0 || coverage(s, service) >= 1) continue;
+        if (residents(s) <= 0 || serviceCount(s, service.key) >= serviceNeeded(s, service)) continue;
         if (!canBuildService(s, service)) continue;
         shortfalls.push({
           cost: serviceCost(s, service),
           buy: () => {
-            if (service.key === 'school') s.schools++;
-            else if (service.key === 'clinic') s.clinics++;
-            else s.stations++;
+            this.openService(service);
             built.services++;
           },
         });
@@ -314,7 +353,7 @@ export class Game {
       homes: this.inner.homes,
       shops: this.inner.shops,
       industry: this.inner.industry,
-      services: this.inner.schools + this.inner.clinics + this.inner.stations,
+      services: civicBuildings(this.inner),
       spend: this.autoSpend,
     };
 
@@ -339,7 +378,7 @@ export class Game {
       homes: s.homes - before.homes,
       shops: s.shops - before.shops,
       industry: s.industry - before.industry,
-      services: s.schools + s.clinics + s.stations - before.services,
+      services: civicBuildings(s) - before.services,
     };
   }
 }

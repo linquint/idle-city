@@ -57,6 +57,13 @@ multiplies one per-district constant by the district count, and it has to be
 true. `tools/citygen.test.mjs` guards all of it, and `npm run citygen:calibrate`
 prints the distribution the target came from.
 
+Only the 72 of those 90 plots that front a street are ever for sale; the rest is
+the interior of a deep block, and `civicSites` claims most of it for the 2x2
+quads hospitals, police and fire stations stand on. That leaves 19 housing, 28
+commercial and 11 industrial plots a district — and because the road-adjacent
+R/I split is *not* seed-invariant, `districtPlanAt` rejection-samples the
+district seed a second time until it is. Same trick, one level up.
+
 **Deterministic placement.** The save says `{ homes: 412 }`, never 412
 positions. Which plot the 412th home stands on is a pure function of its index
 and a seed, so the same save renders the same city on every device — and a
@@ -97,8 +104,11 @@ about the same as a city of forty.
   moves on a 25-second constant.
 - Industry is the anti-tower — wide, low and flat, with one stack. Height is how
   the housing tiers say "bigger", so industry competes on footprint instead.
-  Civic buildings share one mass and are told apart by roof colour, because they
-  stand on residential plots and should still read as part of the street.
+- Civic buildings get 2x2 plots, which is room for a silhouette each rather than
+  three colours of the same box: the hospital is pale with a tower, the police
+  station low and dark, the fire station squat with a lit bay-door face.
+- Land nobody will build on is drawn as courtyard, not left as a hole — block
+  interiors, and the civic sites still standing empty.
 
 ## Deploying
 
@@ -150,12 +160,28 @@ exponential form saturates correctly at any step size, which is the only reason
 offline catch-up is safe to run coarsely; the step-size invariance test is what
 guards it.
 
-Schools, clinics and stations earn nothing. Their coverage feeds a happiness
-score which multiplies income (floored at 0.55) and **caps residential demand**,
-so a city with no hospital watches its residential bar flatline however many
-jobs it has going spare. They also stand on residential plots, taken from the
-back of the same list housing fills from the front — so land is the real price
-of a service, and a school and a house can never share a plot.
+Hospitals, police stations and fire stations earn nothing. Their coverage feeds
+a happiness score which multiplies income (floored at 0.55), **caps residential
+demand**, and below `HAPPINESS_MIN_BUILD` stops housing outright — so a city
+with no hospital watches its residential bar flatline however many jobs it has
+going spare, and then stops growing entirely. That is the tutorial, and it has
+no text.
+
+Three rules keep it from being either free or punishing. A new building ramps
+its staffing in over ninety seconds rather than covering anybody the moment its
+roof goes on. A build gate of `floor(residents / capacity) + 1` means you may
+always be one ahead of need and never five, so early cash cannot be dumped into
+permanent coverage. And an empty city reads as fully covered rather than fully
+neglected — coverage is the share of residents a service fails, and it fails
+nobody when there is nobody, which is what stops the housing gate deadlocking
+the opening.
+
+Each stands on a 2x2 site reserved before the housing list is drawn, and the
+three types draw from one city-wide list by a fixed interleave — hospitals take
+site 3k, police 3k+1, fire 3k+2. Assigning them to whichever district was worst
+covered would make a building's position depend on the state when it was built,
+which a save of counts cannot reproduce; the city would rearrange itself on the
+next refresh.
 
 ## Balance
 

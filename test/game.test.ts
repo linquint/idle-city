@@ -47,9 +47,9 @@ describe('purchases', () => {
   });
 
   it('annexation adds plots without disturbing what is built', () => {
-    // Housing alone no longer reaches the occupancy gate: a district is 48%
-    // residential and 31% commercial, so filling every home leaves the city
-    // only 61% developed. Annexing takes shops as well as houses now.
+    // Housing alone no longer reaches the occupancy gate: of the 65 plots a
+    // district sells, 19 are housing and 28 are shops, so filling every home
+    // leaves the city 29% developed. Annexing takes shops as well as houses.
     const first = createState(0);
     const homes = homeCapacity(first);
     const game = at({ cash: 1e9, homes, shops: shopCapacity(first) });
@@ -78,7 +78,9 @@ describe('the tick', () => {
   });
 
   it('earns exactly the advertised rate', () => {
-    const game = at({ homes: 40, shops: 3 });
+    // Happiness has to start where it will end, or the rate moves under the
+    // test: income scales with it, and a serviceless city settles at zero.
+    const game = at({ homes: 40, shops: 3, happiness: 0 });
     const rate = income(game.state);
     for (let i = 0; i < 100; i++) game.advance(0.1);
     expect(game.state.cash - START_CASH).toBeCloseTo(rate * 10, 4);
@@ -93,7 +95,7 @@ describe('the tick', () => {
 
 describe('offline progress', () => {
   it('credits time away', () => {
-    const game = at({ homes: 40, shops: 2 });
+    const game = at({ homes: 40, shops: 2, happiness: 0 });
     const rate = income(game.state);
     const report = game.catchUp(3600);
     expect(report.seconds).toBe(3600);

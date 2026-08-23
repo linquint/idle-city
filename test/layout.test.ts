@@ -2,15 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { ZONE } from '../src/sim/citygen';
 import { CELL, DISTRICT_SPAN, MAX_DISTRICTS } from '../src/sim/config';
 import {
+  BUILDABLE_COMMERCIAL_PER_DISTRICT as COMMERCIAL_PER_DISTRICT,
+  BUILDABLE_INDUSTRIAL_PER_DISTRICT as INDUSTRIAL_PER_DISTRICT,
+  BUILDABLE_RESIDENTIAL_PER_DISTRICT as RESIDENTIAL_PER_DISTRICT,
   CityLayout,
-  COMMERCIAL_PER_DISTRICT,
+  CIVIC_SITES_PER_DISTRICT,
   cityRadius,
   DISTRICT_WIDTH,
   districtCoord,
-  INDUSTRIAL_PER_DISTRICT,
   isRoad,
   PLOTS_PER_DISTRICT,
-  RESIDENTIAL_PER_DISTRICT,
   worldX,
   worldZ,
   zoneAt,
@@ -113,18 +114,38 @@ describe('streets', () => {
 
 describe('plot book', () => {
   it('splits every district into the same plot counts', () => {
-    // Streets are irregular now, so this is not free: the generator rejection-
-    // samples until a district carves out exactly PLOTS_PER_DISTRICT plots.
-    // Without it the economy's per-district capacity constants would be fiction.
-    expect(RESIDENTIAL_PER_DISTRICT + COMMERCIAL_PER_DISTRICT + INDUSTRIAL_PER_DISTRICT).toBe(
-      PLOTS_PER_DISTRICT,
-    );
+    // Two numbers, and conflating them is the mistake worth guarding against:
+    // PLOTS_PER_DISTRICT is the zoned land, and the buildable constants are the
+    // part of it that fronts a street and is not held for a civic site. The
+    // rest is courtyard, which is why these no longer add up to the total.
+    const sellable =
+      RESIDENTIAL_PER_DISTRICT + COMMERCIAL_PER_DISTRICT + INDUSTRIAL_PER_DISTRICT;
+    expect(sellable + CIVIC_SITES_PER_DISTRICT * 4).toBeLessThanOrEqual(PLOTS_PER_DISTRICT);
+    expect(sellable).toBeLessThan(PLOTS_PER_DISTRICT);
     expect(PLOTS_PER_DISTRICT).toBeLessThan(DISTRICT_SPAN * DISTRICT_SPAN);
 
     const layout = new CityLayout().ensure(MAX_DISTRICTS);
     for (const district of layout.districts) {
       const plots = DISTRICT_SPAN * DISTRICT_SPAN - district.roads.length;
       expect(plots).toBe(PLOTS_PER_DISTRICT);
+    }
+  });
+
+  it('offers only plots that front a street', () => {
+    // The rule the whole change turns on: no building is ever landlocked in the
+    // middle of a block, so every plot the city can buy has a road neighbour.
+    const layout = new CityLayout().ensure(4);
+    const fronts = (c: { x: number; z: number }): boolean =>
+      isRoad(c.x - 1, c.z) || isRoad(c.x + 1, c.z) || isRoad(c.x, c.z - 1) || isRoad(c.x, c.z + 1);
+    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 4; i++) expect(fronts(layout.homeCell(i))).toBe(true);
+    for (let i = 0; i < COMMERCIAL_PER_DISTRICT * 4; i++) expect(fronts(layout.shopCell(i))).toBe(true);
+    for (let i = 0; i < INDUSTRIAL_PER_DISTRICT * 4; i++) expect(fronts(layout.industryCell(i))).toBe(true);
+    // And so does every civic site, on at least one of its four plots.
+    for (let i = 0; i < layout.civicSites; i++) {
+      const c = layout.civicSiteCell(i);
+      const quad = [c, { x: c.x + 1, z: c.z }, { x: c.x, z: c.z + 1 }, { x: c.x + 1, z: c.z + 1 }];
+      expect(quad.some(fronts)).toBe(true);
+      for (const cell of quad) expect(isRoad(cell.x, cell.z)).toBe(false);
     }
   });
 
@@ -166,6 +187,18 @@ describe('plot book', () => {
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 9; i++) seen.add(key(layout.homeCell(i)));
     for (let i = 0; i < COMMERCIAL_PER_DISTRICT * 9; i++) seen.add(key(layout.shopCell(i)));
     for (let i = 0; i < INDUSTRIAL_PER_DISTRICT * 9; i++) seen.add(key(layout.industryCell(i)));
+    const sellable =
+      (RESIDENTIAL_PER_DISTRICT + COMMERCIAL_PER_DISTRICT + INDUSTRIAL_PER_DISTRICT) * 9;
+    expect(seen.size).toBe(sellable);
+
+    // Civic sites and courtyards make up the difference, with nothing shared.
+    for (let i = 0; i < layout.civicSites; i++) {
+      const c = layout.civicSiteCell(i);
+      for (const cell of [c, { x: c.x + 1, z: c.z }, { x: c.x, z: c.z + 1 }, { x: c.x + 1, z: c.z + 1 }]) {
+        seen.add(key(cell));
+      }
+    }
+    for (const cell of layout.courtyards) seen.add(key(cell));
     expect(seen.size).toBe(PLOTS_PER_DISTRICT * 9);
   });
 

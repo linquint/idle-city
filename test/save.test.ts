@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_DISTRICTS, TIERS } from '../src/sim/config';
+import { MAX_DISTRICTS, SERVICES, TIERS } from '../src/sim/config';
 import {
   civicBuildings,
+  happinessTarget,
   homeCapacity,
   industryCapacity,
-  residentialPlots,
+  serviceAllowed,
+  serviceCount,
   shopCapacity,
+  siteCapacity,
 } from '../src/sim/economy';
 import { load, migrate, save, SAVE_KEY, secondsAway } from '../src/sim/save';
 import { createState, SAVE_VERSION } from '../src/sim/state';
@@ -119,6 +122,8 @@ describe('migration', () => {
 
   it('opens a v1 save and keeps what it had', () => {
     // What a v1 save actually looked like: no industry, no services, no demand.
+    // 30 homes fits inside three districts' 57 housing plots, so the city comes
+    // back whole rather than clamped.
     const v1 = {
       version: 1,
       cash: 12_345.6,
@@ -136,6 +141,7 @@ describe('migration', () => {
     expect(back!.version).toBe(SAVE_VERSION);
     expect(back!.industry).toBe(0);
     expect(civicBuildings(back!)).toBe(0);
+    expect(back!.hospitalStaff).toBe(0);
     expect([back!.demandR, back!.demandC, back!.demandI]).toEqual([0, 0, 0]);
   });
 
@@ -153,22 +159,68 @@ describe('migration', () => {
     expect(back!.demandI).toBe(0);
   });
 
-  it('makes civic counts legal before it clamps homes', () => {
-    // The other order puts a house on a school: `homeCapacity` subtracts the
-    // civic count, so clamping homes first would clamp against a number that
-    // was still a fiction.
-    const back = migrate({ schools: 1e9, clinics: 1e9, stations: 1e9, homes: 1e9, industry: 1e9 });
-    expect(civicBuildings(back!)).toBe(residentialPlots(back!));
-    expect(back!.homes).toBe(0);
-    expect(back!.homes).toBeLessThanOrEqual(homeCapacity(back!));
-    expect(back!.industry).toBe(industryCapacity(back!));
+  it('clamps homes before it clamps civic counts', () => {
+    // This order, and not the other: `serviceAllowed` is measured against the
+    // population, so a save claiming a million homes would otherwise buy itself
+    // a million residents' worth of hospitals on the way past.
+    const back = migrate({
+      hospitals: 1e9,
+      police: 1e9,
+      fire: 1e9,
+      homes: 1e9,
+      industry: 1e9,
+    })!;
+    expect(back.homes).toBe(homeCapacity(back));
+    expect(back.industry).toBe(industryCapacity(back));
+    for (const service of SERVICES) {
+      expect(serviceCount(back, service.key)).toBe(serviceAllowed(back, service));
+      expect(serviceCount(back, service.key)).toBeLessThanOrEqual(siteCapacity(back, service.key));
+    }
   });
 
-  it('leaves room for both when the zone is only partly civic', () => {
-    const back = migrate({ schools: 4, homes: 1e9 });
-    expect(back!.schools).toBe(4);
-    expect(back!.homes).toBe(homeCapacity(back!));
-    expect(back!.homes + civicBuildings(back!)).toBe(residentialPlots(back!));
+  it('clamps a doctored civic count to what the population allows', () => {
+    // 400 hospitals in a city of 76 people gets the one it is entitled to.
+    const back = migrate({ hospitals: 400, homes: 19 })!;
+    expect(back.hospitals).toBe(1);
+    expect(back.hospitals).toBe(serviceAllowed(back, SERVICES[0]!));
+  });
+
+  it('clamps staffing into [0, 1] and defaults it to nothing', () => {
+    const doctored = migrate({ hospitals: 1, hospitalStaff: 9, policeStaff: -4 })!;
+    expect(doctored.hospitalStaff).toBe(1);
+    expect(doctored.policeStaff).toBe(0);
+    expect(doctored.fireStaff).toBe(0);
+    expect(migrate({ hospitalStaff: NaN })!.hospitalStaff).toBe(0);
+  });
+
+  it('defaults happiness to the cover the city actually has', () => {
+    // Not to the fresh-city 1: that would be ninety seconds of free housing
+    // every time the player reloaded.
+    const neglected = migrate({ homes: 12 })!;
+    expect(neglected.happiness).toBe(0);
+    expect(neglected.happiness).toBe(happinessTarget(neglected));
+
+    const empty = migrate({ cash: 5 })!;
+    expect(empty.happiness).toBe(1);
+
+    const doctored = migrate({ homes: 12, happiness: 4 })!;
+    expect(doctored.happiness).toBe(1);
+  });
+
+  it('keeps a v2 city its civic buildings instead of deleting them', () => {
+    // v2 called them clinics, schools and stations on single plots. Same slot,
+    // so the counts carry across by weight and are then clamped legal.
+    const v2 = { version: 2, homes: 19, shops: 9, clinics: 1, schools: 1, stations: 1 };
+    const back = migrate(v2)!;
+    expect(back.hospitals).toBe(1);
+    expect(back.police).toBe(1);
+    expect(back.fire).toBe(1);
+    expect(civicBuildings(back)).toBe(3);
+  });
+
+  it('reads a v2 save out of the key it was written under', () => {
+    localStorage.setItem('idle-city/save/v2', JSON.stringify({ cash: 88, homes: 6, districts: 2 }));
+    expect(load(0)).toMatchObject({ cash: 88, homes: 6, districts: 2 });
   });
 
   it('treats a clock that has gone backwards as no time away', () => {
