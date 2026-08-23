@@ -191,6 +191,17 @@ export const ANNEX_MIN_OCCUPANCY = 0.7;
 /** Starting treasury. */
 export const START_CASH = 40;
 
+/**
+ * Seconds in one day/night cycle.
+ *
+ * Eight minutes, and driven by `elapsed` rather than by a clock of its own, so
+ * the time of day is already in the save and already advances through
+ * `catchUp` — come back after an hour away and the sun has moved seven and a
+ * half days, exactly as if you had watched. A cycle short enough to see all of
+ * inside one session, long enough that midday is not a strobe.
+ */
+export const DAY_SECONDS = 480;
+
 /** Simulation ticks per second, independent of frame rate. */
 export const TICK_RATE = 10;
 

@@ -43,6 +43,37 @@ function against(target: number, material: number, out: THREE.Color): THREE.Colo
 }
 
 /**
+ * A shared material whose brightness rides the day/night phase.
+ *
+ * Per *material*, never per instance. A city's lit surfaces — every shop
+ * fascia, every beacon, every bay door — are thousands of instances sharing a
+ * handful of materials, and ramping them individually would mark the instance
+ * colour buffer dirty on every frame of the cycle, which is a full re-upload
+ * sixty times a second for a change one colour can make. This is one multiply
+ * per material per frame instead, and the instance buffers are never touched.
+ *
+ * The floor is what stops a lit sign from switching off at noon: a sodium band
+ * in daylight is still a painted orange band, just not a light source.
+ */
+class Glow {
+  readonly material: THREE.MeshBasicMaterial;
+  private readonly base = new THREE.Color();
+
+  constructor(
+    hex: number,
+    private readonly floor: number,
+  ) {
+    this.material = new THREE.MeshBasicMaterial({ color: hex });
+    this.base.setHex(hex);
+  }
+
+  setNight(night: number): void {
+    const k = this.floor + (1 - this.floor) * Math.max(0, Math.min(1, night));
+    this.material.color.copy(this.base).multiplyScalar(k);
+  }
+}
+
+/**
  * One InstancedMesh set per zoning tier.
  *
  * Rezoning does not rebuild geometry — it swaps which set has a non-zero count.
@@ -52,6 +83,8 @@ class TierMeshes {
   private readonly body: GrowableInstancedMesh;
   private readonly roof: GrowableInstancedMesh;
   private readonly beacon: GrowableInstancedMesh | null;
+  /** Only tiers tall enough to carry a warning light have one to ramp. */
+  private readonly beaconGlow: Glow | null;
   private readonly roofRise: number;
   /** Zone colour while the overlay is on, null for the city's own palette. */
   private overlay: number | null = null;
@@ -75,14 +108,21 @@ class TierMeshes {
       { castShadow: true },
     );
     this.roofRise = tier.pitched ? 0.55 : 0.25;
-    this.beacon = tier.beacon
+    // A warning light is nearly invisible at midday and the whole silhouette
+    // after dark, so it gets the lowest floor of the three lit surfaces.
+    this.beaconGlow = tier.beacon ? new Glow(PALETTE.sodium, 0.3) : null;
+    this.beacon = this.beaconGlow
       ? new GrowableInstancedMesh(
           scene,
           new THREE.BoxGeometry(0.34, 0.34, 0.34),
-          new THREE.MeshBasicMaterial({ color: PALETTE.sodium }),
+          this.beaconGlow.material,
           capacity,
         )
       : null;
+  }
+
+  setNight(night: number): void {
+    this.beaconGlow?.setNight(night);
   }
 
   ensure(capacity: number): void {
@@ -166,6 +206,7 @@ class ShopMeshes {
   private readonly body: GrowableInstancedMesh;
   private readonly fascia: GrowableInstancedMesh;
   private readonly cap: GrowableInstancedMesh;
+  private readonly fasciaGlow = new Glow(PALETTE.sodium, 0.42);
   private overlay: number | null = null;
 
   constructor(scene: THREE.Scene, capacity: number) {
@@ -179,7 +220,7 @@ class ShopMeshes {
     this.fascia = new GrowableInstancedMesh(
       scene,
       new THREE.BoxGeometry(3.08, 0.34, 3.08),
-      new THREE.MeshBasicMaterial({ color: PALETTE.sodium }),
+      this.fasciaGlow.material,
       capacity,
     );
     this.cap = new GrowableInstancedMesh(
@@ -195,6 +236,10 @@ class ShopMeshes {
     this.body.ensure(capacity);
     this.fascia.ensure(capacity);
     this.cap.ensure(capacity);
+  }
+
+  setNight(night: number): void {
+    this.fasciaGlow.setNight(night);
   }
 
   setOverlay(hex: number | null): void {
@@ -387,6 +432,8 @@ class CivicMeshes {
     markMaterial: THREE.Material,
     private readonly markOffset: THREE.Vector3,
     capacity: number,
+    /** Set only where the mark is a lit surface — the fire station's doors. */
+    private readonly glow: Glow | null = null,
   ) {
     this.body = new GrowableInstancedMesh(
       scene,
@@ -411,6 +458,10 @@ class CivicMeshes {
     this.body.ensure(capacity);
     this.roof.ensure(capacity);
     this.mark.ensure(capacity);
+  }
+
+  setNight(night: number): void {
+    this.glow?.setNight(night);
   }
 
   setOverlay(hex: number | null): void {
@@ -496,14 +547,17 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
       capacity,
     );
   }
+  // The bay doors: a lit band across one face, at ground level. The one civic
+  // surface that is a light rather than a colour, so it ramps with the cycle.
+  const doors = new Glow(PALETTE.sodium, 0.5);
   return new CivicMeshes(
     scene,
     { body: PALETTE.fire, roof: PALETTE.fireRoof, height: 2.0 },
-    // The bay doors: a lit band across one face, at ground level.
     new THREE.BoxGeometry(CIVIC_W - 0.6, 1.2, 0.3),
-    new THREE.MeshBasicMaterial({ color: PALETTE.sodium }),
+    doors.material,
     new THREE.Vector3(0, -1.4, CIVIC_W / 2),
     capacity,
+    doors,
   );
 }
 
@@ -711,6 +765,19 @@ export class Buildings {
     this.shops.recolor(this.shownShops, this.tint);
     this.industry.recolor(this.shownIndustry, this.tint);
     for (const set of this.civic) set.meshes.recolor(set.shown, this.tint);
+  }
+
+  /**
+   * Ramps every lit surface in the city with the day/night phase.
+   *
+   * Called once a frame, and cheap enough to be: it touches five materials at
+   * most — one beacon per tall tier, the shop fascia, the fire station's doors
+   * — and never an instance buffer.
+   */
+  setNight(night: number): void {
+    for (const tier of this.tiers) tier.setNight(night);
+    this.shops.setNight(night);
+    for (const set of this.civic) set.meshes.setNight(night);
   }
 
   /** Advances in-flight growth animations. Returns true while any are running. */

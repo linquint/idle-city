@@ -2,6 +2,7 @@ import { cityCentre, cityRadius, CityLayout } from '../sim/layout';
 import type { GameState } from '../sim/state';
 import { Buildings } from './buildings';
 import { CameraRig } from './cameraRig';
+import { createSkyReading, dayPhase, DUSK_PHASE, sampleSky } from './daylight';
 import { Ground } from './ground';
 import { World } from './world';
 import { Courtyards, Zones, type ZoneMode } from './zones';
@@ -25,6 +26,13 @@ export class View {
   private readonly courtyards: Courtyards;
   private elapsed = 0;
   private shownDistricts = 0;
+  /**
+   * One reusable sky, filled in place every sync. The cycle runs forever, so a
+   * fresh reading per frame would be a per-frame allocation.
+   */
+  private readonly sky = createSkyReading();
+  /** Reduced motion holds the cycle at dusk instead of running it. */
+  private readonly cycling: boolean;
 
   constructor(canvas: HTMLCanvasElement, layout: CityLayout) {
     this.world = new World(canvas);
@@ -36,6 +44,10 @@ export class View {
     const reducedMotion =
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.rig = new CameraRig(this.world.camera, canvas, !reducedMotion);
+    // A sun crossing the sky is motion, and a slow full-screen colour ramp is
+    // the kind of motion the preference exists for. Holding at DUSK_PHASE is
+    // not a fallback — it is the palette the game shipped with.
+    this.cycling = !reducedMotion;
 
     window.addEventListener('resize', this.onResize);
     window.addEventListener('keydown', this.onKey);
@@ -67,6 +79,14 @@ export class View {
 
   /** Reconciles the scene toward `state`. Cheap when nothing has changed. */
   sync(state: Readonly<GameState>): void {
+    // Time of day is a read over `state.elapsed`, exactly like a building's
+    // position is a read over `state.homes`: it belongs here rather than on a
+    // clock of the view's own, or it would reset on reload and stand still
+    // while the player was away.
+    const sky = sampleSky(this.cycling ? dayPhase(state.elapsed) : DUSK_PHASE, this.sky);
+    this.world.setSky(sky);
+    this.buildings.setNight(sky.night);
+
     if (state.districts !== this.shownDistricts) {
       // The first sync is the city the player arrived with, however large it is.
       // Anything after that is land they just bought, and gets the ceremony.
