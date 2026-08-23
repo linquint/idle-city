@@ -23,6 +23,7 @@ compiles to about 10 kB gzipped on top of three.
 | `npm test` | Simulation tests (vitest), then the generator suite |
 | `npm run test:citygen` | District generation acceptance tests (plain Node) |
 | `npm run citygen:calibrate` | Plot-count distribution over 1000 seeds |
+| `npm run economy:calibrate` | 24h demand/pricing sweep under four policies |
 
 ## How it is put together
 
@@ -86,9 +87,18 @@ about the same as a city of forty.
 - Road cells work out their own orientation from whether their neighbours are
   roads, so a junction, a straight run and a T-junction where a street meets a
   district boundary all fall out of the same lookup.
-- **Z** toggles a zone overlay: the city is recoloured by zone through the same
-  per-instance colour path that already varies concrete shade, and every zoned
-  plot with nothing on it yet is drawn as a flat pad — one extra draw call.
+- **Z** steps an overlay through off → plan → demand. Both modes recolour the
+  city by zone through the same per-instance colour path that already varies
+  concrete shade, and draw every zoned plot with nothing on it yet as a flat pad
+  — one extra draw call. In demand mode the pads take their colour from the
+  zone's current demand instead: green where a discount is live, red where the
+  type is oversupplied. Demand is quantised to twenty steps before it reaches
+  the rebuild stamp, or the pads would be rebuilt every frame for a signal that
+  moves on a 25-second constant.
+- Industry is the anti-tower — wide, low and flat, with one stack. Height is how
+  the housing tiers say "bigger", so industry competes on footprint instead.
+  Civic buildings share one mass and are told apart by roof colour, because they
+  stand on residential plots and should still read as part of the street.
 
 ## Deploying
 
@@ -110,6 +120,43 @@ under **Settings → Pages → Build and deployment** and re-run the workflow.
 works at that subpath, at a custom domain, or opened from disk without a
 rebuild.
 
+## Supply and demand
+
+Residential, commercial and industrial each carry a demand signal in `[-1, 1]`,
+negative meaning oversupplied. They are **integrated, not derived** — the lag is
+the mechanic, which is why they live in the save file — and their targets form a
+cycle:
+
+```
+industry → jobs → residents → shoppers → commerce → jobs
+```
+
+so the order you build in decides which button is cheap next. A positive signal
+discounts that type's price and a negative one surcharges it, which is what
+stops "press whichever button is cheapest" from being the dominant strategy.
+
+The guardrail is that the modifier is bounded by a *constant*. The discounted
+price floor is still `base × growth ** n × (1 - PRICE_DISCOUNT_MAX)` —
+exponential in n — so no amount of demand can make the next building cheaper
+than the last. Let the discount scale with something unbounded, or let
+`PRICE_DISCOUNT_MAX` reach 1, and the curve inverts and the city builds itself
+for free. `test/demand.test.ts` asserts the curve is strictly increasing in n at
+maximum discount, for all three types.
+
+Smoothing is exponential — `d += (target - d) * (1 - exp(-dt / TAU))` — not
+`d += (target - d) * dt / TAU`. The naive form oscillates and then diverges once
+`dt > TAU`, and catch-up steps whole minutes against a 25-second constant. The
+exponential form saturates correctly at any step size, which is the only reason
+offline catch-up is safe to run coarsely; the step-size invariance test is what
+guards it.
+
+Schools, clinics and stations earn nothing. Their coverage feeds a happiness
+score which multiplies income (floored at 0.55) and **caps residential demand**,
+so a city with no hospital watches its residential bar flatline however many
+jobs it has going spare. They also stand on residential plots, taken from the
+back of the same list housing fills from the front — so land is the real price
+of a service, and a school and a house can never share a plot.
+
 ## Balance
 
 Every tunable is in `src/sim/config.ts`, and nothing else in that file imports
@@ -120,13 +167,23 @@ long the first house takes to pay for itself, which is the number the opening
 minute lives or dies on. `test/game.test.ts` guards the pacing at both ends: no
 dead first minute, and no filling a district in a quarter of an hour.
 
+The demand constants are measured, not guessed: `npm run economy:calibrate`
+simulates 24 hours under four policies and reports demand pinning, cost-curve
+monotonicity, time to first rezone/annex/service, and happiness at 1h/6h/24h.
+The numbers in the config comments came from it.
+
 ## Saving
 
 Saved to `localStorage` every ten seconds, on tab hide, and on unload. Time away
-is credited on load, capped at twelve hours. Turn on **Auto-develop** and
-surplus cash is spent on the cheapest available plot while you are gone, so the
-city grows rather than just the bank balance.
+is credited on load in fixed 60-second steps, capped at twelve hours — fixed
+*size* rather than a fixed count, because demand is a feedback loop now and
+coarse steps let auto-development compound against a curve that has already
+jumped to its asymptote. Turn on **Auto-develop** and surplus cash is spent
+while you are gone, on the cheapest thing the city is not already oversupplied
+in, leaving room in the residential zone for the services it still needs.
 
 Everything degrades rather than breaks: a corrupted save, a browser with storage
 switched off, or a save from an older balance pass all open — clamped into
-something legal instead of rejected.
+something legal instead of rejected. A v1 save is read out of the key it was
+written under and brought forward; a save claiming `demandR: 50` is clamped back
+into the band rather than handed free buildings.

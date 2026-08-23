@@ -4,7 +4,7 @@ import { Buildings } from './buildings';
 import { CameraRig } from './cameraRig';
 import { Ground } from './ground';
 import { World } from './world';
-import { Zones } from './zones';
+import { Zones, type ZoneMode } from './zones';
 
 /**
  * The view layer, entire.
@@ -50,14 +50,17 @@ export class View {
   };
 
   /**
-   * The zone overlay. Colours are rebuilt once here rather than every frame;
-   * the pads themselves are rebuilt by the next `sync`, which keeps the view
-   * from having to hold on to a copy of the simulation's counts.
+   * The zone overlay, stepped off -> plan -> demand. Building colours are
+   * rebuilt once here rather than every frame; the pads themselves are rebuilt
+   * by the next `sync`, which keeps the view from having to hold on to a copy
+   * of the simulation's counts.
    */
-  toggleZones(): boolean {
-    const on = this.zones.toggle();
-    this.buildings.setZoneOverlay(on);
-    return on;
+  toggleZones(): ZoneMode {
+    const mode = this.zones.cycle();
+    // Buildings only ever say which zone they stand in; demand is a property of
+    // the *unbuilt* land, so both overlay modes tint them the same way.
+    this.buildings.setZoneOverlay(mode !== 'off');
+    return mode;
   }
 
   /** Reconciles the scene toward `state`. Cheap when nothing has changed. */

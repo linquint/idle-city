@@ -1,6 +1,6 @@
-import { START_CASH } from './config';
+import { START_CASH } from './config.ts';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 /**
  * The entire game, in a handful of fields.
@@ -17,6 +17,22 @@ export interface GameState {
   elapsed: number;
   homes: number;
   shops: number;
+  industry: number;
+  /** Civic buildings. They earn nothing; they gate income and demand. */
+  schools: number;
+  clinics: number;
+  stations: number;
+  /**
+   * Demand per zone, in [-1, 1], negative meaning oversupplied.
+   *
+   * These are integrated rather than derived, which is exactly why they live in
+   * the save: the lag is the mechanic. Recomputing them from counts on load
+   * would hand a returning player a city whose prices had silently snapped to
+   * their asymptote while they were away.
+   */
+  demandR: number;
+  demandC: number;
+  demandI: number;
   /** Index into TIERS. */
   tier: number;
   /** Districts annexed. Always at least 1. */
@@ -36,6 +52,13 @@ export function createState(now = Date.now()): GameState {
     elapsed: 0,
     homes: 0,
     shops: 0,
+    industry: 0,
+    schools: 0,
+    clinics: 0,
+    stations: 0,
+    demandR: 0,
+    demandC: 0,
+    demandI: 0,
     tier: 0,
     districts: 1,
     earned: 0,

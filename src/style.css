@@ -138,6 +138,91 @@ canvas {
 .dot.c { background: #4f8fd6; }
 .dot.i { background: #e0a84e; }
 
+/* -------------------------------------------------------- demand panel */
+
+/* Its own panel rather than more ledger rows: the ledger states what the city
+   *is*, this one states what it *wants*, and they are read at different times. */
+.demand {
+  top: calc(var(--gutter) + 210px);
+  right: var(--gutter);
+  width: 212px;
+  padding: 12px 16px;
+}
+.cap {
+  margin: 0 0 8px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.cap + .services,
+.cap + .rci { margin-bottom: 14px; }
+.services:last-child { margin-bottom: 0; }
+
+.rci-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.rci-row .k { width: 8px; flex: none; }
+.rci-row .num {
+  width: 34px;
+  flex: none;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+
+/* Diverging from a centre zero: the fill is anchored at 50% and grows left for
+   oversupply, right for demand, so sign is readable without reading the number. */
+.bar {
+  position: relative;
+  flex: 1 1 auto;
+  height: 6px;
+  background: #1c2739;
+}
+.bar::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 50%;
+  width: 1px;
+  background: var(--line);
+}
+.bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  background: var(--signal);
+  transition: width 0.25s ease, left 0.25s ease;
+}
+.bar-fill.short { background: var(--sodium); }
+
+.svc {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+.svc .k { flex: 1 1 auto; }
+.svc .built {
+  font-variant-numeric: tabular-nums;
+  color: var(--concrete);
+}
+.svc .pct {
+  width: 38px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.svc.covered .pct { color: var(--signal); }
+
 /* ----------------------------------------------------------- controls */
 
 .controls {
@@ -215,6 +300,51 @@ button .cost {
   white-space: nowrap;
 }
 button:disabled .cost { color: var(--off); }
+
+/* The price cluster: how much demand moved it, which way it is heading, and
+   what it costs — in that order, because the discount is the thing asked for. */
+.price {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.chip {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.chip:empty { display: none; }
+.chip.discount { color: var(--signal); }
+.chip.surcharge { color: #e0574b; }
+.trend {
+  font-size: 9px;
+  font-style: normal;
+  color: var(--dim);
+}
+.trend:empty { display: none; }
+button:disabled .chip,
+button:disabled .trend { color: var(--off); }
+
+/* Three services across, so the panel does not turn into a column of buttons. */
+.civic-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+button.civic {
+  margin-bottom: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 9px;
+  font-size: 11px;
+  border-color: rgba(127, 168, 255, 0.3);
+}
+button.civic:hover:not(:disabled) { background: rgba(127, 168, 255, 0.1); border-color: var(--civic); }
+button.civic .cost { color: var(--civic); font-size: 10px; }
+button.civic:disabled { border-color: #1c2739; }
+button.civic:disabled .cost { color: var(--off); }
 
 button.rezone { border-color: rgba(99, 198, 168, 0.45); }
 button.rezone:hover:not(:disabled) { background: rgba(99, 198, 168, 0.1); border-color: var(--signal); }
@@ -317,8 +447,8 @@ button.primary {
 @media (max-width: 760px) {
   :root { --gutter: 12px; }
   .ledger {
-    top: auto;
-    bottom: calc(var(--gutter) + 268px);
+    top: var(--gutter);
+    bottom: auto;
     right: var(--gutter);
     left: var(--gutter);
     width: auto;
@@ -327,6 +457,17 @@ button.primary {
     gap: 0 18px;
   }
   .ledger .row:nth-last-child(1) { border-bottom: 0; }
+  /* Demand goes across the top under the ledger; the controls own the bottom. */
+  .demand {
+    top: calc(var(--gutter) + 128px);
+    right: var(--gutter);
+    left: var(--gutter);
+    width: auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 18px;
+  }
+  .demand .cap { grid-column: span 1; }
   .controls { left: var(--gutter); right: var(--gutter); width: auto; }
   .hint { display: none; }
 }

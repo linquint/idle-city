@@ -12,7 +12,8 @@
     "test": "vitest run && npm run test:citygen",
     "test:watch": "vitest",
     "test:citygen": "node --check src/sim/citygen.ts && node --check tools/citygen.test.mjs && node tools/citygen.test.mjs",
-    "citygen:calibrate": "node tools/citygen.calibrate.mjs"
+    "citygen:calibrate": "node tools/citygen.calibrate.mjs",
+    "economy:calibrate": "node tools/economy.calibrate.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

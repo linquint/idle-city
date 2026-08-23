@@ -1,6 +1,6 @@
-import { mixSeed } from '../core/rng';
-import { generateDistrict, zoneBudget, ZONE, type DistrictLayout, type Zone } from './citygen';
-import { CELL, DISTRICT_SPAN, SEED, TARGET_PLOTS } from './config';
+import { mixSeed } from '../core/rng.ts';
+import { generateDistrict, zoneBudget, ZONE, type DistrictLayout, type Zone } from './citygen.ts';
+import { CELL, DISTRICT_SPAN, SEED, TARGET_PLOTS } from './config.ts';
 
 export interface Coord {
   /** Global grid column. Districts tile this space, so it goes negative. */
@@ -233,13 +233,30 @@ export class CityLayout {
     return this._commercial[i] as Coord;
   }
 
-  /**
-   * Plot for the i-th industrial building. Nothing builds these yet — there is
-   * no industrial building type — but the land is zoned and ordered, so
-   * placement is ready the moment the economy grows one.
-   */
+  /** Plot for the i-th industrial building. */
   industryCell(i: number): Coord {
     return this._industrial[i] as Coord;
+  }
+
+  /**
+   * Plot for the i-th civic building, taken from the *back* of the residential
+   * list.
+   *
+   * Civic buildings sit in neighbourhoods rather than on land of their own, so
+   * they share the residential zone with housing. Housing fills that list from
+   * the front and services fill it from the back, which is what makes "a school
+   * and a home can never land on the same plot" true by construction rather than
+   * by a collision check: `homeCapacity` subtracts the civic count, so the two
+   * runs meet in the middle and never cross.
+   *
+   * The cost of the trick is that the back of the list moves when land is
+   * annexed, so a service relocates into the new district. That is a redraw, not
+   * a save-format problem — the position is still a pure function of (index,
+   * civic count, district count) — and the alternative, reserving plots by
+   * index, would move *housing* every time a school went up, which is far worse.
+   */
+  civicCell(i: number): Coord {
+    return this._residential[this._residential.length - 1 - i] as Coord;
   }
 
   /** Every plot of one zone, in build order. Used by the zone overlay. */
