@@ -123,8 +123,34 @@ export const TIERS: readonly Tier[] = [
  */
 export const RENT = 0.14;
 
-/** Each shop adds this share of base income. */
-export const SHOP_BONUS = 0.18;
+/**
+ * Each shop adds this share of base income.
+ *
+ * Retuned with the commercial price curve below, not after it — the two are one
+ * change. At 90 / 1.22 the first ten shops cost 2,579 and bought 1.80x base
+ * income, which is 1,433 of treasury for each 1.0 of multiplier. At 9 / 1.18
+ * those same ten shops cost 212, so leaving the bonus at 0.18 would have been a
+ * twelve-fold discount on the strongest income multiplier in the game and the
+ * whole opening would have collapsed into "buy shops, ignore everything else".
+ * 0.05 puts the price of a multiplier back at 423 — still cheaper than it was,
+ * because it should be, but a third of the way rather than a twelfth.
+ *
+ * Chosen by sweeping 0.03 to 0.09 against three measured targets and taking the
+ * only value that clears all of them (see tools/economy.calibrate.mjs):
+ *
+ *   - share of income attributable to the shop multiplier, at 1h / 6h / 24h.
+ *     Was 61/60/60 greedy and 57/66/68 disciplined — already over the 60% line
+ *     before this change. Now 39/39/36 and 28/39/39, with auto-develop at 9%.
+ *   - time to first rezone and first annex, against the pre-change build.
+ *     Greedy 56.8m -> 59.8m (+5%) and 1.63h -> 1.43h (-12%); disciplined 54.8m
+ *     -> 52.0m (-5%) and 1.28h -> 1.41h (+10%). All inside +-20%. At 0.07 the
+ *     greedy first annex ran 25% early and at 0.09 the first rezone ran 21%
+ *     early; at 0.03 the greedy first rezone ran 24% late.
+ *   - no demand signal newly pinned. See the note in DEMAND_SCALE: the endgame
+ *     pinning under greedy and disciplined predates this change and is a limit
+ *     of a constant scale, not of the price. It got shorter, not longer.
+ */
+export const SHOP_BONUS = 0.05;
 
 /** Each district past the first adds this share of base income (civic economies of scale). */
 export const DISTRICT_BONUS = 0.05;
@@ -132,14 +158,48 @@ export const DISTRICT_BONUS = 0.05;
 export const HOME_BASE = 8;
 export const HOME_GROWTH = 1.14;
 
-export const SHOP_BASE = 90;
-export const SHOP_GROWTH = 1.22;
+/**
+ * Commerce opens at about what a house costs and compounds a little faster.
+ *
+ * 9 against HOME_BASE's 8 is a 12.5% gap at the first of each; by the twentieth
+ * a shop is 246 against a home's 110, which is 2.2x — "a bit faster", not a
+ * different curve. It was 11.3x at the first and 43.7x at the twentieth, which
+ * is what made commerce a thing you unlocked rather than a thing you chose.
+ *
+ * The number to keep an eye on is not this pair but the *plot ratio* it
+ * compounds over. A district sells 28 commercial plots against 19 residential —
+ * 47% more — so the faster curve runs over 47% more buildings, and filling one
+ * district's commerce still costs 5,098 against housing's 632, or 8.1x. That
+ * ratio is inverted against ZONE_SHARE (R 0.48, C 0.31), which was solved on
+ * *zoned* land; only 19 of a district's 43 zoned residential plots front a
+ * street, while all 28 commercial ones do. Pricing has to be judged against the
+ * frontage split, and the 8.1x is what says commerce is still the expensive
+ * half of a district even at these numbers — it was 169x before.
+ *
+ * One thing this genuinely changes: the demand surcharge starts biting. It used
+ * to be inert in the opening ten minutes (worst +0%, 2 shops open under a
+ * discount-chasing player) and peaked at +31% across a whole day. Now that
+ * player has 12 shops open inside ten minutes and is paying +20% for them, and
+ * the run peak is +56% against PRICE_SURCHARGE_MAX's +60% ceiling. The
+ * surcharge is what stops "buy shops, ignore everything else" now, and it is
+ * doing that four points short of saturating — so the cap still bites and is
+ * still not the binding constraint. Raising it would be a change to the model
+ * rather than a repair.
+ */
+export const SHOP_BASE = 9;
+export const SHOP_GROWTH = 1.18;
 
 /**
- * Industry is priced between a shop and a rezone, and compounds more slowly
- * than commerce does. There are only 19 industrial plots to a district against
- * 28 commercial ones, so a steeper curve would price the zone out before the
- * demand loop ever had a chance to ask for it.
+ * Industry is priced between a shop and a rezone.
+ *
+ * It used to compound more slowly than commerce as well; bringing SHOP_GROWTH
+ * down to 1.18 has left 1.2 marginally the steeper of the two, which is fine
+ * and is not worth a retune: a district holds 11 industrial plots against 28
+ * commercial, so the steeper curve runs over less than half the buildings and
+ * a full district's industry still costs a fraction of its commerce. Measured
+ * over 24 hours after the commercial rebalance, every policy still builds
+ * industry out — 9 under auto-develop, 59 disciplined, 65 greedy — so the
+ * demand loop is still what gates the zone rather than the price.
  */
 export const INDUSTRY_BASE = 240;
 export const INDUSTRY_GROWTH = 1.2;
@@ -191,6 +251,17 @@ export const ANNEX_MIN_OCCUPANCY = 0.7;
 /** Starting treasury. */
 export const START_CASH = 40;
 
+/**
+ * Seconds in one day/night cycle.
+ *
+ * Eight minutes, and driven by `elapsed` rather than by a clock of its own, so
+ * the time of day is already in the save and already advances through
+ * `catchUp` — come back after an hour away and the sun has moved seven and a
+ * half days, exactly as if you had watched. A cycle short enough to see all of
+ * inside one session, long enough that midday is not a strobe.
+ */
+export const DAY_SECONDS = 480;
+
 /** Simulation ticks per second, independent of frame rate. */
 export const TICK_RATE = 10;
 
@@ -239,7 +310,7 @@ export const DEMAND_TAU = 25;
  * stays derived from the same equilibrium the zoning budget is.
  *
  * Measured over 24 hours: nothing pins under idle or auto-develop, and
- * auto-develop ends at R +0.65 / C -0.03 / I -0.02 — lively, and well short of
+ * auto-develop ends at R +0.57 / C -0.02 / I -0.02 — lively, and well short of
  * the bounds.
  *
  * The honest limit of a *constant* scale, also measured: under the two policies
@@ -340,7 +411,7 @@ export interface Service {
   /** Residents one of these covers, once it is fully staffed. */
   readonly capacity: number;
   readonly base: number;
-  /** Share of the happiness score. The three sum to 1. */
+  /** Share of the happiness score. These three plus RECREATION_WEIGHT sum to 1. */
   readonly weight: number;
 }
 
@@ -360,9 +431,9 @@ export interface Service {
  * HAPPINESS_MIN_BUILD, so housing is never bricked by land the city cannot buy.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital', name: 'Hospitals', buildLabel: 'Open hospital',      coverLabel: 'Health coverage', capacity: 900,  base: 130, weight: 0.4  },
-  { key: 'police',   name: 'Police',    buildLabel: 'Open police station', coverLabel: 'Police coverage', capacity: 1_200, base: 210, weight: 0.35 },
-  { key: 'fire',     name: 'Fire',      buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',   capacity: 1_500, base: 320, weight: 0.25 },
+  { key: 'hospital', name: 'Hospitals', buildLabel: 'Open hospital',      coverLabel: 'Health coverage', capacity: 900,  base: 130, weight: 0.34 },
+  { key: 'police',   name: 'Police',    buildLabel: 'Open police station', coverLabel: 'Police coverage', capacity: 1_200, base: 210, weight: 0.26 },
+  { key: 'fire',     name: 'Fire',      buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',   capacity: 1_500, base: 320, weight: 0.22 },
 ];
 
 /** Civic buildings compound like everything else, and faster than housing. */
@@ -409,8 +480,15 @@ export const HAPPINESS_FLOOR = 0.55;
  * Below this, nobody new will move in and the home button says so.
  *
  * This is the tutorial, and it has no text: housing stalls, the happiness panel
- * names the service that is short, and the player works out why. One hospital
- * is worth 0.4 on its own, so the fix is always exactly one purchase away.
+ * names the term that is short, and the player works out why.
+ *
+ * The fix used to be exactly one purchase: a hospital was worth 0.4 on its own
+ * and cleared 0.35 by itself. Recreation's 0.18 comes out of the three service
+ * weights, so a hospital is now 0.34 — a hair under — and the fix is two
+ * purchases rather than one. It is still short and still signposted: at twelve
+ * homes the panel names the police station (0.34 + 0.26 = 0.60), and the park
+ * it names next is 45 rather than 210 and gets there on its own too (0.34 +
+ * 0.18 x 5/12 = 0.42). Both routes are cheaper than the single hospital was.
  *
  * An empty city is at 1, not 0 — coverage is the share of residents a service
  * reaches, and with no residents there is nobody it fails. Happiness then lags
@@ -421,3 +499,132 @@ export const HAPPINESS_FLOOR = 0.55;
  * time — shops and industry are both still buildable through it.
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
+
+// ------------------------------------------------------------------ parks
+
+/**
+ * Homes one park keeps happy.
+ *
+ * Against *homes*, not residents, and that is the whole design of the term. The
+ * land ratio is fixed at four park plots to nineteen housing plots a district,
+ * whatever stands on them — a rezone multiplies residents by up to 75x and adds
+ * exactly zero park land. A per-resident denominator would therefore be trivial
+ * at detached housing and unreachable at arcologies, which is a happiness term
+ * that means two different things at two ends of the same game. Per home it is
+ * tier-invariant: 19 homes want 3.8 parks and a district has 4.
+ */
+export const HOMES_PER_PARK = 5;
+
+/**
+ * Recreation's share of happiness. With the three services above it sums to 1.
+ *
+ * The smallest of the four, deliberately. A park is the cheapest of the
+ * amenities and its land is the interior of a block that nothing else can use,
+ * so it should not be worth as much as a hospital — but a city that never
+ * builds one is capped at 0.82, which is a visible ceiling rather than a
+ * punishment, and still miles clear of HAPPINESS_MIN_BUILD.
+ */
+export const RECREATION_WEIGHT = 0.18;
+
+/**
+ * Parks earn nothing and compound gently.
+ *
+ * Priced against the civic curve rather than against housing, because that is
+ * what a park competes with for the same cash. A district holds 4 parks against
+ * about 2.33 buildings of any one civic type, so a matching *growth* is the one
+ * that compounds at the same rate per district: 4 x ln(1.18) = 0.66 against
+ * 2.33 x ln(1.35) = 0.70. Base 45 puts the first district's four parks at 235
+ * all told — about a third of what filling its housing costs, which makes
+ * recreation an early purchase rather than an endgame one.
+ */
+export const PARK_BASE = 45;
+export const PARK_GROWTH = 1.18;
+
+// ---------------------------------------------------------------------- fire
+
+/**
+ * Chance a single building catches fire, per building per hour, before any
+ * suppression.
+ *
+ * Set against what a player actually sees rather than against anything real. A
+ * young district of 20 buildings gets one fire an hour — often enough that the
+ * fire station stops being an abstract coverage number, rare enough that it is
+ * an event rather than a chore. A built-out 49-district city of 2,842 buildings
+ * would reach 142 an hour uncovered, which is what MAX_ACTIVE_FIRES is for.
+ */
+export const BASE_IGNITION_PER_BUILDING_HOUR = 0.05;
+
+/**
+ * How much of the ignition rate full fire coverage takes away.
+ *
+ * Not 1. A city that had bought its way out of fires entirely would never see
+ * one again, and the fire station would go back to being a number — 6% of the
+ * base rate leaves a well-covered city the occasional fire, which at full
+ * coverage is put out in EXTINGUISH_MIN and never costs a building.
+ */
+export const FIRE_SUPPRESSION = 0.94;
+
+/**
+ * Fires burning at once, at most.
+ *
+ * Six is a cap on the *simulation*, not just on the renderer: it is what stops
+ * a twelve-hour absence from a large uncovered city returning a hundred
+ * simultaneous fires, and it bounds every loop that walks the list.
+ */
+export const MAX_ACTIVE_FIRES = 6;
+
+/**
+ * Seconds to put a fire out, at zero coverage and at full coverage.
+ *
+ * The response time is the whole of what fire coverage buys. Everything else —
+ * whether the building survives, how long it earns nothing, how long happiness
+ * carries the hit — falls out of this one number.
+ */
+export const EXTINGUISH_MAX = 90;
+export const EXTINGUISH_MIN = 20;
+
+/**
+ * How long a building survives burning.
+ *
+ * Sits between the two extinguish times on purpose, which is what turns
+ * coverage into a threshold the player can feel: response time is
+ * EXTINGUISH_MAX + (EXTINGUISH_MIN - EXTINGUISH_MAX) x coverage, so it drops
+ * under 75 seconds at 21.4% fire coverage. Below that every fire costs a
+ * building; above it, none do.
+ */
+export const BURN_OUT_SECONDS = 75;
+
+/**
+ * Happiness lost per fire currently burning.
+ *
+ * Six at once is 0.30 off the top, which a fully covered city (1.00) and even a
+ * park-less one (0.82, see SERVICES) both absorb without falling through
+ * HAPPINESS_MIN_BUILD. A fire should cost a city its momentum, not brick its
+ * housing — being unable to rebuild *because* things burned down is the exact
+ * spiral an idle game must not have.
+ */
+export const FIRE_UNHAPPINESS = 0.05;
+
+/**
+ * Buildings a single `catchUp` call may destroy, however long the absence.
+ *
+ * The hard guard. Measured on one uncovered district left for the full
+ * twelve-hour cap: 31 fires start and every one of them resolves past
+ * BURN_OUT_SECONDS, so without this the player comes back to a city 31
+ * buildings smaller — more than half of the 58 it owns — having watched none
+ * of it. One is a message; thirty-one is a bug report. The fires that would
+ * have been losses are put out instead, and `AwayReport` carries the count
+ * either way.
+ */
+export const CATCHUP_MAX_LOSSES = 1;
+
+/**
+ * Ceiling on accumulated ignition pressure, in expected fires.
+ *
+ * A backstop, not a tuning knob. Ignition integrates a hazard and spends it in
+ * a loop, so a doctored save carrying an absurd hazard is the one input that
+ * could spin. 64 is far above anything the rate can reach in a single 60-second
+ * catch-up step — the largest city manages about 2.4 — so it never binds in
+ * play.
+ */
+export const IGNITION_HAZARD_CAP = 64;

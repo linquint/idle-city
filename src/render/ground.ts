@@ -22,11 +22,11 @@ import { PALETTE } from './palette';
  * unit box scaled per instance, so orientation is a scale swap and no rotation
  * is needed anywhere.
  */
-const ROAD_W = 2.4;
+export const ROAD_W = 2.4;
+export const ROAD_H = 0.18;
 const FOOT_W = (CELL - ROAD_W) / 2;
 const FOOT_OFF = (CELL - FOOT_W) / 2;
 const PAVE_H = 0.3;
-const ROAD_H = 0.18;
 const TUCK = 0.04;
 const LAND_H = 1.2;
 const MAX_FOOTWAYS_PER_CELL = 4;

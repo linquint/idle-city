@@ -30,6 +30,21 @@ export const PALETTE = {
   // Zoned land nobody will ever build on: the interior of a deep block, and the
   // civic sites still standing empty. Drawn, or the blocks read as holes.
   courtyard: 0x3d6349,
+  // Parks. A shade up from the courtyard they stand on, so a laid-out plot
+  // reads as planted rather than as the same interior land in a new colour.
+  park: 0x2f7a4a,
+  trunk: 0x4a3524,
+  canopy: 0x53a86a,
+  // Traffic. One shared body colour rather than a per-instance tint: at the
+  // distance this is played from a car is two world units long, so the variety
+  // would not read, and instance colours would have to be rewritten every frame
+  // because distance culling reshuffles which slot holds which car.
+  car: 0x39465e,
+  headlight: 0xffe6b0,
+  // Fire. Brighter than the sodium the city lights itself with, because a
+  // burning roof has to be the thing you look at first.
+  flame: 0xff7a2e,
+  flameGlow: 0xff4a1c,
   // Demand overlay (the Z key, second press). Green where a discount is live,
   // red where the zone is oversupplied, grey at the balance point.
   demandHigh: 0x5fd08a,

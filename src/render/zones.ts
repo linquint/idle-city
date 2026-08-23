@@ -1,8 +1,15 @@
 import * as THREE from 'three';
+import { hash01 } from '../core/rng';
 import { ZONE } from '../sim/citygen';
 import { CELL } from '../sim/config';
 import { serviceCount } from '../sim/economy';
-import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
+import {
+  BUILDABLE_PARKS_PER_DISTRICT as PARKS_PER_DISTRICT,
+  worldX,
+  worldZ,
+  type CityLayout,
+  type Coord,
+} from '../sim/layout';
 import type { GameState } from '../sim/state';
 import { GrowableInstancedMesh } from './growable';
 import { PALETTE } from './palette';
@@ -37,6 +44,9 @@ const quantise = (d: number): number => Math.round(d * DEMAND_STEPS);
  *     they are reserved from the moment the land is annexed, so without this a
  *     new district would open as a grid of 28 gaps.
  *
+ * Interior plots carrying a park are drawn by `Parks` instead, so this class
+ * draws the tail of the courtyard list rather than all of it.
+ *
  * Always on, unlike the zoning overlay, and rebuilt only when a count it draws
  * from actually moves.
  */
@@ -61,12 +71,15 @@ export class Courtyards {
 
   sync(state: Readonly<GameState>): void {
     const built = SERVICE_KEYS.map((key) => serviceCount(state, key));
-    const stamp = `${state.districts}:${built.join(',')}`;
+    const stamp = `${state.districts}:${state.parks}:${built.join(',')}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
     this.layout.ensure(state.districts);
 
     const courtyards = this.layout.courtyards;
+    // Parks are the front of the courtyard list, so the plots still standing
+    // empty are the tail past `parks` — the same rule the build lists use.
+    const laid = Math.min(state.parks, courtyards.length);
     // A site is empty until the building indexed onto it exists. The interleave
     // is fixed, so "site i is taken" is pure arithmetic over three counts.
     const taken = (site: number): boolean => (built[site % 3] as number) > Math.floor(site / 3);
@@ -82,9 +95,9 @@ export class Courtyards {
 
     let empty = 0;
     for (let i = 0; i < this.layout.civicSites; i++) if (!taken(i)) empty++;
-    this.pads.ensure(courtyards.length + empty * 4);
+    this.pads.ensure(courtyards.length - laid + empty * 4);
 
-    for (const cell of courtyards) write(cell);
+    for (let i = laid; i < courtyards.length; i++) write(courtyards[i] as Coord);
     for (let i = 0; i < this.layout.civicSites; i++) {
       if (taken(i)) continue;
       // The site's four plots, from its lower-left corner.
@@ -97,6 +110,112 @@ export class Courtyards {
 
     this.pads.count = n;
     this.pads.flush();
+  }
+}
+
+/**
+ * Parks: a green pad and a handful of trees, on land nothing else can use.
+ *
+ * The pad is the courtyard pad — same geometry, same height, same one-unit
+ * gutter — because a park *is* a courtyard with something on it, and drawing it
+ * any other way would make the interior of a block read as two different kinds
+ * of land. What distinguishes it is the colour and the trees.
+ *
+ * Rebuilt only when the park count or the district count moves. Tree placement
+ * is `hash01` over the park's ordinal, so a park scatters the same way on every
+ * device and after every reload without a single coordinate being stored.
+ */
+class ParkTrees {
+  /** Trees to a plot. Four reads as planting; more reads as woodland. */
+  static readonly PER_PARK = 4;
+  /** Kept inside the pad, so no canopy overhangs the kerb. */
+  static readonly SPREAD = PAD / 2 - 0.55;
+}
+
+export class Parks {
+  private readonly pads: GrowableInstancedMesh;
+  private readonly trunks: GrowableInstancedMesh;
+  private readonly canopies: GrowableInstancedMesh;
+  private readonly dummy = new THREE.Object3D();
+  private readonly tint = new THREE.Color(PALETTE.park);
+  private stamp = '';
+
+  constructor(
+    scene: THREE.Scene,
+    private readonly layout: CityLayout,
+  ) {
+    this.pads = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(PAD, PAD_H, PAD),
+      new THREE.MeshLambertMaterial({ color: PALETTE.park }),
+      64,
+      { receiveShadow: true },
+    );
+    this.trunks = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(0.16, 0.55, 0.16),
+      new THREE.MeshLambertMaterial({ color: PALETTE.trunk }),
+      256,
+      { castShadow: true },
+    );
+    this.canopies = new GrowableInstancedMesh(
+      scene,
+      new THREE.ConeGeometry(0.52, 1.15, 6),
+      new THREE.MeshLambertMaterial({ color: PALETTE.canopy }),
+      256,
+      { castShadow: true },
+    );
+  }
+
+  sync(state: Readonly<GameState>): void {
+    const stamp = `${state.districts}:${state.parks}`;
+    if (stamp === this.stamp) return;
+    this.stamp = stamp;
+    this.layout.ensure(state.districts);
+
+    const n = Math.min(state.parks, state.districts * PARKS_PER_DISTRICT);
+    this.pads.ensure(n);
+    this.trunks.ensure(n * ParkTrees.PER_PARK);
+    this.canopies.ensure(n * ParkTrees.PER_PARK);
+
+    let tree = 0;
+    for (let i = 0; i < n; i++) {
+      const cell = this.layout.parkCell(i);
+      const x = worldX(cell.x);
+      const z = worldZ(cell.z);
+
+      this.dummy.rotation.set(0, 0, 0);
+      this.dummy.scale.set(1, 1, 1);
+      this.dummy.position.set(x, PAD_Y, z);
+      this.dummy.updateMatrix();
+      this.pads.setMatrixAt(i, this.dummy.matrix);
+      this.pads.setColorAt(i, this.tint);
+
+      for (let k = 0; k < ParkTrees.PER_PARK; k++) {
+        const seed = i * ParkTrees.PER_PARK + k;
+        const tx = x + (hash01(seed ^ 0x51ed270b) * 2 - 1) * ParkTrees.SPREAD;
+        const tz = z + (hash01(seed ^ 0x2f9a3b17) * 2 - 1) * ParkTrees.SPREAD;
+        // A little height variation, or four identical cones read as a fence.
+        const grow = 0.78 + hash01(seed ^ 0x7c1a55d3) * 0.5;
+
+        this.dummy.scale.set(1, grow, 1);
+        this.dummy.position.set(tx, PAD_Y + (0.55 * grow) / 2, tz);
+        this.dummy.updateMatrix();
+        this.trunks.setMatrixAt(tree, this.dummy.matrix);
+
+        this.dummy.position.y = PAD_Y + 0.55 * grow + (1.15 * grow) / 2;
+        this.dummy.updateMatrix();
+        this.canopies.setMatrixAt(tree, this.dummy.matrix);
+        tree++;
+      }
+    }
+
+    this.pads.count = n;
+    this.trunks.count = tree;
+    this.canopies.count = tree;
+    this.pads.flush();
+    this.trunks.flush();
+    this.canopies.flush();
   }
 }
 

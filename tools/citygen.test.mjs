@@ -27,7 +27,12 @@ import {
   TARGET_PLOTS,
   ZONE_SHARE,
 } from '../src/sim/config.ts';
-import { civicSites, districtPlan, planFor } from '../src/sim/layout.ts';
+import {
+  BUILDABLE_PARKS_PER_DISTRICT,
+  civicSites,
+  districtPlan,
+  planFor,
+} from '../src/sim/layout.ts';
 import { rng } from '../src/core/rng.ts';
 
 let failures = 0;
@@ -305,6 +310,9 @@ check('industrial coherence: at most 3 connected clusters', () => {
 
 // -------------------------------------------------------------- 8. frontage
 
+// The frontage rule is scoped to the three zones that are *sold*. Parks are the
+// one type exempt from it, so they are checked against their own rule below
+// rather than being allowed to weaken this one.
 check(`frontage: every plot offered for sale touches a road, ${SEEDS} seeds`, () => {
   let offered = 0;
   for (let i = 0; i < SEEDS; i++) {
@@ -369,7 +377,41 @@ check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TAR
   return `${SEEDS} districts on target, worst inner sampling ${worst} attempts`;
 });
 
-// ------------------------------------------------------------ 9. civic sites
+// ------------------------------------------------------------------ 9. parks
+
+check(`parks: exactly ${BUILDABLE_PARKS_PER_DISTRICT} a district, never on a street, ${SEEDS} seeds`, () => {
+  // Parks are the interior of a deep block — the land the frontage rule leaves
+  // over. That makes them the one build list where `perimeter === 1` would be a
+  // *failure*: a road-adjacent park would mean the frontage pass had missed a
+  // plot it should have offered for sale.
+  let plots = 0;
+  for (let i = 0; i < SEEDS; i++) {
+    const plan = planFor(seedOf(i));
+    assert(
+      plan.courtyards.length === BUILDABLE_PARKS_PER_DISTRICT,
+      `seed ${i}: ${plan.courtyards.length} park plots, wanted ${BUILDABLE_PARKS_PER_DISTRICT}`,
+    );
+
+    const reserved = new Set(plan.sites.flatMap((site) => site.cells));
+    const forSale = new Set([...plan.residential, ...plan.commercial, ...plan.industrial]);
+    const seen = new Set();
+    for (const cell of plan.courtyards) {
+      assert(
+        plan.layout.perimeter[cell] === 0,
+        `seed ${i}: park plot ${cell} fronts a street and should have been for sale`,
+      );
+      assert(plan.layout.zone[cell] !== ZONE.road, `seed ${i}: park plot ${cell} is a road`);
+      assert(!reserved.has(cell), `seed ${i}: park plot ${cell} is also a civic site`);
+      assert(!forSale.has(cell), `seed ${i}: park plot ${cell} is also for sale`);
+      assert(!seen.has(cell), `seed ${i}: park plot ${cell} listed twice`);
+      seen.add(cell);
+      plots++;
+    }
+  }
+  return `${plots} park plots, none of them on a street`;
+});
+
+// ------------------------------------------------------------ 10. civic sites
 
 check(`civic sites: one zone, road-adjacent, disjoint, at least 5, ${SEEDS} seeds`, () => {
   let fewest = Infinity;

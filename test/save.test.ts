@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_DISTRICTS, SERVICES, TIERS } from '../src/sim/config';
+import { MAX_ACTIVE_FIRES, MAX_DISTRICTS, SERVICES, TIERS } from '../src/sim/config';
 import {
   civicBuildings,
   happinessTarget,
@@ -10,8 +10,9 @@ import {
   shopCapacity,
   siteCapacity,
 } from '../src/sim/economy';
+import { BUILDABLE_PARKS_PER_DISTRICT } from '../src/sim/layout';
 import { load, migrate, save, SAVE_KEY, secondsAway } from '../src/sim/save';
-import { createState, SAVE_VERSION } from '../src/sim/state';
+import { createState, SAVE_VERSION, type GameState } from '../src/sim/state';
 
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
@@ -233,5 +234,244 @@ describe('migration', () => {
     expect(Number.isFinite(back!.cash)).toBe(true);
     expect(Number.isFinite(back!.homes)).toBe(true);
     expect(Number.isFinite(back!.elapsed)).toBe(true);
+  });
+});
+
+/**
+ * The line between the two halves of this codebase, asserted rather than
+ * assumed. Traffic, fire trucks and the flames on a burning roof are all
+ * readouts of numbers the simulation already holds — positions, headings and
+ * animation clocks are recomputed from counts and the seed on every frame. The
+ * moment one of them needed saving, offline progress would be holding state it
+ * could not reproduce, and the save would stop being a handful of integers.
+ */
+describe('the view keeps nothing in the save', () => {
+  const VIEW_WORDS = [
+    'car',
+    'truck',
+    'vehicle',
+    'traffic',
+    'lane',
+    'route',
+    'heading',
+    'speed',
+    'flame',
+    'glow',
+    'ember',
+    'smoke',
+    'sprite',
+    'mesh',
+    'instance',
+    'camera',
+    'phase',
+    'sky',
+    'sun',
+    'light',
+    'x',
+    'y',
+    'z',
+    'coord',
+    'position',
+  ];
+
+  it('serialises no key belonging to the renderer', () => {
+    save({ ...createState(0), homes: 40, shops: 12, districts: 3 }, 1_000);
+    const raw = localStorage.getItem(SAVE_KEY);
+    expect(raw).not.toBeNull();
+    const keys = Object.keys(JSON.parse(raw as string) as Record<string, unknown>);
+    for (const key of keys) {
+      const word = key.toLowerCase();
+      for (const banned of VIEW_WORDS) {
+        // Whole-word, so `fires` is not caught by `fire` being a substring of
+        // something else and `elapsed` is not caught by `lane`.
+        expect(word === banned || word === `${banned}s`).toBe(false);
+      }
+    }
+  });
+
+  /**
+   * Fires *are* in the save, and have to be — a burning building earns nothing
+   * and may be gone when it stops, which is simulation, not decoration. What is
+   * not in the save is where the fire is: an ordinal and a start time, and the
+   * renderer works the rest out from the seed like it does for everything else.
+   */
+  it('stores a fire as an ordinal and a clock, never as a place', () => {
+    save(
+      {
+        ...createState(0),
+        homes: 19,
+        elapsed: 500,
+        fires: [{ kind: 'home', index: 7, startedAt: 480 }],
+      },
+      1_000,
+    );
+    const parsed = JSON.parse(localStorage.getItem(SAVE_KEY) as string) as Record<string, unknown>;
+    const fires = parsed['fires'] as Array<Record<string, unknown>>;
+    expect(fires).toHaveLength(1);
+    expect(Object.keys(fires[0] ?? {}).sort()).toEqual(['index', 'kind', 'startedAt']);
+  });
+
+  it('round-trips a state the renderer has been driving from', () => {
+    const before = { ...createState(0), homes: 19, shops: 9, elapsed: 4_812.5, districts: 2 };
+    save(before, 2_000);
+    const after = load(2_000);
+    // Time of day is a read over `elapsed`, so this one field is the whole of
+    // what the day/night cycle persists — and it is one the game already had.
+    expect(after?.elapsed).toBe(4_812.5);
+    expect(Object.keys(after ?? {}).sort()).toEqual(Object.keys(createState(0)).sort());
+  });
+});
+
+/**
+ * A v3 save is a save with no fires in it at all, which is exactly the state a
+ * city that has never burned is in — so bringing one forward is a matter of
+ * defaulting rather than of reconstructing anything.
+ */
+describe('the v4 migration', () => {
+  const v3 = {
+    version: 3,
+    cash: 12_345,
+    elapsed: 9_000,
+    homes: 19,
+    shops: 20,
+    industry: 7,
+    hospitals: 1,
+    police: 1,
+    fire: 1,
+    hospitalStaff: 1,
+    policeStaff: 1,
+    fireStaff: 1,
+    happiness: 0.77,
+    demandR: 0.4,
+    demandC: -0.2,
+    demandI: 0.1,
+    tier: 1,
+    districts: 1,
+    earned: 40_000,
+    autoDevelop: true,
+    savedAt: 1_000,
+  };
+
+  it('opens a v3 save with everything that was in it intact', () => {
+    const state = migrate(v3, 2_000);
+    expect(state).not.toBeNull();
+    expect(state).toMatchObject({
+      version: SAVE_VERSION,
+      cash: 12_345,
+      homes: 19,
+      shops: 20,
+      industry: 7,
+      tier: 1,
+      districts: 1,
+      demandR: 0.4,
+      demandC: -0.2,
+      demandI: 0.1,
+      happiness: 0.77,
+      autoDevelop: true,
+    });
+  });
+
+  it('defaults the fire fields rather than inventing a fire', () => {
+    const state = migrate(v3, 2_000);
+    expect(state?.fires).toEqual([]);
+    expect(state?.fireCursor).toBe(0);
+    expect(state?.fireHazard).toBe(0);
+  });
+
+  it('defaults parks to none, which is the state a v3 city was in', () => {
+    const state = migrate(v3, 2_000);
+    expect(state?.parks).toBe(0);
+    // And the housing gate still opens for it: no parks caps happiness at 0.82.
+    expect(state?.happiness).toBe(0.77);
+    expect(happinessTarget(state as GameState)).toBeGreaterThan(0.35);
+  });
+
+  it('clamps parks to the courtyard land the city owns', () => {
+    const state = migrate({ ...v3, districts: 2, parks: 900 }, 2_000);
+    expect(state?.parks).toBe(2 * BUILDABLE_PARKS_PER_DISTRICT);
+    expect(migrate({ ...v3, parks: -4 }, 0)?.parks).toBe(0);
+    expect(migrate({ ...v3, parks: 'lots' }, 0)?.parks).toBe(0);
+  });
+
+  it('reads a v4 save back exactly as it was written', () => {
+    const written = {
+      ...v3,
+      version: 4,
+      fires: [{ kind: 'shop', index: 3, startedAt: 8_950 }],
+      fireCursor: 42,
+      fireHazard: 0.31,
+    };
+    const state = migrate(written, 2_000);
+    expect(state?.fires).toEqual([{ kind: 'shop', index: 3, startedAt: 8_950 }]);
+    expect(state?.fireCursor).toBe(42);
+    expect(state?.fireHazard).toBeCloseTo(0.31, 12);
+  });
+
+  it('finds a v3 save under its own key when there is no v4 one', () => {
+    localStorage.setItem('idle-city/save/v3', JSON.stringify(v3));
+    const state = load(2_000);
+    expect(state?.homes).toBe(19);
+    expect(state?.version).toBe(SAVE_VERSION);
+    expect(state?.fires).toEqual([]);
+  });
+});
+
+describe('a doctored save', () => {
+  const doctored = (patch: Record<string, unknown>): Record<string, unknown> => ({
+    homes: 19,
+    shops: 10,
+    industry: 5,
+    elapsed: 500,
+    ...patch,
+  });
+
+  it('cannot set four hundred buildings alight', () => {
+    const fires = Array.from({ length: 400 }, (_, i) => ({
+      kind: 'home',
+      index: i % 19,
+      startedAt: 0,
+    }));
+    const state = migrate(doctored({ fires }), 0);
+    expect(state?.fires.length).toBeLessThanOrEqual(MAX_ACTIVE_FIRES);
+    // And no plot is alight twice, which would double the damage.
+    const keys = (state?.fires ?? []).map((f) => `${f.kind}:${f.index}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('cannot burn a building the city does not own', () => {
+    const state = migrate(
+      doctored({
+        fires: [
+          { kind: 'home', index: 900, startedAt: 0 },
+          { kind: 'shop', index: -4, startedAt: 0 },
+          { kind: 'industry', index: 2, startedAt: 0 },
+          { kind: 'observatory', index: 0, startedAt: 0 },
+          'not a fire',
+          null,
+        ],
+      }),
+      0,
+    );
+    expect(state?.fires).toEqual([{ kind: 'industry', index: 2, startedAt: 0 }]);
+  });
+
+  it('cannot run the fire cursor backwards', () => {
+    const state = migrate(doctored({ fireCursor: -12, fireHazard: -900 }), 0);
+    expect(state?.fireCursor).toBe(0);
+    expect(state?.fireHazard).toBe(0);
+  });
+
+  it('cannot stamp a fire in the future, where it would never go out', () => {
+    const state = migrate(
+      doctored({ elapsed: 500, fires: [{ kind: 'home', index: 1, startedAt: 1e9 }] }),
+      0,
+    );
+    expect(state?.fires[0]?.startedAt).toBe(500);
+  });
+
+  it('cannot hide a fire behind a nonsense cursor or a NaN hazard', () => {
+    const state = migrate(doctored({ fireCursor: Number.NaN, fireHazard: Number.NaN }), 0);
+    expect(state?.fireCursor).toBe(0);
+    expect(state?.fireHazard).toBe(0);
   });
 });

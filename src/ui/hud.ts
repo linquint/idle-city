@@ -1,16 +1,22 @@
 import { fmt, fmtDuration, fmtInt } from '../core/format';
-import { ANNEX_MIN_OCCUPANCY, HAPPINESS_MIN_BUILD, MAX_DISTRICTS, SERVICES } from '../sim/config';
+import {
+  ANNEX_MIN_OCCUPANCY,
+  HAPPINESS_MIN_BUILD,
+  HOMES_PER_PARK,
+  MAX_DISTRICTS,
+  SERVICES,
+} from '../sim/config';
 import {
   annexBlocker,
   annexCost,
-  bindingService,
+  bindingTerm,
   canAnnex,
   canBuildHome,
   canBuildIndustry,
+  canBuildPark,
   canBuildService,
   canBuildShop,
   canRezone,
-  coverage,
   demandTargets,
   homeBlocker,
   homeCapacity,
@@ -20,7 +26,11 @@ import {
   industryCost,
   nextTier,
   occupancy,
+  parkBlocker,
+  parkCapacity,
+  parkCost,
   priceModifier,
+  recreationCoverage,
   residents,
   rezoneBlocker,
   rezoneCost,
@@ -93,6 +103,12 @@ export class Hud {
     industryCost: el('build-industry-cost'),
     industryChip: el('build-industry-chip'),
     industryTrend: el('build-industry-trend'),
+    park: el<HTMLButtonElement>('build-park'),
+    parkCost: el('build-park-cost'),
+    parkAllowance: el('build-park-built'),
+    parksBuilt: el('svc-parks-built'),
+    parksCovers: el('svc-parks-covers'),
+    parksRow: el('svc-parks-built').parentElement as HTMLElement,
     rezoneLabel: el('rezone-label'),
     rezoneCost: el('rezone-cost'),
     annexLabel: el('annex-label'),
@@ -132,6 +148,7 @@ export class Hud {
     n.home.addEventListener('click', () => this.act(() => this.game.buildHome()));
     n.shop.addEventListener('click', () => this.act(() => this.game.buildShop()));
     n.industry.addEventListener('click', () => this.act(() => this.game.buildIndustry()));
+    n.park.addEventListener('click', () => this.act(() => this.game.buildPark()));
     n.rezone.addEventListener('click', () => this.act(() => this.game.rezone()));
     n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
 
@@ -262,8 +279,8 @@ export class Hud {
     // so the binding term is named beside it: "Health coverage 41%" is the whole
     // reason this block exists rather than the number on its own.
     const people = residents(s);
-    const worst = bindingService(s);
-    const why = `${worst.coverLabel} ${pct(coverage(s, worst))}`;
+    const worst = bindingTerm(s);
+    const why = `${worst.coverLabel} ${pct(worst.coverage)}`;
     n.moodPct.textContent = pct(s.happiness);
     n.moodWhy.textContent = why;
     n.moodFill.style.width = `${Math.max(0, Math.min(100, s.happiness * 100)).toFixed(1)}%`;
@@ -285,6 +302,17 @@ export class Hud {
         `${service.name} ${built} of ${allowed} allowed, covering ${Math.round(covered)} of ${Math.round(people)} residents`,
       );
     }
+    // Recreation is the fourth happiness term but not a service: it has no
+    // staffing, no site and a denominator in homes, so it gets its own row
+    // rather than being forced through `serviceReadings`.
+    const parkLand = parkCapacity(s);
+    const reach = recreationCoverage(s);
+    n.parksBuilt.textContent = `${fmtInt(s.parks)}/${fmtInt(parkLand)}`;
+    n.parksCovers.textContent = `covers ${fmtInt(Math.min(s.homes, s.parks * HOMES_PER_PARK))} of ${fmtInt(s.homes)} homes`;
+    n.parksRow.classList.toggle('covered', reach >= 1);
+    spoken.push(
+      `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of homes`,
+    );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
     const tier = tierOf(s);
@@ -304,6 +332,10 @@ export class Hud {
     n.home.disabled = !canBuildHome(s);
     n.shop.disabled = !canBuildShop(s);
     n.industry.disabled = !canBuildIndustry(s);
+    n.parkCost.textContent = fmt(parkCost(s));
+    n.parkAllowance.textContent = `${fmtInt(s.parks)}/${fmtInt(parkCapacity(s))}`;
+    n.park.disabled = !canBuildPark(s);
+    n.park.title = parkBlocker(s) ?? 'Lay out a park';
 
     const filled = occupancy(s);
     n.occupancyFill.style.width = `${Math.min(100, filled * 100).toFixed(1)}%`;
@@ -331,7 +363,9 @@ export class Hud {
 
   /** The "while you were away" sheet. Skipped entirely for a trivial absence. */
   showAway(report: AwayReport): void {
-    if (report.seconds < 60 || report.earned < 1) return;
+    // A building lost is worth a sheet on its own. The earnings floor exists to
+    // skip a report with nothing in it; a fire is something in it.
+    if (report.seconds < 60 || (report.earned < 1 && report.firesLost === 0)) return;
     const n = this.nodes;
     n.welcomeAway.textContent = fmtDuration(report.seconds);
 
@@ -339,8 +373,16 @@ export class Hud {
     if (report.homes > 0) rows.push(['Homes built', fmtInt(report.homes)]);
     if (report.shops > 0) rows.push(['Shops opened', fmtInt(report.shops)]);
     if (report.industry > 0) rows.push(['Works built', fmtInt(report.industry)]);
+    if (report.parks > 0) rows.push(['Parks laid out', fmtInt(report.parks)]);
     if (report.services > 0) rows.push(['Services opened', fmtInt(report.services)]);
     if (report.spent > 1) rows.push(['Reinvested', fmt(report.spent)]);
+    // Fires are reported even when none started, once any did: "0 lost" is the
+    // half of the story that tells the player the fire service is working.
+    if (report.firesStarted > 0) {
+      rows.push(['Fires', fmtInt(report.firesStarted)]);
+      rows.push(['Put out', fmtInt(report.firesExtinguished)]);
+    }
+    if (report.firesLost > 0) rows.push(['Lost to fire', fmtInt(report.firesLost)]);
     if (report.forfeited > 60) rows.push(['Uncollected', fmtDuration(report.forfeited)]);
 
     n.welcomeRows.replaceChildren(

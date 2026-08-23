@@ -214,6 +214,20 @@ export const PLOTS_PER_DISTRICT = TARGET_PLOTS;
  * These are constants because `districtPlanAt` reseeds until they are — the
  * road-adjacent split is not seed-invariant on its own. See FRONTAGE_TARGET.
  */
+/**
+ * Park land per district: whatever is left once frontage and civic sites are
+ * taken out. Arithmetic, not a measurement — 90 zoned plots less 19 + 28 + 11
+ * for sale and 7 x 4 held for civic sites leaves exactly 4, in every district,
+ * for every seed, because `districtPlanAt` reseeds until the other four numbers
+ * are exact. These are the plots `districtPlan` already reports as courtyards.
+ */
+export const BUILDABLE_PARKS_PER_DISTRICT =
+  TARGET_PLOTS -
+  FRONTAGE_TARGET.residential -
+  FRONTAGE_TARGET.commercial -
+  FRONTAGE_TARGET.industrial -
+  FRONTAGE_TARGET.civicSites * 4;
+
 export const BUILDABLE_RESIDENTIAL_PER_DISTRICT = FRONTAGE_TARGET.residential;
 export const BUILDABLE_COMMERCIAL_PER_DISTRICT = FRONTAGE_TARGET.commercial;
 export const BUILDABLE_INDUSTRIAL_PER_DISTRICT = FRONTAGE_TARGET.industrial;
@@ -423,7 +437,24 @@ export class CityLayout {
     return this.civicSiteCell(i * 3 + 2);
   }
 
-  /** Zoned land nobody will ever build on. Drawn as courtyard, not as a hole. */
+  /**
+   * Plot for the i-th park.
+   *
+   * Parks are the front of the courtyard list, the same way homes are the front
+   * of the residential one. That is what makes `{ parks: 11 }` enough to place
+   * every one of them, and it is why a park never has to be told where it is.
+   */
+  parkCell(i: number): Coord {
+    return this._courtyards[i] as Coord;
+  }
+
+  /**
+   * Every interior plot the city owns, park or not.
+   *
+   * The first `parks` of these carry a park; the rest are drawn as courtyard.
+   * One list rather than two, because a park does not move a plot from one
+   * category to another — it puts something on land the city already had.
+   */
   get courtyards(): readonly Coord[] {
     return this._courtyards;
   }

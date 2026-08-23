@@ -9,19 +9,27 @@
  *   - whether any cost curve is ever non-monotonic in n
  *   - time to first rezone, first annex and first service
  *   - happiness at 1h / 6h / 24h
+ *   - the share of income attributable to the shop multiplier at 1h / 6h / 24h,
+ *     which is what stops a cheap commercial curve collapsing the game into
+ *     "buy shops, ignore everything else"
+ *   - what the commercial demand surcharge is doing in the opening ten minutes
  *
  *   node tools/economy.calibrate.mjs [hours]
  */
 import {
   ANNEX_MIN_OCCUPANCY,
+  DISTRICT_BONUS,
+  FRONTAGE_TARGET,
   HOME_BASE,
   HOME_GROWTH,
   INDUSTRY_BASE,
+  INDUSTRY_BONUS,
   INDUSTRY_GROWTH,
   PRICE_DISCOUNT_MAX,
   PRICE_SURCHARGE_MAX,
   SERVICES,
   SHOP_BASE,
+  SHOP_BONUS,
   SHOP_GROWTH,
   TIERS,
 } from '../src/sim/config.ts';
@@ -29,6 +37,7 @@ import {
   canAnnex,
   canBuildHome,
   canBuildIndustry,
+  canBuildPark,
   canBuildService,
   canBuildShop,
   canRezone,
@@ -37,7 +46,9 @@ import {
   homeCost,
   industryCost,
   occupancy,
+  parkCost,
   priceModifier,
+  recreationCoverage,
   residents,
   serviceCost,
   shopCost,
@@ -78,6 +89,11 @@ const disciplined = (game) => {
         options.push([serviceCost(s, service), () => game.buildService(service)]);
       }
     }
+    // Recreation is the fourth happiness term, so a player who keeps the city
+    // covered keeps it covered too.
+    if (s.homes > 0 && recreationCoverage(s) < 1 && canBuildPark(s)) {
+      options.push([parkCost(s), () => game.buildPark()]);
+    }
     if (options.length === 0) {
       if (s.demandR >= 0 && canBuildHome(s)) options.push([homeCost(s), () => game.buildHome()]);
       if (s.demandC >= 0 && canBuildShop(s)) options.push([shopCost(s), () => game.buildShop()]);
@@ -108,6 +124,9 @@ const greedy = (game) => {
         options.push([0, () => game.buildService(service)]);
       }
     }
+    if (s.homes > 0 && recreationCoverage(s) < 1 && canBuildPark(s)) {
+      options.push([0, () => game.buildPark()]);
+    }
     if (canRezone(s)) options.push([-1, () => game.rezone()]);
     if (canAnnex(s)) options.push([-1, () => game.annex()]);
     if (options.length === 0) return;
@@ -122,6 +141,24 @@ const POLICIES = [
   ['greedy discount-chasing', greedy],
   ['disciplined (extra)', disciplined],
 ];
+
+/**
+ * Share of income the shop multiplier is responsible for.
+ *
+ * `income` is residents x RENT x (1 + SHOP_BONUS x shops + ...) x happiness, so
+ * the multiplier's own terms are the only place the mix between building types
+ * shows up — everything else scales all of them together. This is the number a
+ * cheap commercial curve breaks: shops are the strongest multiplier in the
+ * game, and an eleven-fold discount on them collapses every other decision.
+ */
+const shopShare = (s) => {
+  const multiplier =
+    1 + SHOP_BONUS * s.shops + INDUSTRY_BONUS * s.industry + DISTRICT_BONUS * (s.districts - 1);
+  return (SHOP_BONUS * s.shops) / multiplier;
+};
+
+/** The opening window the demand surcharge has to still be doing something in. */
+const OPENING_SECONDS = 600;
 
 /** Longest continuous run, in seconds, that |d| sat at 1. */
 class PinTracker {
@@ -144,6 +181,12 @@ function run(policy) {
   const pins = { R: new PinTracker(), C: new PinTracker(), I: new PinTracker() };
   const firsts = { rezone: null, annex: null, service: null };
   const happy = {};
+  const share = {};
+  // What the surcharge is actually doing in the first ten minutes: how long
+  // commerce spends oversupplied, and the worst mark-up it ever applies.
+  const opening = { surchargedSeconds: 0, worstSurcharge: 0, shopsAt: 0 };
+  /** Worst commercial mark-up over the whole run, to see if the cap ever binds. */
+  let peakSurcharge = 0;
   let t = 0;
 
   while (t < SECONDS) {
@@ -159,10 +202,22 @@ function run(policy) {
     if (firsts.annex === null && s.districts > 1) firsts.annex = t;
     if (firsts.service === null && civicBuildings(s) > 0) firsts.service = t;
     for (const mark of [3600, 6 * 3600, 24 * 3600]) {
-      if (happy[mark] === undefined && t >= mark) happy[mark] = s.happiness;
+      if (happy[mark] === undefined && t >= mark) {
+        happy[mark] = s.happiness;
+        share[mark] = shopShare(s);
+      }
+    }
+    const markup = priceModifier(s.demandC) - 1;
+    if (markup > peakSurcharge) peakSurcharge = markup;
+    if (t <= OPENING_SECONDS) {
+      if (markup > 0) {
+        opening.surchargedSeconds += STEP;
+        opening.worstSurcharge = Math.max(opening.worstSurcharge, markup);
+      }
+      opening.shopsAt = s.shops;
     }
   }
-  return { game, pins, firsts, happy };
+  return { game, pins, firsts, happy, share, opening, peakSurcharge };
 }
 
 /**
@@ -198,7 +253,7 @@ function monotonic() {
 console.log(`${HOURS}h simulated, ${STEP}s sample step\n`);
 
 for (const [name, policy] of POLICIES) {
-  const { game, pins, firsts, happy } = run(policy);
+  const { game, pins, firsts, happy, share, opening, peakSurcharge } = run(policy);
   const s = game.state;
   console.log(`policy: ${name}`);
   console.log(
@@ -226,6 +281,23 @@ for (const [name, policy] of POLICIES) {
       `6h ${((happy[6 * 3600] ?? 0) * 100).toFixed(0)}%  ` +
       `24h ${((happy[24 * 3600] ?? 0) * 100).toFixed(0)}%`,
   );
+  const pctShare = (mark) => `${((share[mark] ?? 0) * 100).toFixed(0)}%`;
+  const overShare = [3600, 6 * 3600, 24 * 3600].some((mark) => (share[mark] ?? 0) > 0.6);
+  console.log(
+    `  shop multiplier: 1h ${pctShare(3600)}  6h ${pctShare(6 * 3600)}  ` +
+      `24h ${pctShare(24 * 3600)} of income` +
+      (overShare ? '   <- over the 60% threshold' : ''),
+  );
+  console.log(
+    `  opening 10min:  commercial surcharged ${(opening.surchargedSeconds / 60).toFixed(1)}m, ` +
+      `worst +${(opening.worstSurcharge * 100).toFixed(0)}% ` +
+      `(cap +${(PRICE_SURCHARGE_MAX * 100).toFixed(0)}%), ${opening.shopsAt} shops open`,
+  );
+  console.log(
+    `  peak surcharge: +${(peakSurcharge * 100).toFixed(0)}% over the whole run, against a ` +
+      `+${(PRICE_SURCHARGE_MAX * 100).toFixed(0)}% cap` +
+      (peakSurcharge >= PRICE_SURCHARGE_MAX - 1e-9 ? '   <- the cap binds' : ''),
+  );
   console.log(
     `  costs at end:   home ${homeCost(s).toExponential(2)}  shop ${shopCost(s).toExponential(2)}  ` +
       `industry ${industryCost(s).toExponential(2)}  ` +
@@ -233,6 +305,46 @@ for (const [name, policy] of POLICIES) {
   );
   console.log('');
 }
+
+/**
+ * The parity the price change is aiming at: both types opening at a similar
+ * price, with commerce compounding somewhat faster rather than differently.
+ */
+console.log('residential against commercial, undiscounted');
+for (const n of [0, 5, 10, 20, 40]) {
+  const home = HOME_BASE * HOME_GROWTH ** n;
+  const shop = SHOP_BASE * SHOP_GROWTH ** n;
+  console.log(
+    `  n=${String(n).padStart(2)}  home ${home.toFixed(1).padStart(10)}  ` +
+      `shop ${shop.toFixed(1).padStart(10)}  shop/home ${(shop / home).toFixed(2)}x`,
+  );
+}
+const tenShops = (SHOP_BASE * (SHOP_GROWTH ** 10 - 1)) / (SHOP_GROWTH - 1);
+console.log(
+  `  first ten shops cost ${tenShops.toFixed(0)} and buy ${(SHOP_BONUS * 10).toFixed(2)}x base ` +
+    `income — ${(tenShops / (SHOP_BONUS * 10)).toFixed(0)} per 1.0 of multiplier`,
+);
+
+/**
+ * The plot ratio, priced.
+ *
+ * A district sells 28 commercial plots against 19 residential ones — 47% more
+ * commerce — so a faster commercial curve compounds over 47% more buildings
+ * than the residential one does. That ratio is *inverted* against ZONE_SHARE
+ * (R 0.48, C 0.31), which was solved on zoned land rather than on the
+ * road-adjacent land that is actually for sale, so the pricing has to be judged
+ * against the frontage split and not against the zoning budget.
+ */
+const fill = (base, growth, plots) => (base * (growth ** plots - 1)) / (growth - 1);
+const housing = fill(HOME_BASE, HOME_GROWTH, FRONTAGE_TARGET.residential);
+const commerce = fill(SHOP_BASE, SHOP_GROWTH, FRONTAGE_TARGET.commercial);
+console.log(
+  `  filling one district: ${FRONTAGE_TARGET.residential} homes for ${housing.toFixed(0)}, ` +
+    `${FRONTAGE_TARGET.commercial} shops for ${commerce.toFixed(0)} — ` +
+    `commerce costs ${(commerce / housing).toFixed(1)}x housing over ` +
+    `${((FRONTAGE_TARGET.commercial / FRONTAGE_TARGET.residential - 1) * 100).toFixed(0)}% more plots`,
+);
+console.log('');
 
 console.log('cost curve monotonicity in n, at every demand from +1 to -1');
 for (const line of monotonic()) console.log(line.startsWith('  ') ? line : `  BROKEN: ${line}`);
