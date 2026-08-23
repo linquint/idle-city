@@ -4,6 +4,7 @@ import { Buildings } from './buildings';
 import { CameraRig } from './cameraRig';
 import { Ground } from './ground';
 import { World } from './world';
+import { Zones } from './zones';
 
 /**
  * The view layer, entire.
@@ -20,6 +21,7 @@ export class View {
 
   private readonly ground: Ground;
   private readonly buildings: Buildings;
+  private readonly zones: Zones;
   private elapsed = 0;
   private shownDistricts = 0;
 
@@ -27,15 +29,36 @@ export class View {
     this.world = new World(canvas);
     this.ground = new Ground(this.world.scene, layout);
     this.buildings = new Buildings(this.world.scene, layout);
+    this.zones = new Zones(this.world.scene, layout);
 
     const reducedMotion =
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.rig = new CameraRig(this.world.camera, canvas, !reducedMotion);
 
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('keydown', this.onKey);
   }
 
   private readonly onResize = (): void => this.world.resize();
+
+  private readonly onKey = (event: KeyboardEvent): void => {
+    if (event.key !== 'z' && event.key !== 'Z') return;
+    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.isContentEditable || target instanceof HTMLInputElement) return;
+    this.toggleZones();
+  };
+
+  /**
+   * The zone overlay. Colours are rebuilt once here rather than every frame;
+   * the pads themselves are rebuilt by the next `sync`, which keeps the view
+   * from having to hold on to a copy of the simulation's counts.
+   */
+  toggleZones(): boolean {
+    const on = this.zones.toggle();
+    this.buildings.setZoneOverlay(on);
+    return on;
+  }
 
   /** Reconciles the scene toward `state`. Cheap when nothing has changed. */
   sync(state: Readonly<GameState>): void {
@@ -50,6 +73,7 @@ export class View {
       this.ground.sync(state.districts, this.elapsed, annexed);
     }
     this.buildings.sync(state, this.elapsed);
+    this.zones.sync(state);
   }
 
   /** Advances animations and draws one frame. */
@@ -69,6 +93,7 @@ export class View {
 
   dispose(): void {
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('keydown', this.onKey);
     this.rig.dispose();
     this.world.dispose();
   }

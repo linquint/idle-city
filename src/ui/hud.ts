@@ -7,15 +7,16 @@ import {
   canBuildHome,
   canBuildShop,
   canRezone,
+  homeCapacity,
   homeCost,
   income,
+  industryCapacity,
   nextTier,
   occupancy,
-  plotCapacity,
-  plotsUsed,
   residents,
   rezoneBlocker,
   rezoneCost,
+  shopCapacity,
   shopCost,
   tierOf,
 } from '../sim/economy';
@@ -42,6 +43,9 @@ export class Hud {
     cash: el('cash'),
     rate: el('rate'),
     residents: el('residents'),
+    plotsResidential: el('plots-r'),
+    plotsCommercial: el('plots-c'),
+    plotsIndustrial: el('plots-i'),
     plots: el('plots'),
     districts: el('districts'),
     zoneName: el('zone-name'),
@@ -128,7 +132,22 @@ export class Hud {
     n.cash.textContent = fmt(s.cash);
     n.rate.textContent = fmt(income(s));
     n.residents.textContent = fmtInt(residents(s));
-    n.plots.textContent = `${fmtInt(plotsUsed(s))} / ${fmtInt(plotCapacity(s))}`;
+    // One number per zone rather than one city-wide total: each building type is
+    // now capped by its own zone's plot count, so a single total would hide the
+    // cap that is actually about to bite.
+    const homes = homeCapacity(s);
+    const shops = shopCapacity(s);
+    const industry = industryCapacity(s);
+    n.plotsResidential.textContent = `${fmtInt(s.homes)}/${fmtInt(homes)}`;
+    n.plotsCommercial.textContent = `${fmtInt(s.shops)}/${fmtInt(shops)}`;
+    // Nothing builds on industrial land yet; the zone is shown so the plan the
+    // Z overlay draws matches the ledger.
+    n.plotsIndustrial.textContent = `0/${fmtInt(industry)}`;
+    n.plots.setAttribute(
+      'aria-label',
+      `Plots: residential ${s.homes} of ${homes}, ` +
+        `commercial ${s.shops} of ${shops}, industrial 0 of ${industry}`,
+    );
     n.districts.textContent = `${s.districts} / ${MAX_DISTRICTS}`;
 
     const tier = tierOf(s);

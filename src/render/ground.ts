@@ -2,8 +2,7 @@ import * as THREE from 'three';
 import { CELL } from '../sim/config';
 import {
   DISTRICT_WIDTH,
-  isRoadCol,
-  isRoadRow,
+  isRoad,
   worldX,
   worldZ,
   type CityLayout,
@@ -199,8 +198,12 @@ export class Ground {
     for (const cell of district.roads) {
       const x = worldX(cell.x);
       const z = worldZ(cell.z);
-      const alongX = isRoadRow(cell.z);
-      const alongZ = isRoadCol(cell.x);
+      // Spacing is irregular, so orientation cannot come from arithmetic on the
+      // cell's own coordinates any more — it comes from what the neighbours
+      // are. Both true is a junction (including a T where a street dead-ends on
+      // a district boundary); one true is a straight run.
+      const alongX = isRoad(cell.x - 1, cell.z) || isRoad(cell.x + 1, cell.z);
+      const alongZ = isRoad(cell.x, cell.z - 1) || isRoad(cell.x, cell.z + 1);
 
       // The carriageway is a touch wider than ROAD_W so its edge tucks under
       // the kerb instead of sitting exactly coplanar with it.

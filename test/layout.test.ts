@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ZONE } from '../src/sim/citygen';
 import { CELL, DISTRICT_SPAN, MAX_DISTRICTS } from '../src/sim/config';
 import {
   CityLayout,
@@ -6,11 +7,13 @@ import {
   cityRadius,
   DISTRICT_WIDTH,
   districtCoord,
+  INDUSTRIAL_PER_DISTRICT,
   isRoad,
   PLOTS_PER_DISTRICT,
   RESIDENTIAL_PER_DISTRICT,
   worldX,
   worldZ,
+  zoneAt,
 } from '../src/sim/layout';
 
 const key = (c: { x: number; z: number }): string => `${c.x},${c.z}`;
@@ -71,10 +74,58 @@ describe('land tiles', () => {
   });
 });
 
+describe('streets', () => {
+  it('joins up across district boundaries', () => {
+    // Each district's line 0 is always a road and its far edge is the *next*
+    // district's line 0, so a boundary is one street wide rather than two and
+    // the grid still connects however irregular the interiors are.
+    for (let d = -2; d <= 2; d++) {
+      for (let i = 0; i < DISTRICT_SPAN * 3; i++) {
+        expect(isRoad(d * DISTRICT_SPAN, i)).toBe(true);
+        expect(isRoad(i, d * DISTRICT_SPAN)).toBe(true);
+      }
+    }
+  });
+
+  it('never leaves a plot more than a step from a street', () => {
+    // A gap above the maximum would bury plots in the middle of a super-block.
+    const reach = Math.floor((7 - 1) / 2);
+    for (let z = -DISTRICT_SPAN; z < DISTRICT_SPAN * 2; z++) {
+      for (let x = -DISTRICT_SPAN; x < DISTRICT_SPAN * 2; x++) {
+        if (isRoad(x, z)) continue;
+        let near = false;
+        for (let d = 1; d <= reach && !near; d++) {
+          near = isRoad(x - d, z) || isRoad(x + d, z) || isRoad(x, z - d) || isRoad(x, z + d);
+        }
+        expect(near).toBe(true);
+      }
+    }
+  });
+
+  it('agrees with the zone map about what is a road', () => {
+    for (let z = -DISTRICT_SPAN; z < DISTRICT_SPAN * 2; z++) {
+      for (let x = -DISTRICT_SPAN; x < DISTRICT_SPAN * 2; x++) {
+        expect(isRoad(x, z)).toBe(zoneAt(x, z) === ZONE.road);
+      }
+    }
+  });
+});
+
 describe('plot book', () => {
   it('splits every district into the same plot counts', () => {
-    expect(RESIDENTIAL_PER_DISTRICT + COMMERCIAL_PER_DISTRICT).toBe(PLOTS_PER_DISTRICT);
+    // Streets are irregular now, so this is not free: the generator rejection-
+    // samples until a district carves out exactly PLOTS_PER_DISTRICT plots.
+    // Without it the economy's per-district capacity constants would be fiction.
+    expect(RESIDENTIAL_PER_DISTRICT + COMMERCIAL_PER_DISTRICT + INDUSTRIAL_PER_DISTRICT).toBe(
+      PLOTS_PER_DISTRICT,
+    );
     expect(PLOTS_PER_DISTRICT).toBeLessThan(DISTRICT_SPAN * DISTRICT_SPAN);
+
+    const layout = new CityLayout().ensure(MAX_DISTRICTS);
+    for (const district of layout.districts) {
+      const plots = DISTRICT_SPAN * DISTRICT_SPAN - district.roads.length;
+      expect(plots).toBe(PLOTS_PER_DISTRICT);
+    }
   });
 
   it('never places a building on a street', () => {
@@ -87,6 +138,26 @@ describe('plot book', () => {
       const cell = layout.shopCell(i);
       expect(isRoad(cell.x, cell.z)).toBe(false);
     }
+    for (let i = 0; i < INDUSTRIAL_PER_DISTRICT * 6; i++) {
+      const cell = layout.industryCell(i);
+      expect(isRoad(cell.x, cell.z)).toBe(false);
+    }
+  });
+
+  it('puts every building on a plot zoned for it', () => {
+    const layout = new CityLayout().ensure(6);
+    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 6; i++) {
+      const cell = layout.homeCell(i);
+      expect(zoneAt(cell.x, cell.z)).toBe(ZONE.residential);
+    }
+    for (let i = 0; i < COMMERCIAL_PER_DISTRICT * 6; i++) {
+      const cell = layout.shopCell(i);
+      expect(zoneAt(cell.x, cell.z)).toBe(ZONE.commercial);
+    }
+    for (let i = 0; i < INDUSTRIAL_PER_DISTRICT * 6; i++) {
+      const cell = layout.industryCell(i);
+      expect(zoneAt(cell.x, cell.z)).toBe(ZONE.industrial);
+    }
   });
 
   it('gives every plot in the city a distinct cell', () => {
@@ -94,6 +165,7 @@ describe('plot book', () => {
     const seen = new Set<string>();
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 9; i++) seen.add(key(layout.homeCell(i)));
     for (let i = 0; i < COMMERCIAL_PER_DISTRICT * 9; i++) seen.add(key(layout.shopCell(i)));
+    for (let i = 0; i < INDUSTRIAL_PER_DISTRICT * 9; i++) seen.add(key(layout.industryCell(i)));
     expect(seen.size).toBe(PLOTS_PER_DISTRICT * 9);
   });
 
@@ -107,6 +179,9 @@ describe('plot book', () => {
     }
     for (let i = 0; i < COMMERCIAL_PER_DISTRICT; i++) {
       expect(large.shopCell(i)).toEqual(small.shopCell(i));
+    }
+    for (let i = 0; i < INDUSTRIAL_PER_DISTRICT; i++) {
+      expect(large.industryCell(i)).toEqual(small.industryCell(i));
     }
   });
 

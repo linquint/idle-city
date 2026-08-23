@@ -13,11 +13,45 @@ export const CELL = 4;
 /** Plots per side of a district. A district is the unit of expansion. */
 export const DISTRICT_SPAN = 12;
 
-/** A road runs along every Nth global grid line, so streets meet across districts. */
-export const ROAD_BLOCK = 4;
+/**
+ * Streets are not a fixed grid. Each axis is walked in seeded steps inside this
+ * range, so blocks come out anywhere from 2x2 to 6x6. A gap of 2 would leave
+ * single-plot blocks, which read as a bug rather than as a lane.
+ */
+export const ROAD_GAP_MIN = 3;
+export const ROAD_GAP_MAX = 7;
 
-/** Share of a district's buildable plots zoned for commerce (the high street). */
-export const COMMERCE_SHARE = 0.2;
+/**
+ * Buildable plots every district must end up with.
+ *
+ * Irregular spacing means seed A and seed B carve out different amounts of
+ * land, and `homeCapacity`/`shopCapacity` multiply a single per-district
+ * constant by the district count — so districts that disagree would either
+ * strand plots or hand out plots that do not exist. Generation rejection-samples
+ * until it hits this number exactly.
+ *
+ * Measured, not guessed. Over 1000 seeds the raw (pre-sampling) count takes
+ * five values — 72, 80, 81, 90, 100 — with a median and mode of 90 (51.3%),
+ * mean 89.66, stddev 6.71. 90 is therefore both the empirical median and the
+ * cheapest target to sample for. See tools/citygen.calibrate.mjs.
+ */
+export const TARGET_PLOTS = 90;
+
+/**
+ * Zoning budget, as fractions of a district's buildable plots.
+ *
+ * These are not a tidy 50/30/20 and must not be "cleaned up" into one. They
+ * solve the tier-0 job/worker equilibrium — 14 residents per housing plot, 8
+ * jobs per commercial plot, 20 per industrial plot — so that jobs match
+ * workers: 14R = 8C + 20I with R + C + I = 1, at I = 0.21. Rounding them to
+ * 0.50/0.30/0.20 leaves 7.0 workers chasing 6.4 jobs and breaks the demand loop
+ * the moment industry is wired into the economy.
+ */
+export const ZONE_SHARE = {
+  residential: 0.48,
+  commercial: 0.31,
+  industrial: 0.21,
+} as const;
 
 /** Rings of districts around the centre: 7x7 grid of districts. */
 export const MAX_DISTRICTS = 49;

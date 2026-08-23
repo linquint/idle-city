@@ -1,5 +1,6 @@
-import { mixSeed, rng, shuffle } from '../core/rng';
-import { CELL, COMMERCE_SHARE, DISTRICT_SPAN, ROAD_BLOCK, SEED } from './config';
+import { mixSeed } from '../core/rng';
+import { generateDistrict, zoneBudget, ZONE, type DistrictLayout, type Zone } from './citygen';
+import { CELL, DISTRICT_SPAN, SEED, TARGET_PLOTS } from './config';
 
 export interface Coord {
   /** Global grid column. Districts tile this space, so it goes negative. */
@@ -20,13 +21,48 @@ export interface District {
 
 const mod = (a: number, n: number): number => ((a % n) + n) % n;
 
-/** A constant column: the street here runs north-south. */
-export const isRoadCol = (x: number): boolean => mod(x, ROAD_BLOCK) === 0;
-/** A constant row: the street here runs east-west. */
-export const isRoadRow = (z: number): boolean => mod(z, ROAD_BLOCK) === 0;
+/**
+ * Every district's street plan, keyed by district-space coordinate.
+ *
+ * Keying on the *coordinate* rather than the annexation index is what lets
+ * `isRoad` answer for land nobody has bought yet — the renderer needs the
+ * neighbouring district's streets to tell a T-junction from a straight run at
+ * a boundary, and a district's layout must not depend on when it was annexed.
+ */
+const layouts = new Map<string, DistrictLayout>();
 
-/** Streets run along every ROAD_BLOCKth *global* line, so they join across districts. */
-export const isRoad = (x: number, z: number): boolean => isRoadCol(x) || isRoadRow(z);
+export function districtLayoutAt(dx: number, dz: number): DistrictLayout {
+  const key = `${dx},${dz}`;
+  let layout = layouts.get(key);
+  if (!layout) {
+    layout = generateDistrict(mixSeed(mixSeed(SEED, dx * 2 + 1), dz * 2 + 1));
+    layouts.set(key, layout);
+  }
+  return layout;
+}
+
+/**
+ * Streets are a lookup against two per-district masks, not arithmetic: spacing
+ * is irregular now, so there is no modulus that answers this.
+ *
+ * Local line 0 is always a road and local line DISTRICT_SPAN is the *next*
+ * district's line 0. Sharing that boundary line rather than giving every
+ * district its own perimeter keeps district edges a single-width street, and is
+ * what makes streets still meet across districts.
+ */
+export function isRoad(x: number, z: number): boolean {
+  const layout = districtLayoutAt(Math.floor(x / DISTRICT_SPAN), Math.floor(z / DISTRICT_SPAN));
+  return (
+    layout.rowRoad[mod(z, DISTRICT_SPAN)] === 1 || layout.colRoad[mod(x, DISTRICT_SPAN)] === 1
+  );
+}
+
+/** Zoning of a global cell. Roads report ZONE.road. */
+export function zoneAt(x: number, z: number): Zone {
+  const layout = districtLayoutAt(Math.floor(x / DISTRICT_SPAN), Math.floor(z / DISTRICT_SPAN));
+  const local = mod(z, DISTRICT_SPAN) * DISTRICT_SPAN + mod(x, DISTRICT_SPAN);
+  return layout.zone[local] as Zone;
+}
 
 /** Grid cell -> world-space centre, with district (0, 0) straddling the origin. */
 const OFFSET = (DISTRICT_SPAN - 1) / 2;
@@ -36,21 +72,17 @@ export const worldZ = (z: number): number => (z - OFFSET) * CELL;
 /** Side length of one district in world units. */
 export const DISTRICT_WIDTH = DISTRICT_SPAN * CELL;
 
-function countPlots(): number {
-  let n = 0;
-  for (let z = 0; z < DISTRICT_SPAN; z++)
-    for (let x = 0; x < DISTRICT_SPAN; x++) if (!isRoad(x, z)) n++;
-  return n;
-}
-
 /**
- * A district's plot count is a constant: DISTRICT_SPAN is a multiple of
- * ROAD_BLOCK, so every district carves out its streets in exactly the same
- * places. That lets the economy reason about capacity without building layouts.
+ * A district's plot count is a constant even though its streets are not: the
+ * generator rejection-samples until it carves out exactly TARGET_PLOTS. That is
+ * what lets the economy reason about capacity without building layouts.
  */
-export const PLOTS_PER_DISTRICT = countPlots();
-export const COMMERCIAL_PER_DISTRICT = Math.max(1, Math.round(PLOTS_PER_DISTRICT * COMMERCE_SHARE));
-export const RESIDENTIAL_PER_DISTRICT = PLOTS_PER_DISTRICT - COMMERCIAL_PER_DISTRICT;
+export const PLOTS_PER_DISTRICT = TARGET_PLOTS;
+
+const BUDGET = zoneBudget(PLOTS_PER_DISTRICT);
+export const RESIDENTIAL_PER_DISTRICT = BUDGET.residential;
+export const COMMERCIAL_PER_DISTRICT = BUDGET.commercial;
+export const INDUSTRIAL_PER_DISTRICT = BUDGET.industrial;
 
 /**
  * The order in which a ring of districts gets annexed.
@@ -118,50 +150,39 @@ export function cityRadius(districts: number): number {
 interface DistrictPlots {
   readonly residential: Coord[];
   readonly commercial: Coord[];
+  readonly industrial: Coord[];
   readonly roads: Coord[];
 }
 
 /**
- * Zones one district. Commerce is not scattered: a seeded anchor picks a high
- * street and the nearest plots become the commercial quarter, so every district
- * grows a recognisable centre instead of a uniform sprawl.
+ * Lifts one district's generated layout into global coordinates. The generator
+ * has already zoned block-wise and shuffled the build order inside each zone,
+ * so there is nothing to decide here.
  */
-function zoneDistrict(index: number): DistrictPlots {
+function placeDistrict(index: number): DistrictPlots {
   const c = districtCoord(index);
   const ox = c.x * DISTRICT_SPAN;
   const oz = c.z * DISTRICT_SPAN;
+  const layout = districtLayoutAt(c.x, c.z);
 
-  const plots: Coord[] = [];
+  const toGlobal = (local: number): Coord => ({
+    x: ox + (local % DISTRICT_SPAN),
+    z: oz + Math.floor(local / DISTRICT_SPAN),
+  });
+
   const roads: Coord[] = [];
   for (let lz = 0; lz < DISTRICT_SPAN; lz++) {
     for (let lx = 0; lx < DISTRICT_SPAN; lx++) {
-      const cell = { x: ox + lx, z: oz + lz };
-      (isRoad(cell.x, cell.z) ? roads : plots).push(cell);
+      if (layout.zone[lz * DISTRICT_SPAN + lx] === ZONE.road) roads.push({ x: ox + lx, z: oz + lz });
     }
   }
 
-  const random = rng(mixSeed(SEED, index + 1));
-  const anchorX = ox + Math.floor(random() * DISTRICT_SPAN);
-  const anchorZ = oz + Math.floor(random() * DISTRICT_SPAN);
-
-  // Sorting by squared distance keeps this integer-exact; the index tiebreak
-  // keeps it deterministic when several plots sit the same distance away.
-  const ranked = plots
-    .map((cell, i) => {
-      const dx = cell.x - anchorX;
-      const dz = cell.z - anchorZ;
-      return { cell, i, d: dx * dx + dz * dz };
-    })
-    .sort((a, b) => a.d - b.d || a.i - b.i);
-
-  const commercial = ranked.slice(0, COMMERCIAL_PER_DISTRICT).map((r) => r.cell);
-  const residential = ranked.slice(COMMERCIAL_PER_DISTRICT).map((r) => r.cell);
-
-  // Build order is shuffled so a district fills in unevenly, like a real one.
-  shuffle(residential, rng(mixSeed(SEED, index + 977)));
-  shuffle(commercial, rng(mixSeed(SEED, index + 4013)));
-
-  return { residential, commercial, roads };
+  return {
+    residential: layout.residential.map(toGlobal),
+    commercial: layout.commercial.map(toGlobal),
+    industrial: layout.industrial.map(toGlobal),
+    roads,
+  };
 }
 
 /**
@@ -172,14 +193,16 @@ export class CityLayout {
   private materialised = 0;
   private readonly _residential: Coord[] = [];
   private readonly _commercial: Coord[] = [];
+  private readonly _industrial: Coord[] = [];
   private readonly _districts: District[] = [];
 
   /** Materialises districts up to `count`. Idempotent and cheap to over-call. */
   ensure(count: number): this {
     for (let i = this.materialised; i < count; i++) {
-      const { residential, commercial, roads } = zoneDistrict(i);
+      const { residential, commercial, industrial, roads } = placeDistrict(i);
       this._residential.push(...residential);
       this._commercial.push(...commercial);
+      this._industrial.push(...industrial);
       const c = districtCoord(i);
       this._districts.push({
         index: i,
@@ -208,5 +231,21 @@ export class CityLayout {
   /** Plot for the i-th shop ever opened. */
   shopCell(i: number): Coord {
     return this._commercial[i] as Coord;
+  }
+
+  /**
+   * Plot for the i-th industrial building. Nothing builds these yet — there is
+   * no industrial building type — but the land is zoned and ordered, so
+   * placement is ready the moment the economy grows one.
+   */
+  industryCell(i: number): Coord {
+    return this._industrial[i] as Coord;
+  }
+
+  /** Every plot of one zone, in build order. Used by the zone overlay. */
+  zoneCells(zone: Zone): readonly Coord[] {
+    if (zone === ZONE.commercial) return this._commercial;
+    if (zone === ZONE.industrial) return this._industrial;
+    return this._residential;
   }
 }
