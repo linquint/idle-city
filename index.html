@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B111B">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230B111B'/%3E%3Crect x='2' y='7' width='3' height='7' fill='%23C9D1DA'/%3E%3Crect x='6.5' y='3' width='3' height='11' fill='%23C9D1DA'/%3E%3Crect x='11' y='9' width='3' height='5' fill='%23F0A64B'/%3E%3C/svg%3E">
+<meta name="description" content="An idle city builder where every purchase is a building and the world expands district by district.">
+<title>District — an idle city</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<header class="masthead">
+  <h1>District</h1>
+  <p>every purchase is a building</p>
+</header>
+
+<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan</p>
+
+<section class="hud ledger" aria-label="City ledger">
+  <div class="row"><span class="k">Treasury</span><span class="v cash" id="cash">0</span></div>
+  <div class="row"><span class="k">Per second</span><span class="v rate" id="rate">0</span></div>
+  <div class="row"><span class="k">Residents</span><span class="v" id="residents">0</span></div>
+  <div class="row"><span class="k">Plots</span><span class="v" id="plots">0</span></div>
+  <div class="row"><span class="k">Districts</span><span class="v" id="districts">1</span></div>
+</section>
+
+<section class="hud controls" aria-label="City controls">
+  <p class="zone">Zoning — <b id="zone-name">detached housing</b></p>
+
+  <div class="meter" role="img" aria-label="Land developed" id="occupancy">
+    <span class="meter-fill" id="occupancy-fill"></span>
+    <span class="meter-mark" id="occupancy-mark"></span>
+  </div>
+
+  <button id="build-home" type="button">
+    <span id="build-home-label">Build home</span><span class="cost" id="build-home-cost">15</span>
+  </button>
+  <button id="build-shop" type="button">
+    <span>Open shop</span><span class="cost" id="build-shop-cost">200</span>
+  </button>
+  <button id="rezone" class="rezone" type="button">
+    <span id="rezone-label">Rezone to apartments</span><span class="cost" id="rezone-cost">3.0K</span>
+  </button>
+  <button id="annex" class="annex" type="button">
+    <span id="annex-label">Annex district</span><span class="cost" id="annex-cost">60.0K</span>
+  </button>
+
+  <div class="split">
+    <button class="ghost" id="auto" type="button" aria-pressed="false">Auto-develop · off</button>
+    <button class="ghost" id="reset" type="button">Clear city</button>
+  </div>
+</section>
+
+<div class="scrim" id="welcome" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+    <h2 id="welcome-title">While you were away</h2>
+    <p class="sheet-lede" id="welcome-away">6h 12m</p>
+    <dl class="sheet-rows" id="welcome-rows"></dl>
+    <button class="primary" id="welcome-close" type="button">Back to work</button>
+  </div>
+</div>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
