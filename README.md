@@ -75,9 +75,15 @@ The game is a static bundle — no server, no API, saves live in `localStorage` 
 so GitHub Pages serves it as-is. `.github/workflows/deploy.yml` builds `dist/`
 and publishes it on every push to `master`.
 
-Turn it on once, under **Settings → Pages → Build and deployment**, by setting
-the source to **GitHub Actions**. The site then lands at
-`https://<owner>.github.io/idle-city/`.
+The workflow sets the Pages source to **GitHub Actions** itself, so the site
+lands at `https://<owner>.github.io/idle-city/` with nothing to click. That
+matters beyond convenience: while the source is still **Deploy from a branch**,
+GitHub's legacy builder runs on the same push and publishes the repository root
+— the unbuilt `index.html`, which loads no bundle and 404s on `/src/main.ts`.
+Whichever finishes last wins, and it is usually the legacy one.
+
+If the workflow logs a warning that it could not set the source, set it by hand
+under **Settings → Pages → Build and deployment** and re-run the workflow.
 
 `base: './'` in `vite.config.ts` keeps every asset path relative, so the bundle
 works at that subpath, at a custom domain, or opened from disk without a
