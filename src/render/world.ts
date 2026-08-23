@@ -118,8 +118,15 @@ export class World {
     if (Math.abs(distance - this.fogDistance) < 0.5) return;
     this.fogDistance = distance;
     const fog = this.haze;
-    fog.near = distance * 0.8;
-    fog.far = distance + this.radius * 2.6 + 80;
+    // Pushed out from `distance * 0.8` and `radius * 2.6 + 80`. Those depths
+    // were set against a world that ended at the city's edge, where hazing the
+    // near half of the frame cost nothing because there was nothing behind it.
+    // With grassland running to the horizon the same numbers put a milky band
+    // across the middle of every shot: the city itself was inside the fog.
+    fog.near = distance * 0.95;
+    // Never past the far plane, or the ground is clipped before it has finished
+    // fading and the horizon becomes an edge instead of a haze.
+    fog.far = Math.min(this.camera.far * 0.98, distance + this.radius * 4 + 400);
   }
 
   /**

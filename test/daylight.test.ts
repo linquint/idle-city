@@ -5,6 +5,7 @@ import {
   dayPhase,
   DUSK_PHASE,
   MAX_SUN_ELEVATION,
+  RESTING_PHASE,
   MIN_SUN_ELEVATION,
   sampleSky,
   sunAzimuth,
@@ -22,8 +23,11 @@ describe('day phase', () => {
     }
   });
 
-  it('opens the game at the dusk keyframe', () => {
-    expect(dayPhase(0)).toBe(DUSK_PHASE);
+  it('opens the game at the resting keyframe, which is midday', () => {
+    expect(dayPhase(0)).toBe(RESTING_PHASE);
+    expect(RESTING_PHASE).toBe(0);
+    // Midday exactly: the sun is at the top of its arc at phase 0.
+    expect(sunElevation(RESTING_PHASE)).toBeCloseTo(MAX_SUN_ELEVATION, 12);
   });
 
   it('stays in [0, 1) and wraps cleanly at the day boundary', () => {
@@ -47,8 +51,8 @@ describe('day phase', () => {
   it('survives a nonsense clock rather than running the sun backwards', () => {
     expect(dayPhase(-30)).toBeGreaterThanOrEqual(0);
     expect(dayPhase(-30)).toBeLessThan(1);
-    expect(dayPhase(Number.NaN)).toBe(DUSK_PHASE);
-    expect(dayPhase(Number.POSITIVE_INFINITY)).toBe(DUSK_PHASE);
+    expect(dayPhase(Number.NaN)).toBe(RESTING_PHASE);
+    expect(dayPhase(Number.POSITIVE_INFINITY)).toBe(RESTING_PHASE);
   });
 });
 
@@ -116,20 +120,46 @@ describe('the sky reading', () => {
   });
 
   it('is darkest around midnight and brightest at midday', () => {
-    const midnight = { ...sampleSky(0.31, reading) };
-    const midday = { ...sampleSky(0.81, reading) };
+    // The table was rotated so phase 0 is midday, which moved midnight from
+    // 0.31 to 0.50 — half a day from the frame the game opens on, as it should
+    // be. Both are keyframes rather than interpolated points.
+    const midnight = { ...sampleSky(0.50, reading) };
+    const midday = { ...sampleSky(RESTING_PHASE, reading) };
     expect(midnight.night).toBe(1);
     expect(midday.night).toBe(0);
     expect(midday.keyIntensity).toBeGreaterThan(midnight.keyIntensity * 4);
     expect(midday.elevation).toBeGreaterThan(midnight.elevation);
   });
 
-  /** The whole reason phase 0 is dusk: the game still opens looking like itself. */
-  it('holds the shipped dusk palette at phase 0', () => {
+  /**
+   * The sodium hour survived the lift. It is the best-looking moment in the
+   * game and the one thing in the table that was already right; what changed is
+   * that it is no longer the *only* frame anybody sees, so it moved off phase 0
+   * rather than being retuned.
+   */
+  it('keeps the sodium dusk exactly where it was, at its new phase', () => {
     const dusk = sampleSky(DUSK_PHASE, reading);
+    expect(DUSK_PHASE).toBe(0.19);
     expect(dusk.keyColor).toBe(0xffce96);
-    expect(dusk.keyIntensity).toBeCloseTo(2.1, 12);
-    expect(dusk.skyColor).toBe(0x5e7fa8);
-    expect(dusk.background).toBe(0x0b111b);
+    // Warm, low and still the warmest key in the table below midday.
+    expect(dusk.night).toBeGreaterThan(0.4);
+    expect(dusk.elevation).toBeLessThan(MAX_SUN_ELEVATION / 2);
+    expect(dusk.elevation).toBeGreaterThan(MIN_SUN_ELEVATION * 2);
+  });
+
+  /**
+   * The lift, stated as a test. The old table's brightest background was
+   * `0x46618a` — darker than most skies are at dusk — which is why the whole
+   * city read as permanently overcast whatever the clock said.
+   */
+  it('reaches a daylight sky rather than a merely-less-dark one', () => {
+    const midday = sampleSky(RESTING_PHASE, reading);
+    const channel = (hex: number, shift: number): number => (hex >> shift) & 0xff;
+    for (const shift of [16, 8, 0]) {
+      expect(channel(midday.background, shift)).toBeGreaterThan(0x8f);
+      expect(channel(midday.skyColor, shift)).toBeGreaterThan(0xb0);
+    }
+    expect(midday.hemiIntensity).toBeGreaterThan(1.5);
+    expect(midday.night).toBe(0);
   });
 });

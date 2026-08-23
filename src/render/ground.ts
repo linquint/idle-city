@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { CELL } from '../sim/config';
+import { hash01, mixSeed } from '../core/rng';
+import { CELL, MAX_DISTRICTS, SEED } from '../sim/config';
 import {
   DISTRICT_WIDTH,
   isRoad,
@@ -8,6 +9,7 @@ import {
   type CityLayout,
   type District,
 } from '../sim/layout';
+import { cityRadius } from '../sim/layout';
 import { GrowableInstancedMesh } from './growable';
 import { PALETTE } from './palette';
 
@@ -46,6 +48,108 @@ interface Range {
   birth: number;
 }
 
+/**
+ * How far the grassland reaches from the origin, in world units.
+ *
+ * The old build had no ground beyond the districts at all, on the argument that
+ * an infinite plane sits inside the near fog distance wherever the camera is
+ * and reads as a bright wedge across half the frame. That was true of a plane
+ * lit for a permanently dusk sky. It stops being true once the plane and the
+ * fog are the same colour family and the fog has somewhere bright to fade into,
+ * which is what the lifted keyframes in `daylight.ts` are for — the two are one
+ * change and must be tuned together.
+ *
+ * Sized against the largest city rather than the current one, so it is built
+ * once and never resized: the camera's far plane is `radius * 8 + 600`, and at
+ * MAX_DISTRICTS this comfortably outruns it in every direction.
+ */
+const GRASS_REACH = cityRadius(MAX_DISTRICTS) * 8 + 1_200;
+
+/**
+ * Cells across the plane. 160 puts a vertex every ~24 world units, which is
+ * about half a district — coarse enough to stay one cheap mesh and fine enough
+ * that a sandy patch reads as a patch rather than as a quadrant.
+ */
+const GRASS_SEGMENTS = 160;
+
+/** How wide a noise feature is, in world units. Two districts across. */
+const GRASS_NOISE_SCALE = 104;
+
+/** Seeded value noise: one lattice, smoothstepped, in [0, 1]. */
+function valueNoise(x: number, z: number): number {
+  const xi = Math.floor(x);
+  const zi = Math.floor(z);
+  const fx = x - xi;
+  const fz = z - zi;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sz = fz * fz * (3 - 2 * fz);
+  const at = (ix: number, iz: number): number => hash01(mixSeed(SEED, ix * 73_856_093 ^ iz * 19_349_663));
+  const a = at(xi, zi);
+  const b = at(xi + 1, zi);
+  const c = at(xi, zi + 1);
+  const d = at(xi + 1, zi + 1);
+  return (a + (b - a) * sx) * (1 - sz) + (c + (d - c) * sx) * sz;
+}
+
+/**
+ * The land the city was built on: one plane, one draw call, coloured per vertex.
+ *
+ * Two octaves of seeded value noise pick between three colours — two greens and
+ * a dry sand — so the ground reads as grassland with bare patches rather than as
+ * a billiard table. Vertex colours rather than a texture because the whole world
+ * is a pure function of SEED already, and a texture would be the only asset in
+ * the project.
+ *
+ * It receives shadows, and only inside the shadow frustum: three's shadow lookup
+ * reports "lit" for anything outside the light's camera, so the bounded span
+ * `focusShadows` keeps is exactly the span that darkens. That is what stops a
+ * plane this size from either crawling or swallowing the map.
+ */
+function grassland(scene: THREE.Scene): void {
+  const geometry = new THREE.PlaneGeometry(
+    GRASS_REACH * 2,
+    GRASS_REACH * 2,
+    GRASS_SEGMENTS,
+    GRASS_SEGMENTS,
+  );
+  geometry.rotateX(-Math.PI / 2);
+
+  const position = geometry.getAttribute('position');
+  const colors = new Float32Array(position.count * 3);
+  const grass = new THREE.Color(PALETTE.grass);
+  const deep = new THREE.Color(PALETTE.grassDeep);
+  const sand = new THREE.Color(PALETTE.sand);
+  const mixed = new THREE.Color();
+
+  for (let i = 0; i < position.count; i++) {
+    const x = position.getX(i) / GRASS_NOISE_SCALE;
+    const z = position.getZ(i) / GRASS_NOISE_SCALE;
+    // Two octaves: the coarse one decides where the dry ground is, the fine one
+    // breaks up its edge so a patch has a ragged border rather than a contour.
+    const broad = valueNoise(x, z);
+    const fine = valueNoise(x * 3.1 + 11.3, z * 3.1 - 7.7);
+    const dryness = Math.max(0, Math.min(1, (broad * 0.75 + fine * 0.25 - 0.46) * 3.4));
+    mixed.copy(deep).lerp(grass, Math.min(1, fine * 1.2)).lerp(sand, dryness);
+    colors[i * 3] = mixed.r;
+    colors[i * 3 + 1] = mixed.g;
+    colors[i * 3 + 2] = mixed.b;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshLambertMaterial({ vertexColors: true }),
+  );
+  // Just under the district tiles, whose top face sits at y = 0. A shared plane
+  // would z-fight with every district in the city; a hair below means the
+  // grassland is only ever visible on land nobody has bought.
+  mesh.position.y = -0.06;
+  mesh.receiveShadow = true;
+  // It is always under the camera, so a per-object frustum test can only cost.
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+}
+
 /** Land tiles and the street grid. Districts are appended, never rebuilt. */
 export class Ground {
   private readonly land: GrowableInstancedMesh;
@@ -55,16 +159,13 @@ export class Ground {
   private readonly dummy = new THREE.Object3D();
   private rising = false;
 
-  /**
-   * There is deliberately no ground beyond the districts. An infinite plane
-   * sits inside the near fog distance wherever the camera is, so it reads as a
-   * bright wedge across half the frame — and the void makes a better point:
-   * the world really is only as big as the land you have bought.
-   */
   constructor(
     scene: THREE.Scene,
     private readonly layout: CityLayout,
   ) {
+    // Built once, added to the scene, and never touched again: it has no
+    // per-district state to reconcile and nothing about it depends on the game.
+    grassland(scene);
     this.land = new GrowableInstancedMesh(
       scene,
       new THREE.BoxGeometry(DISTRICT_WIDTH, LAND_H, DISTRICT_WIDTH),

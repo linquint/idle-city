@@ -3,7 +3,7 @@ import type { GameState } from '../sim/state';
 import { Buildings } from './buildings';
 import { CameraRig } from './cameraRig';
 import { Cars } from './cars';
-import { createSkyReading, dayPhase, DUSK_PHASE, sampleSky } from './daylight';
+import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight';
 import { Fires } from './fires';
 import { Ground } from './ground';
 import { World } from './world';
@@ -54,8 +54,9 @@ export class View {
 
     this.rig = new CameraRig(this.world.camera, canvas, !reducedMotion);
     // A sun crossing the sky is motion, and a slow full-screen colour ramp is
-    // the kind of motion the preference exists for. Holding at DUSK_PHASE is
-    // not a fallback — it is the palette the game shipped with.
+    // the kind of motion the preference exists for. Holding at RESTING_PHASE is
+    // not a fallback — it is midday, which is the frame the world is designed
+    // to be looked at in.
     this.cycling = !reducedMotion;
 
     window.addEventListener('resize', this.onResize);
@@ -92,7 +93,7 @@ export class View {
     // position is a read over `state.homes`: it belongs here rather than on a
     // clock of the view's own, or it would reset on reload and stand still
     // while the player was away.
-    const sky = sampleSky(this.cycling ? dayPhase(state.elapsed) : DUSK_PHASE, this.sky);
+    const sky = sampleSky(this.cycling ? dayPhase(state.elapsed) : RESTING_PHASE, this.sky);
     this.world.setSky(sky);
     this.buildings.setNight(sky.night);
 

@@ -28,28 +28,40 @@ export const MIN_SUN_ELEVATION = deg(8);
 export const MAX_SUN_ELEVATION = deg(62);
 
 /**
- * Where the dusk keyframe sits in the *solar* day, measured from sunrise.
+ * Where phase 0 sits in the *solar* day, measured from sunrise.
  *
- * Phase 0 of the cycle is dusk rather than midnight, for two reasons: a fresh
- * save opens at `elapsed` 0 and should open on the city as it has always
- * looked, not on a black screen; and reduced motion holds the cycle at phase 0,
- * so phase 0 has to be the keyframe worth holding.
+ * Phase 0 is local noon. It used to be dusk, for two good reasons that are
+ * still good: a fresh save opens at `elapsed` 0 and should open on the city
+ * looking like itself, and reduced motion holds the cycle at phase 0, so phase
+ * 0 has to be the frame worth holding. What changed is the answer to "which
+ * frame is that". A city meant to be looked at in daylight should not open at
+ * the end of the day, and a player who has asked for reduced motion should not
+ * be the only one who never sees it lit.
  *
- * 0.44 rather than 0.5 because the sodium hour is *before* the sun touches the
- * horizon, not at it: it puts the dusk keyframe at 22.8 degrees of elevation,
- * with true sunset a tenth of a day later.
+ * 0.25 is a quarter of the way from sunrise to sunrise, which is noon exactly.
+ * The sodium dusk is still in the table — it is the best-looking moment in the
+ * game — it is simply no longer the only one anybody sees.
  */
-const DUSK_SOLAR_PHASE = 0.44;
+const NOON_SOLAR_PHASE = 0.25;
 
-/** Compass bearing of the sun at the dusk keyframe. Matches the old LIGHT_DIR. */
-const DUSK_AZIMUTH = 0.55;
+/**
+ * Compass bearing of the sun at phase 0.
+ *
+ * Chosen so the dusk keyframe still lights the city from where it always did:
+ * dusk moved from phase 0 to phase 0.19, and the bearing runs one full turn a
+ * day, so the noon bearing is the old dusk bearing wound back 0.19 of a turn.
+ */
+const NOON_AZIMUTH = 0.55 - TAU * 0.19;
 
-/** The phase reduced motion holds at. */
-export const DUSK_PHASE = 0;
+/** The phase reduced motion holds at, and the one a fresh save opens on. */
+export const RESTING_PHASE = 0;
+
+/** Where the sodium keyframe sits, now that phase 0 is noon. */
+export const DUSK_PHASE = 0.19;
 
 /** Time of day in [0, 1). Pure, and wraps cleanly for any finite `elapsed`. */
 export function dayPhase(elapsed: number): number {
-  if (!Number.isFinite(elapsed)) return DUSK_PHASE;
+  if (!Number.isFinite(elapsed)) return RESTING_PHASE;
   const phase = (elapsed % DAY_SECONDS) / DAY_SECONDS;
   // `%` keeps the sign of the dividend, so a negative clock would run the sun
   // backwards through a negative phase and index off the front of the keyframe
@@ -59,7 +71,7 @@ export function dayPhase(elapsed: number): number {
 
 /** Sun elevation in radians, never below `MIN_SUN_ELEVATION`. */
 export function sunElevation(phase: number): number {
-  const solar = phase + DUSK_SOLAR_PHASE;
+  const solar = phase + NOON_SOLAR_PHASE;
   return Math.max(MIN_SUN_ELEVATION, MAX_SUN_ELEVATION * Math.sin(TAU * solar));
 }
 
@@ -68,7 +80,7 @@ export function sunElevation(phase: number): number {
  * and sets on the opposite one with local noon a quarter turn between them.
  */
 export function sunAzimuth(phase: number): number {
-  return DUSK_AZIMUTH + TAU * phase;
+  return NOON_AZIMUTH + TAU * phase;
 }
 
 interface Keyframe {
@@ -88,22 +100,30 @@ interface Keyframe {
 /**
  * The palette, keyed to the sun.
  *
- * Phase 0 is the dusk the game already had — key `0xffce96` at 2.1 over a
- * `0x5e7fa8` hemisphere on an ink background — so the opening frame and the
- * reduced-motion hold are both the build this replaces, unchanged. Everything
- * else is a departure from that one anchor: nightfall drains the warmth out of
- * the key, midnight takes the whole scene down to a blue-black with a weak fill
- * standing in for skyglow, pre-dawn comes back cold before it comes back warm,
- * and midday is the only neutral in the table.
+ * Rotated so phase 0 is midday and lifted throughout. The old table was built
+ * around a single anchor — the dusk the game shipped with — and everything else
+ * was a departure from it, which is why the whole city read as permanently
+ * overcast: the brightest frame in the table had a background of `0x46618a`,
+ * darker than most skies are at dusk.
+ *
+ * The sodium dusk is kept exactly as it was, at 0.19. It is the best-looking
+ * moment in the game and nothing here touches it. What moved is everything
+ * around it: midday is a real midday now, the two shoulders either side of it
+ * are bright rather than merely less dark, and night is the only part of the
+ * cycle the old palette had roughly right.
+ *
+ * `background` is also the fog colour, which is what makes the grassland plane
+ * work at all — the ground has to fade into the same colour the sky is, or the
+ * horizon reads as a seam. The two are tuned together, never separately.
  */
 const KEYFRAMES: readonly Keyframe[] = [
-  { at: 0.00, key: 0xffce96, keyIntensity: 2.10, sky: 0x5e7fa8, ground: 0x0b111b, hemiIntensity: 1.15, background: 0x0b111b, night: 0.45 },
-  { at: 0.10, key: 0x8b8fbe, keyIntensity: 1.00, sky: 0x35476d, ground: 0x080d16, hemiIntensity: 0.86, background: 0x080d16, night: 0.88 },
-  { at: 0.31, key: 0x4a6494, keyIntensity: 0.38, sky: 0x1d2a45, ground: 0x05080f, hemiIntensity: 0.58, background: 0x05080f, night: 1.00 },
-  { at: 0.48, key: 0x8aa6dc, keyIntensity: 0.80, sky: 0x3b578a, ground: 0x0b1422, hemiIntensity: 1.02, background: 0x0e1828, night: 0.72 },
-  { at: 0.58, key: 0xffb37a, keyIntensity: 1.90, sky: 0x7ba5d2, ground: 0x1b2537, hemiIntensity: 1.20, background: 0x223146, night: 0.20 },
-  { at: 0.81, key: 0xfff2dd, keyIntensity: 2.55, sky: 0xa8ccf0, ground: 0x30405a, hemiIntensity: 1.45, background: 0x46618a, night: 0.00 },
-  { at: 0.92, key: 0xffdfae, keyIntensity: 2.35, sky: 0x8fb4dd, ground: 0x27364c, hemiIntensity: 1.30, background: 0x33496b, night: 0.10 },
+  { at: 0.00, key: 0xfff6e6, keyIntensity: 3.05, sky: 0xbcd9f7, ground: 0x6f7f5e, hemiIntensity: 1.95, background: 0x9cc4e8, night: 0.00 },
+  { at: 0.11, key: 0xffe9c4, keyIntensity: 2.80, sky: 0xa8c8ec, ground: 0x62735a, hemiIntensity: 1.75, background: 0x89b3dc, night: 0.06 },
+  { at: 0.19, key: 0xffce96, keyIntensity: 2.30, sky: 0x86a5cb, ground: 0x3b4a44, hemiIntensity: 1.40, background: 0x5f7ea6, night: 0.45 },
+  { at: 0.29, key: 0x8b8fbe, keyIntensity: 1.05, sky: 0x3f5477, ground: 0x141c26, hemiIntensity: 0.95, background: 0x1b2739, night: 0.88 },
+  { at: 0.50, key: 0x4a6494, keyIntensity: 0.40, sky: 0x22314f, ground: 0x080d15, hemiIntensity: 0.62, background: 0x0a1220, night: 1.00 },
+  { at: 0.67, key: 0x8aa6dc, keyIntensity: 0.95, sky: 0x47679d, ground: 0x1a2a2c, hemiIntensity: 1.15, background: 0x2b4364, night: 0.70 },
+  { at: 0.77, key: 0xffc79a, keyIntensity: 2.35, sky: 0x8fb9e4, ground: 0x4d5c4a, hemiIntensity: 1.60, background: 0x76a2ce, night: 0.16 },
 ];
 
 /** Channel-wise lerp on packed sRGB. Allocates nothing; returns a packed hex. */

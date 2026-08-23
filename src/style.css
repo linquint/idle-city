@@ -1,7 +1,10 @@
+/* Kept in step with PALETTE in src/render/palette.ts. The panel colours are a
+   shade lighter than the world behind them now that the world is daylit — a
+   near-black HUD over a blue sky reads as a hole punched in the scene. */
 :root {
-  --ink: #0b111b;
-  --panel: #131c2a;
-  --line: #25344b;
+  --ink: #111a26;
+  --panel: #16202e;
+  --line: #2b3a52;
   --concrete: #c9d1da;
   --sodium: #f0a64b;
   --signal: #63c6a8;
