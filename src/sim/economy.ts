@@ -4,8 +4,8 @@ import {
   ANNEX_MIN_OCCUPANCY,
   BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
-  CIVIC_GROWTH,
   CIVIC_RAMP_SECONDS,
+  CIVIC_SERVICES,
   ABANDON_SECONDS,
   ABANDON_SPREAD_SECONDS,
   DEMAND_SCALE,
@@ -46,6 +46,8 @@ import {
   PRICE_DISCOUNT_MAX,
   PRICE_SURCHARGE_MAX,
   RECOVER_SPREAD_SECONDS,
+  EDUCATION_SERVICES,
+  HAPPINESS_SERVICES,
   RECREATION_WEIGHT,
   RENT,
   SERVICES,
@@ -64,6 +66,7 @@ import {
   BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
+  UNIVERSITY_SITES_PER_DISTRICT,
 } from './layout.ts';
 import type { GameState, LevelCohort, ZoneKind } from './state.ts';
 
@@ -258,12 +261,18 @@ export const promotable = (s: GameState, kind: ZoneKind): number => {
 /**
  * Share of the city's residents within reach of education, in [0, 1].
  *
- * Same convention as the service coverages: an empty city reads as covered,
- * because coverage is the share of residents a service fails and it fails
- * nobody when there is nobody. Nothing supplies education yet, so a populated
- * city reads as covered by none of it.
+ * Schools and universities pooled, because a level's requirement is a statement
+ * about how educated the city is rather than about which building did it. Same
+ * convention as the service coverages, and the same denominator: the population
+ * the housing is built for, so it does not jump when a city empties out.
  */
-export const educationCoverage = (s: GameState): number => (population(s) <= 0 ? 1 : 0);
+export const educationCoverage = (s: GameState): number => {
+  const people = population(s);
+  if (people <= 0) return 1;
+  let reached = 0;
+  for (const service of EDUCATION_SERVICES) reached += covered(s, service);
+  return Math.min(1, reached / people);
+};
 
 /** Buildings a zone promotes per second, with every gate open. */
 export const promoteRate = (s: GameState, kind: ZoneKind): number =>
@@ -271,8 +280,10 @@ export const promoteRate = (s: GameState, kind: ZoneKind): number =>
 
 // ------------------------------------------------------------------ capacity
 
-/** Civic buildings, of every kind. */
-export const civicBuildings = (s: GameState): number => s.hospitals + s.police + s.fire;
+/** Civic buildings, of every kind — the three that gate happiness and the two
+ *  that gate levelling. */
+export const civicBuildings = (s: GameState): number =>
+  s.hospitals + s.police + s.fire + s.schools + s.universities;
 
 /**
  * Housing land. Civic buildings no longer come out of it: they stand on 2x2
@@ -298,9 +309,17 @@ export const parkCapacity = (s: GameState): number =>
 export const civicSiteCapacity = (s: GameState): number =>
   s.districts * CIVIC_SITES_PER_DISTRICT;
 
-/** Every plot the city can put something on, civic sites included. */
+/** 3x3 university sites the city owns. One a district, always. */
+export const universitySiteCapacity = (s: GameState): number =>
+  s.districts * UNIVERSITY_SITES_PER_DISTRICT;
+
+/** Every plot the city can put something on, every kind of site included. */
 export const plotCapacity = (s: GameState): number =>
-  homeCapacity(s) + shopCapacity(s) + industryCapacity(s) + civicSiteCapacity(s);
+  homeCapacity(s) +
+  shopCapacity(s) +
+  industryCapacity(s) +
+  civicSiteCapacity(s) +
+  universitySiteCapacity(s);
 
 /**
  * A civic building is development too, so it counts against the same total.
@@ -365,23 +384,35 @@ export const population = (s: GameState): number => {
 export type ServiceKey = Service['key'];
 
 export const serviceCount = (s: GameState, key: ServiceKey): number =>
-  key === 'hospital' ? s.hospitals : key === 'police' ? s.police : s.fire;
+  key === 'hospital' ? s.hospitals
+  : key === 'police' ? s.police
+  : key === 'fire' ? s.fire
+  : key === 'school' ? s.schools
+  : s.universities;
 
 /** How much of a type's payroll is actually filled, in [0, 1]. See `staffStep`. */
 export const staffing = (s: GameState, key: ServiceKey): number =>
-  key === 'hospital' ? s.hospitalStaff : key === 'police' ? s.policeStaff : s.fireStaff;
+  key === 'hospital' ? s.hospitalStaff
+  : key === 'police' ? s.policeStaff
+  : key === 'fire' ? s.fireStaff
+  : key === 'school' ? s.schoolStaff
+  : s.universityStaff;
 
 /**
  * Sites of one type the city has land for.
  *
- * The interleave hands hospitals sites 3k, police 3k+1 and fire 3k+2 out of one
- * city-wide list, so with 7 sites a district the three types get 3/2/2 in the
- * first district and even out from there.
+ * Two answers, because there are two kinds of site. The four 2x2 types share one
+ * city-wide list by a fixed interleave — hospitals take 4k, police 4k+1, fire
+ * 4k+2, schools 4k+3 — so with 6 sites a district the first district gets
+ * 2/2/1/1 and they even out from there. A university stands on its own 3x3 list,
+ * one to a district, and does not touch the interleave at all.
  */
 export const siteCapacity = (s: GameState, key: ServiceKey): number => {
+  if (key === 'university') return universitySiteCapacity(s);
   const sites = civicSiteCapacity(s);
-  const offset = key === 'hospital' ? 0 : key === 'police' ? 1 : 2;
-  return Math.max(0, Math.ceil((sites - offset) / 3));
+  const offset = CIVIC_SERVICES.findIndex((service) => service.key === key);
+  if (offset < 0) return 0;
+  return Math.max(0, Math.ceil((sites - offset) / CIVIC_SERVICES.length));
 };
 
 /**
@@ -478,7 +509,7 @@ export interface HappinessTerm {
 
 /** Every term happiness is made of, services first. The weights sum to 1. */
 export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
-  ...SERVICES.map((service) => ({
+  ...HAPPINESS_SERVICES.map((service) => ({
     key: service.key,
     coverLabel: service.coverLabel,
     weight: service.weight,
@@ -502,7 +533,7 @@ export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
  */
 export const happinessTarget = (s: GameState): number => {
   const covered =
-    SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0) +
+    HAPPINESS_SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0) +
     RECREATION_WEIGHT * recreationCoverage(s);
   return Math.max(0, covered - FIRE_UNHAPPINESS * s.fires.length);
 };
@@ -746,7 +777,7 @@ export const parkCost = (s: GameState): number => PARK_BASE * PARK_GROWTH ** s.p
 
 /** Services are not demand-priced: nobody haggles over a hospital. */
 export const serviceCost = (s: GameState, service: Service): number =>
-  service.base * CIVIC_GROWTH ** serviceCount(s, service.key);
+  service.base * service.growth ** serviceCount(s, service.key);
 
 export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** (s.districts - 1);
 

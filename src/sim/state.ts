@@ -133,6 +133,13 @@ export interface GameState {
   police: number;
   fire: number;
   /**
+   * Education. Same machinery as the three above — a site, a cost curve, a
+   * staffing ramp — and a different job: what they gate is how tall the city is
+   * allowed to build, not how happy it is. See LEVEL_EDUCATION.
+   */
+  schools: number;
+  universities: number;
+  /**
    * Share of each type's buildings that are actually staffed, in [0, 1].
    *
    * In the save because it is integrated, not derived: a hospital opened ten
@@ -143,6 +150,8 @@ export interface GameState {
   hospitalStaff: number;
   policeStaff: number;
   fireStaff: number;
+  schoolStaff: number;
+  universityStaff: number;
   /**
    * Happiness, lagged behind the coverage it is chasing. Same reasoning as the
    * demand signals: the lag is the mechanic, so it has to survive a reload.
@@ -227,9 +236,13 @@ export function createState(now = Date.now()): GameState {
     hospitals: 0,
     police: 0,
     fire: 0,
+    schools: 0,
+    universities: 0,
     hospitalStaff: 0,
     policeStaff: 0,
     fireStaff: 0,
+    schoolStaff: 0,
+    universityStaff: 0,
     // An empty city has nobody to be unhappy: coverage is a share of residents,
     // and the share of nobody is everybody. It lags down as the first homes fill.
     happiness: 1,

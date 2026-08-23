@@ -299,9 +299,18 @@ export const LEVEL_UP_SECONDS = 300;
  * something happiness cannot: it decides how tall the city is allowed to get.
  * Do not "tidy" it into the happiness sum.
  *
- * Zero throughout until there is anything that supplies education.
+ * Measured against what the two education types can actually reach. A district
+ * of 24 homes holds 96 residents at level 0, 384 at level 1, 1,680 at level 2
+ * and 7,200 at level 3, and its 1.5 schools educate 1,050 of them:
+ *
+ *   - 0.35 to reach level 1 means the city needs a school at all. Coverage
+ *     without one is zero, so the first promotion is gated on the first school;
+ *   - 0.60 to reach level 2 is covered by schools alone, which is what makes
+ *     schools the route through the middle of the game;
+ *   - 0.85 to reach level 3 is not: schools alone cover a district of towers to
+ *     63%, so the top of the skyline is the university's to unlock.
  */
-export const LEVEL_EDUCATION = [0, 0, 0, 0] as const;
+export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85] as const;
 
 /**
  * Cash per resident per second.
@@ -587,7 +596,7 @@ export const PRICE_SURCHARGE_MAX = 0.6;
 
 export interface Service {
   /** Matches the GameState counter, the staffing scalar and the coverage key. */
-  readonly key: 'hospital' | 'police' | 'fire';
+  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university';
   readonly name: string;
   readonly buildLabel: string;
   /** How the HUD names this service's coverage when it is the binding one. */
@@ -595,30 +604,65 @@ export interface Service {
   /** Residents one of these covers, once it is fully staffed. */
   readonly capacity: number;
   readonly base: number;
-  /** Share of the happiness score. These three plus RECREATION_WEIGHT sum to 1. */
+  /** Price growth per building. Steeper for the one that is a landmark. */
+  readonly growth: number;
+  /**
+   * Share of the happiness score, or 0 for the two that gate levels instead.
+   *
+   * The three that are non-zero sum to 1 with RECREATION_WEIGHT and must go on
+   * doing so. Education is deliberately not among them — see LEVEL_EDUCATION.
+   */
   readonly weight: number;
+  /** Plots per side of the site this stands on. */
+  readonly span: 2 | 3;
 }
 
 /**
  * Civic buildings earn nothing at all. They gate: coverage feeds happiness,
  * happiness multiplies income, caps residential demand and stops housing
- * outright below HAPPINESS_MIN_BUILD. A city that never builds one still works,
- * it just runs at the floor — neglect reads as a ceiling on what the city can
- * become, not as a punishment for playing.
+ * outright below HAPPINESS_MIN_BUILD — or, for the two education types, it
+ * decides how tall the city is allowed to build.
  *
- * Each stands on a 2x2 site, of which a district has seven, so the three types
- * share about 2.3 buildings a district. Capacities are set against that supply
- * rather than against a population: at towers a district holds 1,330 people and
- * its share of the sites covers all of them, while arcologies (5,700 a district)
- * outrun the land. Measured over 24 hours of discount-chasing, that endgame
- * settles at 53% happiness — a real squeeze, and still comfortably clear of
- * HAPPINESS_MIN_BUILD, so housing is never bricked by land the city cannot buy.
+ * Four of the five stand on a 2x2 site, of which a district has six, so those
+ * types share 1.5 buildings a district. The university is the exception: its own
+ * 3x3 site, exactly one to a district, which is what makes it a landmark rather
+ * than another row in the panel.
+ *
+ * A city that never builds one still works, it just runs at the floor and never
+ * gets past detached housing — neglect reads as a ceiling on what the city can
+ * become, not as a punishment for playing.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital', name: 'Hospitals', buildLabel: 'Open hospital',      coverLabel: 'Health coverage', capacity: 900,  base: 130, weight: 0.34 },
-  { key: 'police',   name: 'Police',    buildLabel: 'Open police station', coverLabel: 'Police coverage', capacity: 1_200, base: 210, weight: 0.26 },
-  { key: 'fire',     name: 'Fire',      buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',   capacity: 1_500, base: 320, weight: 0.22 },
+  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    capacity: 900,   base: 130,    growth: 1.35, weight: 0.34, span: 2 },
+  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    capacity: 1_200, base: 210,    growth: 1.35, weight: 0.26, span: 2 },
+  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      capacity: 1_500, base: 320,    growth: 1.35, weight: 0.22, span: 2 },
+  /**
+   * Schools take the fourth slot in the 2x2 interleave. 700 is set against what
+   * a district holds rather than against anything real: 1.5 schools a district
+   * educate 1,050, which covers a district of apartments (384) outright and a
+   * district of towers (1,680) to 63% — under LEVEL_EDUCATION's top rung, which
+   * is what leaves the last level for the university to unlock.
+   */
+  { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    capacity: 700,   base: 180,    growth: 1.35, weight: 0,    span: 2 },
+  /**
+   * Five schools' worth of teaching in one building, on nine plots, one to a
+   * district, at forty times a school's opening price and compounding half again
+   * as fast. Every one of those is doing the same job: making a university a
+   * thing the city decides to do rather than a box it ticks.
+   */
+  { key: 'university', name: 'Universities', buildLabel: 'Found university',   coverLabel: 'University coverage', capacity: 3_500, base: 7_200, growth: 1.9,  weight: 0,    span: 3 },
 ];
+
+/** The three that feed happiness. Their weights and RECREATION_WEIGHT sum to 1. */
+export const HAPPINESS_SERVICES: readonly Service[] = SERVICES.filter((s) => s.weight > 0);
+
+/** The two that feed education, which gates levelling rather than happiness. */
+export const EDUCATION_SERVICES: readonly Service[] = SERVICES.filter(
+  (s) => s.key === 'school' || s.key === 'university',
+);
+
+/** The four that share the 2x2 civic sites, in interleave order. */
+export const CIVIC_SERVICES: readonly Service[] = SERVICES.filter((s) => s.span === 2);
 
 /** Civic buildings compound like everything else, and faster than housing. */
 export const CIVIC_GROWTH = 1.35;

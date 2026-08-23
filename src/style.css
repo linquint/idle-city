@@ -425,9 +425,16 @@ button.civic .built {
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
+/* Education is a civic button that buys height rather than mood, so it reads in
+   the signal colour the zoning readout uses rather than the civic blue. */
+button.civic.school { border-color: rgba(99, 198, 168, 0.4); }
+button.civic.school:hover:not(:disabled) { border-color: var(--signal); }
+button.civic.school .cost { color: var(--signal); }
+
 button.civic:disabled { border-color: #1c2739; }
 button.civic:disabled .cost,
 button.civic:disabled .built { color: var(--off); }
+button.civic.school:disabled { border-color: #1c2739; }
 
 button.annex { border-color: rgba(127, 168, 255, 0.45); }
 button.annex:hover:not(:disabled) { background: rgba(127, 168, 255, 0.1); border-color: var(--civic); }

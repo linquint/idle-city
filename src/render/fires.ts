@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { CELL, LEVELS, MAX_ACTIVE_FIRES } from '../sim/config';
+import { CELL, CIVIC_SERVICES, LEVELS, MAX_ACTIVE_FIRES } from '../sim/config';
+
+/** Where fire stations sit in the 2x2 site interleave. See `civicSiteFor`. */
+const FIRE_SITE_OFFSET = CIVIC_SERVICES.findIndex((service) => service.key === 'fire');
 import { levelAt } from '../sim/economy';
 import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
 import type { Fire, GameState } from '../sim/state';
@@ -167,7 +170,7 @@ export class Fires {
     let best = -1;
     let bestDistance = Infinity;
     for (let i = 0; i < built; i++) {
-      const site = this.layout.fireSite(i);
+      const site = this.layout.civicSiteFor(FIRE_SITE_OFFSET, i);
       // The site's lower-left plot; the building straddles all four.
       const sx = worldX(site.x) + CELL / 2;
       const sz = worldZ(site.z) + CELL / 2 + STATION_APRON;
@@ -178,7 +181,7 @@ export class Fires {
       }
     }
     if (best < 0) return false;
-    const site = this.layout.fireSite(best);
+    const site = this.layout.civicSiteFor(FIRE_SITE_OFFSET, best);
     truck.ax = worldX(site.x) + CELL / 2;
     truck.az = worldZ(site.z) + CELL / 2 + STATION_APRON;
     return true;

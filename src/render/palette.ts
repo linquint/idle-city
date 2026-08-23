@@ -27,6 +27,12 @@ export const PALETTE = {
   policeRoof: 0x7fa8ff,
   fire: 0x6d2f2c,
   fireRoof: 0xe0574b,
+  // Education. Warm stone against the cool civic blues, so the two panels the
+  // HUD splits them into read as two things on the map as well.
+  school: 0xb9ab8e,
+  schoolRoof: 0x8d7f63,
+  university: 0xd6c9a8,
+  universityRoof: 0x9a7f4e,
   // Zoned land nobody will ever build on: the interior of a deep block, and the
   // civic sites still standing empty. Drawn, or the blocks read as holes.
   courtyard: 0x3d6349,

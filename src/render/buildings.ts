@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { hash01 } from '../core/rng';
-import { CELL, LEVELS, SERVICES, type Service } from '../sim/config';
+import { CELL, CIVIC_SERVICES, LEVELS, SERVICES, type Service } from '../sim/config';
 import { cohortStart, cohortTotal, levelAt } from '../sim/economy';
 import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
 import type { GameState, LevelCohort, ZoneKind } from '../sim/state';
@@ -407,6 +407,9 @@ class IndustryMeshes {
  */
 const CIVIC_W = 2 * CELL - 1;
 
+/** A university straddles three plots on each axis, less the same gutter. */
+const UNIVERSITY_W = 3 * CELL - 1;
+
 interface CivicStyle {
   readonly body: number;
   readonly roof: number;
@@ -440,17 +443,22 @@ class CivicMeshes {
     capacity: number,
     /** Set only where the mark is a lit surface — the fire station's doors. */
     private readonly glow: Glow | null = null,
+    /** Footprint in world units. The civic quad's, or the university's. */
+    width: number = CIVIC_W,
+    /** Half the site's span in world units — how far the building sits off the
+     *  lower-left plot it is indexed by. */
+    private readonly offset: number = CELL / 2,
   ) {
     this.body = new GrowableInstancedMesh(
       scene,
-      new THREE.BoxGeometry(CIVIC_W, style.height, CIVIC_W),
+      new THREE.BoxGeometry(width, style.height, width),
       new THREE.MeshLambertMaterial({ color: style.body }),
       capacity,
       { castShadow: true, receiveShadow: true },
     );
     this.roof = new GrowableInstancedMesh(
       scene,
-      new THREE.BoxGeometry(CIVIC_W + 0.3, 0.34, CIVIC_W + 0.3),
+      new THREE.BoxGeometry(width + 0.3, 0.34, width + 0.3),
       new THREE.MeshLambertMaterial({ color: style.roof }),
       capacity,
       { castShadow: true },
@@ -484,12 +492,12 @@ class CivicMeshes {
   }
 
   /**
-   * `cell` is the site's lower-left plot; the building straddles all four, so
-   * the instance sits half a cell along each axis from it.
+   * `cell` is the site's lower-left plot; the building straddles the whole
+   * site, so the instance sits half a site along each axis from it.
    */
   write(index: number, cell: Coord, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
-    const x = worldX(cell.x) + CELL / 2;
-    const z = worldZ(cell.z) + CELL / 2;
+    const x = worldX(cell.x) + this.offset;
+    const z = worldZ(cell.z) + this.offset;
     const h = this.style.height;
 
     dummy.rotation.set(0, 0, 0);
@@ -527,6 +535,7 @@ class CivicMeshes {
 }
 
 const TOWER_H = 3.4;
+const UNIVERSITY_TOWER_H = 9.5;
 
 /** One mesh set per service, in SERVICES order. */
 function civicSet(scene: THREE.Scene, service: Service, capacity: number): CivicMeshes {
@@ -553,17 +562,48 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
       capacity,
     );
   }
-  // The bay doors: a lit band across one face, at ground level. The one civic
-  // surface that is a light rather than a colour, so it ramps with the cycle.
-  const doors = new Glow(PALETTE.sodium, 0.5);
+  if (service.key === 'fire') {
+    // The bay doors: a lit band across one face, at ground level. The one civic
+    // surface that is a light rather than a colour, so it ramps with the cycle.
+    const doors = new Glow(PALETTE.sodium, 0.5);
+    return new CivicMeshes(
+      scene,
+      { body: PALETTE.fire, roof: PALETTE.fireRoof, height: 2.0 },
+      new THREE.BoxGeometry(CIVIC_W - 0.6, 1.2, 0.3),
+      doors.material,
+      new THREE.Vector3(0, -1.4, CIVIC_W / 2),
+      capacity,
+      doors,
+    );
+  }
+  if (service.key === 'school') {
+    // A long low hall with a lit clerestory band along its roofline. Read from
+    // the play camera it is the flattest thing on a 2x2 site, which is what
+    // tells it apart from the police station's parapet at the same footprint.
+    const windows = new Glow(PALETTE.sodium, 0.34);
+    return new CivicMeshes(
+      scene,
+      { body: PALETTE.school, roof: PALETTE.schoolRoof, height: 1.5 },
+      new THREE.BoxGeometry(CIVIC_W - 1.2, 0.42, CIVIC_W - 1.2),
+      windows.material,
+      new THREE.Vector3(0, 0.5, 0),
+      capacity,
+      windows,
+    );
+  }
+  // The university: three plots a side and a tower off the middle of it, taller
+  // than anything else the city builds until it reaches arcologies. It is the
+  // one civic building meant to be visible from across the map.
   return new CivicMeshes(
     scene,
-    { body: PALETTE.fire, roof: PALETTE.fireRoof, height: 2.0 },
-    new THREE.BoxGeometry(CIVIC_W - 0.6, 1.2, 0.3),
-    doors.material,
-    new THREE.Vector3(0, -1.4, CIVIC_W / 2),
+    { body: PALETTE.university, roof: PALETTE.universityRoof, height: 3.2 },
+    new THREE.BoxGeometry(3.0, UNIVERSITY_TOWER_H, 3.0),
+    new THREE.MeshLambertMaterial({ color: PALETTE.universityRoof }),
+    new THREE.Vector3(0, UNIVERSITY_TOWER_H / 2, 0),
     capacity,
-    doors,
+    null,
+    UNIVERSITY_W,
+    CELL,
   );
 }
 
@@ -642,23 +682,25 @@ export class Buildings {
       service,
       meshes: civicSet(scene, service, 8),
       growth: new GrowthSchedule(duration),
+      // The four 2x2 types read one interleaved list by their position in it;
+      // the university has a list of its own and does not touch the interleave.
       site:
-        service.key === 'hospital'
-          ? (i: number) => this.layout.hospitalSite(i)
-          : service.key === 'police'
-            ? (i: number) => this.layout.policeSite(i)
-            : (i: number) => this.layout.fireSite(i),
+        service.span === 3
+          ? (i: number) => this.layout.universitySiteCell(i)
+          : ((offset) => (i: number) => this.layout.civicSiteFor(offset, i))(
+              CIVIC_SERVICES.findIndex((entry) => entry.key === service.key),
+            ),
       shown: 0,
     }));
   }
 
   /** How many of a service the state has, without a lookup table per caller. */
   private static count(state: Readonly<GameState>, service: Service): number {
-    return service.key === 'hospital'
-      ? state.hospitals
-      : service.key === 'police'
-        ? state.police
-        : state.fire;
+    return service.key === 'hospital' ? state.hospitals
+      : service.key === 'police' ? state.police
+      : service.key === 'fire' ? state.fire
+      : service.key === 'school' ? state.schools
+      : state.universities;
   }
 
   /** How many instances a level's mesh set draws: its cohort, plus the ruins. */

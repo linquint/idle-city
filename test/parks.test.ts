@@ -5,6 +5,8 @@ import {
   MAX_DISTRICTS,
   PARK_BASE,
   PARK_GROWTH,
+  EDUCATION_SERVICES,
+  HAPPINESS_SERVICES,
   LEVEL_CAPACITY,
   RECREATION_WEIGHT,
   SERVICES,
@@ -182,10 +184,17 @@ describe('recreation coverage', () => {
 
 describe('the happiness weights', () => {
   it('sum to exactly 1 across the four terms', () => {
+    // Across the four that *are* happiness terms. Schools and universities are
+    // services by every other measure — a site, a cost curve, a staffing ramp —
+    // and deliberately carry no weight here: what they gate is how tall the city
+    // may build. Adding them to this sum would re-open the calibration for
+    // nothing. See LEVEL_EDUCATION.
     const services = SERVICES.reduce((sum, service) => sum + service.weight, 0);
     expect(services + RECREATION_WEIGHT).toBeCloseTo(1, 12);
+    expect(HAPPINESS_SERVICES).toHaveLength(3);
+    for (const service of EDUCATION_SERVICES) expect(service.weight).toBe(0);
     const terms = happinessTerms(state());
-    expect(terms).toHaveLength(SERVICES.length + 1);
+    expect(terms).toHaveLength(HAPPINESS_SERVICES.length + 1);
     expect(terms.reduce((sum, term) => sum + term.weight, 0)).toBeCloseTo(1, 12);
   });
 

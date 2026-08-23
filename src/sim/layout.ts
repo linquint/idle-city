@@ -2,6 +2,16 @@ import { mixSeed } from '../core/rng.ts';
 import { generateDistrict, ZONE, type DistrictLayout, type Zone } from './citygen.ts';
 import { CELL, DISTRICT_SPAN, FRONTAGE_TARGET, SEED, TARGET_PLOTS } from './config.ts';
 
+/**
+ * How many types share the 2x2 civic sites: hospital, police, fire, school.
+ *
+ * A number rather than an import of CIVIC_SERVICES, because `layout.ts` is the
+ * bottom of the simulation and `economy.ts` already depends on it — taking the
+ * list from config here would work, but the count is the only part of it this
+ * file needs and `civicSiteFor` is called with the offset anyway.
+ */
+const CIVIC_TYPES = 4;
+
 export interface Coord {
   /** Global grid column. Districts tile this space, so it goes negative. */
   readonly x: number;
@@ -491,25 +501,21 @@ export class CityLayout {
   }
 
   /**
-   * Which site each service type draws on: hospitals take 3k, police 3k+1, fire
-   * 3k+2, out of one fixed city-wide list.
+   * Which site each 2x2 type draws on: hospitals take 4k, police 4k+1, fire
+   * 4k+2 and schools 4k+3, out of one fixed city-wide list.
    *
    * A fixed interleave, not "whichever district is worst covered". Assigning
    * greedily against coverage would make the i-th hospital's position depend on
    * what the city looked like the moment it was built, and a save stores counts
    * — so the city would rearrange itself on the next refresh. Indexing is the
    * only rule that survives a reload.
+   *
+   * Four types over six sites a district rather than three over seven: the
+   * university took a 3x3 out of the land before the 2x2 pass ran, and schools
+   * joined the pool that was left. The first district gets 2/2/1/1.
    */
-  hospitalSite(i: number): Coord {
-    return this.civicSiteCell(i * 3);
-  }
-
-  policeSite(i: number): Coord {
-    return this.civicSiteCell(i * 3 + 1);
-  }
-
-  fireSite(i: number): Coord {
-    return this.civicSiteCell(i * 3 + 2);
+  civicSiteFor(offset: number, i: number): Coord {
+    return this.civicSiteCell(i * CIVIC_TYPES + offset);
   }
 
   /**

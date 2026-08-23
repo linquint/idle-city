@@ -429,6 +429,9 @@ export class Game {
     s.hospitalStaff = s.hospitals > 0 ? s.hospitalStaff + (1 - s.hospitalStaff) * k : 0;
     s.policeStaff = s.police > 0 ? s.policeStaff + (1 - s.policeStaff) * k : 0;
     s.fireStaff = s.fire > 0 ? s.fireStaff + (1 - s.fireStaff) * k : 0;
+    s.schoolStaff = s.schools > 0 ? s.schoolStaff + (1 - s.schoolStaff) * k : 0;
+    s.universityStaff =
+      s.universities > 0 ? s.universityStaff + (1 - s.universityStaff) * k : 0;
   }
 
   /**
@@ -652,10 +655,10 @@ export class Game {
   /**
    * Whether the city's schooling reaches far enough to justify this level.
    *
-   * The third gate, and the one that has nothing built behind it yet: schools
-   * and universities are the next change. Until they exist the city offers no
-   * education and LEVEL_EDUCATION asks for none, so this passes — the shape is
-   * here so that adding the supply is the only thing left to do.
+   * The third gate, and the one that is not about money or mood: a city with
+   * every service and a full skyline of tenants still cannot raise a tower
+   * until it has taught anybody. Pooled across schools and universities, so
+   * this asks how educated the city is rather than which building did it.
    */
   private educated(level: number): boolean {
     return educationCoverage(this.inner) >= (LEVEL_EDUCATION[level] ?? 0);
@@ -717,9 +720,15 @@ export class Game {
     } else if (service.key === 'police') {
       s.policeStaff = staffAfterBuild(s.policeStaff, s.police);
       s.police++;
-    } else {
+    } else if (service.key === 'fire') {
       s.fireStaff = staffAfterBuild(s.fireStaff, s.fire);
       s.fire++;
+    } else if (service.key === 'school') {
+      s.schoolStaff = staffAfterBuild(s.schoolStaff, s.schools);
+      s.schools++;
+    } else {
+      s.universityStaff = staffAfterBuild(s.universityStaff, s.universities);
+      s.universities++;
     }
   }
 

@@ -17,6 +17,7 @@ import {
   canBuildShop,
   civicSiteCapacity,
   developed,
+  universitySiteCapacity,
   homeCapacity,
   homeCost,
   income,
@@ -143,23 +144,29 @@ describe('capacity', () => {
     expect(plotCapacity(state({ districts: 4 }))).toBe(one * 4);
   });
 
-  it('counts industrial land and civic sites, not just what is for sale', () => {
+  it('counts industrial land and every kind of site, not just what is for sale', () => {
     const s = state();
     expect(plotCapacity(s)).toBe(
-      homeCapacity(s) + shopCapacity(s) + industryCapacity(s) + civicSiteCapacity(s),
+      homeCapacity(s) +
+        shopCapacity(s) +
+        industryCapacity(s) +
+        civicSiteCapacity(s) +
+        universitySiteCapacity(s),
     );
     expect(industryCapacity(s)).toBeGreaterThan(0);
     expect(civicSiteCapacity(s)).toBeGreaterThan(0);
+    expect(universitySiteCapacity(s)).toBe(1);
   });
 
   it('is a share of the plots that front a street, not of the zoned land', () => {
     // The distinction the renamed constants exist to keep straight: a district
     // is zoned for 100 plots and sells 63 of them, because a building has to
     // have a street to stand on, six 2x2 quads are held for civic use and one
-    // 3x3 for the university.
+    // 3x3 for the university. A site holds one building however many plots it
+    // covers, so the seven of them add seven to what the city can develop.
     const s = state();
     expect(homeCapacity(s) + shopCapacity(s) + industryCapacity(s)).toBe(63);
-    expect(plotCapacity(s)).toBe(69);
+    expect(plotCapacity(s)).toBe(70);
     expect(plotCapacity(s)).toBeLessThan(PLOTS_PER_DISTRICT);
   });
 

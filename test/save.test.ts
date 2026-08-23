@@ -177,9 +177,12 @@ describe('migration', () => {
     // population, so a save claiming a million homes would otherwise buy itself
     // a million residents' worth of hospitals on the way past.
     const back = migrate({
+      version: SAVE_VERSION,
       hospitals: 1e9,
       police: 1e9,
       fire: 1e9,
+      schools: 1e9,
+      universities: 1e9,
       homes: 1e9,
       industry: 1e9,
     })!;

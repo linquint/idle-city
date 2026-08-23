@@ -138,6 +138,7 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   const r = raw as Record<string, unknown>;
 
   const base = createState(now);
+  const version = Math.max(0, Math.floor(num(r['version'], 0)));
   const districts = Math.min(MAX_DISTRICTS, Math.max(1, Math.floor(num(r['districts'], 1))));
   // v4's one global tier. Dropped as a field, but not as information: it is
   // what every building in a v4 city stood at, so it seeds the cohorts below.
@@ -190,11 +191,21 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // raise happiness — so the counts carry across by weight rather than being
     // silently deleted, and the clamps below make whatever arrives legal.
     hospitals: count(r['hospitals'] ?? r['clinics']),
-    police: count(r['police'] ?? r['schools']),
+    // v2's `schools` were what became police stations, and a v5 save has a
+    // `schools` of its own that means something else entirely. Version is the
+    // only thing that can tell them apart, so the old alias is read only from a
+    // save old enough to have meant it.
+    police: count(r['police'] ?? (version <= 2 ? r['schools'] : undefined)),
     fire: count(r['fire'] ?? r['stations']),
+    // A save older than v5 has neither, which is the state a city that never
+    // built one is in.
+    schools: count(version >= 5 ? r['schools'] : undefined),
+    universities: count(r['universities']),
     hospitalStaff: share(r['hospitalStaff'], 0),
     policeStaff: share(r['policeStaff'], 0),
     fireStaff: share(r['fireStaff'], 0),
+    schoolStaff: share(r['schoolStaff'], 0),
+    universityStaff: share(r['universityStaff'], 0),
     // Filled in below, once the counts it is computed from are legal.
     happiness: 0,
     demandR: demand(r['demandR']),
@@ -243,7 +254,9 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     const allowed = serviceAllowed(state, service);
     if (service.key === 'hospital') state.hospitals = Math.min(state.hospitals, allowed);
     else if (service.key === 'police') state.police = Math.min(state.police, allowed);
-    else state.fire = Math.min(state.fire, allowed);
+    else if (service.key === 'fire') state.fire = Math.min(state.fire, allowed);
+    else if (service.key === 'school') state.schools = Math.min(state.schools, allowed);
+    else state.universities = Math.min(state.universities, allowed);
   }
 
   // After the building counts are legal, because a fire is only legal if the

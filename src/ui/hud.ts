@@ -3,6 +3,7 @@ import {
   ANNEX_MIN_OCCUPANCY,
   HAPPINESS_MIN_BUILD,
   HOMES_PER_PARK,
+  LEVEL_EDUCATION,
   LEVEL_NAMES,
   LEVELS,
   MAX_DISTRICTS,
@@ -20,6 +21,7 @@ import {
   canBuildShop,
   demandTargets,
   developed,
+  educationCoverage,
   homeBlocker,
   homeCapacity,
   homeCost,
@@ -40,6 +42,7 @@ import {
   shopCost,
 } from '../sim/economy';
 import type { AwayReport, Game } from '../sim/game';
+import type { GameState } from '../sim/state';
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -64,6 +67,21 @@ const pct = (n: number): string => `${Math.round(n * 100)}%`;
 function topLevel(levels: readonly number[]): number {
   for (let l = LEVELS - 1; l > 0; l--) if ((levels[l] ?? 0) > 0) return l;
   return 0;
+}
+
+/**
+ * Education coverage the next promotion needs, or null once nothing is left to
+ * unlock.
+ *
+ * The lowest cohort with anything in it is the one that would climb next — the
+ * wave drains the bottom first — so its requirement is the number the player
+ * can act on. A city whose every building is at the top has none.
+ */
+function nextLevelRequirement(s: Readonly<GameState>): number | null {
+  for (let l = 0; l < LEVELS - 1; l++) {
+    if ((s.homeLevels[l] ?? 0) > 0) return LEVEL_EDUCATION[l + 1] ?? 0;
+  }
+  return null;
 }
 
 /**
@@ -93,6 +111,9 @@ export class Hud {
     demandCNum: el('demand-c-num'),
     demandINum: el('demand-i-num'),
     services: el('services'),
+    education: el('education'),
+    educationReach: el('education-reach'),
+    educationNext: el('education-next'),
     zoneName: el('zone-name'),
     occupancy: el('occupancy'),
     occupancyFill: el('occupancy-fill'),
@@ -127,7 +148,14 @@ export class Hud {
     welcomeClose: el<HTMLButtonElement>('welcome-close'),
   };
 
-  /** One row of civic controls and readouts per service, keyed the same way. */
+  /**
+   * One row of controls and readouts per service, keyed the same way.
+   *
+   * All five, including the two that gate levelling rather than happiness: they
+   * have the same shape — a count, an allowance, a price, a coverage — so they
+   * get the same row. Which panel a row is *painted into* is decided by the
+   * service's weight, below.
+   */
   private readonly serviceNodes = SERVICES.map((service) => ({
     service,
     button: el<HTMLButtonElement>(`build-${service.key}`),
@@ -288,6 +316,7 @@ export class Hud {
     n.mood.setAttribute('aria-label', `Happiness ${pct(s.happiness)}. Weakest: ${why}.`);
 
     const spoken: string[] = [];
+    const taught: string[] = [];
     for (const { service, built, allowed, covered, coverage: reach } of serviceReadings(s)) {
       const row = this.serviceNodes.find((entry) => entry.service.key === service.key);
       if (!row) continue;
@@ -298,7 +327,7 @@ export class Hud {
       row.cost.textContent = fmt(serviceCost(s, service));
       row.button.disabled = !canBuildService(s, service);
       row.button.title = serviceBlocker(s, service) ?? service.buildLabel;
-      spoken.push(
+      (service.weight > 0 ? spoken : taught).push(
         `${service.name} ${built} of ${allowed} allowed, covering ${Math.round(covered)} of ${Math.round(people)} residents`,
       );
     }
@@ -314,6 +343,25 @@ export class Hud {
       `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of homes`,
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
+
+    // Education gets its own panel because it answers a different question: not
+    // "is the city happy" but "how tall is it allowed to build". The row that
+    // matters is the last one — what the next level costs in coverage.
+    const taughtShare = educationCoverage(s);
+    const next = nextLevelRequirement(s);
+    n.educationReach.textContent = pct(taughtShare);
+    n.educationNext.textContent =
+      next === null
+        ? 'every level unlocked'
+        : `next level needs ${pct(next)}`;
+    n.education.classList.toggle('covered', next !== null && taughtShare >= next);
+    taught.push(
+      `Education reaches ${Math.round(taughtShare * 100)} percent` +
+        (next === null
+          ? ', every level unlocked'
+          : `, next level needs ${Math.round(next * 100)} percent`),
+    );
+    n.education.setAttribute('aria-label', `Education: ${taught.join('; ')}`);
 
     // There is no single zoning any more, so the readout names the tallest
     // thing standing rather than one city-wide tier — "towers" once the first

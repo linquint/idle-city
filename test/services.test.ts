@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CIVIC_RAMP_SECONDS,
   HAPPINESS_FLOOR,
+  CIVIC_SERVICES,
   HAPPINESS_MIN_BUILD,
   LEVEL_CAPACITY,
   SERVICES,
@@ -228,10 +229,16 @@ describe('the build gate', () => {
   });
 
   it('never hands out more buildings than there are sites', () => {
+    // Two site lists now, so two sums. The four 2x2 types share the civic
+    // interleave and must divide it exactly — nothing stranded, nothing double
+    // counted — and the university has a list of its own, one to a district.
     for (const districts of [1, 2, 5]) {
       const s = state({ districts });
-      const total = SERVICES.reduce((sum, svc) => sum + siteCapacity(s, svc.key), 0);
-      expect(total).toBe(new CityLayout().ensure(districts).civicSites);
+      const layout = new CityLayout().ensure(districts);
+      const civic = CIVIC_SERVICES.reduce((sum, svc) => sum + siteCapacity(s, svc.key), 0);
+      expect(civic).toBe(layout.civicSites);
+      expect(siteCapacity(s, 'university')).toBe(layout.universitySites);
+      expect(siteCapacity(s, 'university')).toBe(districts);
     }
   });
 });
@@ -412,9 +419,14 @@ describe('civic land', () => {
         expect(cells.has(`${c.x},${c.z}`)).toBe(false);
         cells.add(`${c.x},${c.z}`);
       };
-      for (let i = 0; i < s.hospitals; i++) add(layout.hospitalSite(i));
-      for (let i = 0; i < s.police; i++) add(layout.policeSite(i));
-      for (let i = 0; i < s.fire; i++) add(layout.fireSite(i));
+      // Every 2x2 type, by its own offset in the shared interleave, plus the
+      // university's separate list — which must not collide with any of them.
+      CIVIC_SERVICES.forEach((service, offset) => {
+        for (let i = 0; i < serviceCount(s, service.key); i++) {
+          add(layout.civicSiteFor(offset, i));
+        }
+      });
+      for (let i = 0; i < s.universities; i++) add(layout.universitySiteCell(i));
       return cells;
     };
 
@@ -435,9 +447,11 @@ describe('civic land', () => {
   it('cannot be spent past the sites the city owns', () => {
     const game = at({ ...housed(19, 3), cash: 1e15 });
     for (let i = 0; i < 500; i++) for (const service of SERVICES) game.buildService(service);
+    const layout = new CityLayout().ensure(game.state.districts);
     expect(civicBuildings(game.state)).toBeLessThanOrEqual(
-      new CityLayout().ensure(game.state.districts).civicSites,
+      layout.civicSites + layout.universitySites,
     );
+    expect(game.state.universities).toBeLessThanOrEqual(layout.universitySites);
   });
 });
 

@@ -37,14 +37,22 @@ const run = (game: Game, seconds: number): Game => {
   return game;
 };
 
-/** Everything a city can be covered by, so happiness can be held near 1. */
+/**
+ * Everything a city can be covered by: happiness near 1 *and* education past
+ * every rung of LEVEL_EDUCATION, so promotion is gated only on the two things
+ * these tests are about.
+ */
 const served = (): Partial<GameState> => ({
   hospitals: 40,
   police: 40,
   fire: 40,
+  schools: 40,
+  universities: 40,
   hospitalStaff: 1,
   policeStaff: 1,
   fireStaff: 1,
+  schoolStaff: 1,
+  universityStaff: 1,
   parks: 200,
 });
 
