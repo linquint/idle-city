@@ -429,17 +429,11 @@ button.civic:disabled { border-color: #1c2739; }
 button.civic:disabled .cost,
 button.civic:disabled .built { color: var(--off); }
 
-button.rezone { border-color: rgba(99, 198, 168, 0.45); }
-button.rezone:hover:not(:disabled) { background: rgba(99, 198, 168, 0.1); border-color: var(--signal); }
-button.rezone .cost { color: var(--signal); }
-
 button.annex { border-color: rgba(127, 168, 255, 0.45); }
 button.annex:hover:not(:disabled) { background: rgba(127, 168, 255, 0.1); border-color: var(--civic); }
 button.annex .cost { color: var(--civic); }
 
-button.rezone:disabled,
 button.annex:disabled { border-color: #1c2739; }
-button.rezone:disabled .cost,
 button.annex:disabled .cost { color: var(--off); }
 
 .split { display: flex; gap: 8px; margin-top: 10px; }

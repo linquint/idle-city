@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_ACTIVE_FIRES, MAX_DISTRICTS, SERVICES, TIERS } from '../src/sim/config';
+import {
+  LEVELS,
+  MAX_ACTIVE_FIRES,
+  MAX_DISTRICTS,
+  OCCUPANCY_EMPTY,
+  OCCUPANCY_FULL,
+  SERVICES,
+} from '../src/sim/config';
 import {
   civicBuildings,
+  cohortTotal,
   happinessTarget,
   homeCapacity,
   industryCapacity,
@@ -13,6 +21,7 @@ import {
 import { BUILDABLE_PARKS_PER_DISTRICT } from '../src/sim/layout';
 import { load, migrate, save, SAVE_KEY, secondsAway } from '../src/sim/save';
 import { createState, SAVE_VERSION, type GameState } from '../src/sim/state';
+import { built, housed, trading } from './levels';
 
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
@@ -53,11 +62,12 @@ afterEach(() => {
 
 describe('round trip', () => {
   it('restores every field', () => {
-    const state = { ...createState(0), cash: 1234.5, homes: 40, shops: 7, tier: 2, districts: 3 };
+    const state = { ...createState(0), cash: 1234.5, ...housed(40, 2), ...trading(7), districts: 3 };
     const at = save(state, 5_000);
     const back = load(6_000);
     expect(back).not.toBeNull();
-    expect(back).toMatchObject({ cash: 1234.5, homes: 40, shops: 7, tier: 2, districts: 3 });
+    expect(back).toMatchObject({ cash: 1234.5, homes: 40, shops: 7, districts: 3 });
+    expect(back?.homeLevels).toEqual([0, 0, 40, 0]);
     expect(back?.savedAt).toBe(at);
     expect(secondsAway(back!, 6_000)).toBe(1);
   });
@@ -93,7 +103,8 @@ describe('migration', () => {
 
   it('fills in fields a older save never had', () => {
     const back = migrate({ cash: 10, homes: 4 }, 1_000);
-    expect(back).toMatchObject({ cash: 10, homes: 4, shops: 0, tier: 0, districts: 1 });
+    expect(back).toMatchObject({ cash: 10, homes: 4, shops: 0, districts: 1 });
+    expect(back?.homeLevels).toEqual([4, 0, 0, 0]);
     expect(back?.autoDevelop).toBe(false);
   });
 
@@ -109,7 +120,6 @@ describe('migration', () => {
     expect(back).not.toBeNull();
     expect(back!.cash).toBe(0);
     expect(back!.elapsed).toBe(0);
-    expect(back!.tier).toBe(TIERS.length - 1);
     expect(back!.districts).toBe(MAX_DISTRICTS);
     expect(back!.homes).toBe(homeCapacity(back!));
     expect(back!.shops).toBe(shopCapacity(back!));
@@ -138,7 +148,9 @@ describe('migration', () => {
       savedAt: 1_000,
     };
     const back = migrate(v1, 2_000);
-    expect(back).toMatchObject({ cash: 12_345.6, homes: 30, shops: 9, tier: 2, districts: 3 });
+    expect(back).toMatchObject({ cash: 12_345.6, homes: 30, shops: 9, districts: 3 });
+    // A v1 save's global tier becomes a cohort, exactly as a v4 one does.
+    expect(back!.homeLevels).toEqual([0, 0, 30, 0]);
     expect(back!.version).toBe(SAVE_VERSION);
     expect(back!.industry).toBe(0);
     expect(civicBuildings(back!)).toBe(0);
@@ -181,7 +193,7 @@ describe('migration', () => {
 
   it('clamps a doctored civic count to what the population allows', () => {
     // 400 hospitals in a city of 76 people gets the one it is entitled to.
-    const back = migrate({ hospitals: 400, homes: 19 })!;
+    const back = migrate({ hospitals: 400, ...housed(19), occupancyR: 1 })!;
     expect(back.hospitals).toBe(1);
     expect(back.hospitals).toBe(serviceAllowed(back, SERVICES[0]!));
   });
@@ -197,14 +209,14 @@ describe('migration', () => {
   it('defaults happiness to the cover the city actually has', () => {
     // Not to the fresh-city 1: that would be ninety seconds of free housing
     // every time the player reloaded.
-    const neglected = migrate({ homes: 12 })!;
+    const neglected = migrate({ ...housed(12), occupancyR: 1 })!;
     expect(neglected.happiness).toBe(0);
     expect(neglected.happiness).toBe(happinessTarget(neglected));
 
     const empty = migrate({ cash: 5 })!;
     expect(empty.happiness).toBe(1);
 
-    const doctored = migrate({ homes: 12, happiness: 4 })!;
+    const doctored = migrate({ ...housed(12), happiness: 4 })!;
     expect(doctored.happiness).toBe(1);
   });
 
@@ -275,7 +287,7 @@ describe('the view keeps nothing in the save', () => {
   ];
 
   it('serialises no key belonging to the renderer', () => {
-    save({ ...createState(0), homes: 40, shops: 12, districts: 3 }, 1_000);
+    save({ ...createState(0), ...housed(40), ...trading(12), districts: 3 }, 1_000);
     const raw = localStorage.getItem(SAVE_KEY);
     expect(raw).not.toBeNull();
     const keys = Object.keys(JSON.parse(raw as string) as Record<string, unknown>);
@@ -299,7 +311,7 @@ describe('the view keeps nothing in the save', () => {
     save(
       {
         ...createState(0),
-        homes: 19,
+        ...housed(19),
         elapsed: 500,
         fires: [{ kind: 'home', index: 7, startedAt: 480 }],
       },
@@ -312,7 +324,7 @@ describe('the view keeps nothing in the save', () => {
   });
 
   it('round-trips a state the renderer has been driving from', () => {
-    const before = { ...createState(0), homes: 19, shops: 9, elapsed: 4_812.5, districts: 2 };
+    const before = { ...createState(0), ...built(19, 9), elapsed: 4_812.5, districts: 2 };
     save(before, 2_000);
     const after = load(2_000);
     // Time of day is a read over `elapsed`, so this one field is the whole of
@@ -361,7 +373,6 @@ describe('the v4 migration', () => {
       homes: 19,
       shops: 20,
       industry: 7,
-      tier: 1,
       districts: 1,
       demandR: 0.4,
       demandC: -0.2,
@@ -413,6 +424,143 @@ describe('the v4 migration', () => {
     expect(state?.homes).toBe(19);
     expect(state?.version).toBe(SAVE_VERSION);
     expect(state?.fires).toEqual([]);
+  });
+});
+
+describe('the v5 migration', () => {
+  /** What a v4 save looks like: one global tier, no cohorts, no occupancy. */
+  const v4 = {
+    version: 4,
+    cash: 90_000,
+    elapsed: 9_000,
+    homes: 19,
+    shops: 20,
+    industry: 7,
+    parks: 3,
+    hospitals: 1,
+    police: 1,
+    fire: 1,
+    hospitalStaff: 1,
+    policeStaff: 1,
+    fireStaff: 1,
+    happiness: 0.77,
+    demandR: 0.4,
+    demandC: -0.2,
+    demandI: 0.1,
+    fires: [{ kind: 'shop', index: 3, startedAt: 8_950 }],
+    fireCursor: 42,
+    fireHazard: 0.31,
+    tier: 2,
+    districts: 1,
+    earned: 400_000,
+    autoDevelop: true,
+    savedAt: 1_000,
+  };
+
+  it('turns a global tier into a cohort of every standing building', () => {
+    const back = migrate(v4, 2_000)!;
+    expect(back.homeLevels).toEqual([0, 0, 19, 0]);
+    expect(back.shopLevels).toEqual([0, 0, 20, 0]);
+    expect(back.industryLevels).toEqual([0, 0, 7, 0]);
+    expect(back.version).toBe(SAVE_VERSION);
+    // And the field itself is gone rather than carried along dead.
+    expect('tier' in back).toBe(false);
+  });
+
+  it('opens a v4 save with its city intact', () => {
+    const back = migrate(v4, 2_000)!;
+    expect(back).toMatchObject({
+      cash: 90_000,
+      homes: 19,
+      shops: 20,
+      industry: 7,
+      parks: 3,
+      districts: 1,
+      demandR: 0.4,
+      demandC: -0.2,
+      demandI: 0.1,
+      happiness: 0.77,
+      autoDevelop: true,
+    });
+    expect(civicBuildings(back)).toBe(3);
+    expect(back.fires).toEqual([{ kind: 'shop', index: 3, startedAt: 8_950 }]);
+    expect(back.fireCursor).toBe(42);
+  });
+
+  it('opens occupied rather than reading as a city being abandoned', () => {
+    // Zero would start every returning save's vacancy clock on the first tick.
+    const back = migrate(v4, 2_000)!;
+    for (const filled of [back.occupancyR, back.occupancyC, back.occupancyI]) {
+      expect(filled).toBe(OCCUPANCY_FULL);
+      expect(filled).toBeGreaterThan(OCCUPANCY_EMPTY);
+    }
+    expect([back.vacantR, back.vacantC, back.vacantI]).toEqual([0, 0, 0]);
+    expect([back.abandonedR, back.abandonedC, back.abandonedI]).toEqual([0, 0, 0]);
+    expect([back.driftR, back.driftC, back.driftI]).toEqual([0, 0, 0]);
+  });
+
+  it('clamps counts to capacities that shrank under the save', () => {
+    // Industrial frontage went 11 -> 8 a district with the university, so a v4
+    // city that had filled its industry comes back with less of it. Housing and
+    // commerce grew, so those are carried whole.
+    const stuffed = migrate({ ...v4, homes: 19, shops: 20, industry: 11 }, 0)!;
+    expect(stuffed.industry).toBe(industryCapacity(stuffed));
+    expect(stuffed.industry).toBe(8);
+    expect(stuffed.homes).toBe(19);
+    expect(stuffed.shops).toBe(20);
+    // And the cohort follows the clamp rather than outliving it.
+    expect(cohortTotal(stuffed.industryLevels)).toBe(stuffed.industry);
+  });
+
+  it('keeps every cohort summing to its standing stock', () => {
+    for (const raw of [
+      v4,
+      { ...v4, homes: 1e9, shops: 1e9, industry: 1e9 },
+      { ...v4, homeLevels: [3, 3, 3, 3], homes: 4 },
+      { ...v4, homeLevels: [1, 0, 0, 0], homes: 12 },
+      { ...v4, homeLevels: 'not an array' },
+      { ...v4, homeLevels: [1, 2, 'x', null, 99, 99], homes: 9 },
+      { ...v4, homes: 12, abandonedR: 5 },
+      { ...v4, homes: 12, abandonedR: 900 },
+      { ...v4, homes: 0, abandonedR: 4 },
+    ]) {
+      const back = migrate(raw, 0)!;
+      expect(back.homeLevels).toHaveLength(LEVELS);
+      expect(back.abandonedR).toBeLessThanOrEqual(back.homes);
+      expect(cohortTotal(back.homeLevels)).toBe(back.homes - back.abandonedR);
+      expect(cohortTotal(back.shopLevels)).toBe(back.shops - back.abandonedC);
+      expect(cohortTotal(back.industryLevels)).toBe(back.industry - back.abandonedI);
+      for (const n of back.homeLevels) expect(n).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('clamps a doctored occupancy, vacancy clock and accumulator', () => {
+    const back = migrate(
+      {
+        ...v4,
+        occupancyR: 9,
+        occupancyC: -4,
+        occupancyI: Number.NaN,
+        vacantR: -100,
+        driftR: 900,
+        driftC: -900,
+      },
+      0,
+    )!;
+    expect(back.occupancyR).toBe(1);
+    expect(back.occupancyC).toBe(0);
+    expect(back.occupancyI).toBe(OCCUPANCY_FULL);
+    expect(back.vacantR).toBe(0);
+    expect(back.driftR).toBe(1);
+    expect(back.driftC).toBe(-1);
+  });
+
+  it('finds a v4 save under its own key when there is no v5 one', () => {
+    localStorage.setItem('idle-city/save/v4', JSON.stringify(v4));
+    const state = load(2_000)!;
+    expect(state.homes).toBe(19);
+    expect(state.version).toBe(SAVE_VERSION);
+    expect(state.homeLevels).toEqual([0, 0, 19, 0]);
   });
 });
 

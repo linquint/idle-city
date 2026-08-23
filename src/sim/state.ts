@@ -1,7 +1,16 @@
-import { START_CASH } from './config.ts';
+import { LEVELS, OCCUPANCY_FULL, START_CASH } from './config.ts';
 
-/** What kind of building is burning. Civic sites do not catch fire — see `Game`. */
-export type FireKind = 'home' | 'shop' | 'industry';
+/**
+ * The three zones the player builds in, and the only three that can burn.
+ *
+ * One name for both jobs on purpose: a fire happens to a building, and the
+ * buildings a fire can happen to are exactly the ones the city sells plots for.
+ * Civic sites do not catch fire — see `Game`.
+ */
+export type ZoneKind = 'home' | 'shop' | 'industry';
+
+/** What kind of building is burning. */
+export type FireKind = ZoneKind;
 
 /**
  * One building on fire.
@@ -11,6 +20,34 @@ export type FireKind = 'home' | 'shop' | 'industry';
  * and the seed, exactly as it is for the building standing on it, so a fire
  * survives a reload without the save ever learning what a position is.
  */
+/**
+ * How many buildings of one zone stand at each level. Index is the level.
+ *
+ * Cohorts, not instances, and that is a decision worth defending rather than an
+ * economy. There is no spatial variation in any input a building could respond
+ * to: happiness, education coverage and demand are all city-wide scalars, so
+ * two houses built in the same tick would hold byte-identical per-building
+ * state forever and the only thing that ever tells them apart is age. Age is
+ * exactly what a cohort boundary encodes.
+ *
+ * Buildings take levels in build order — the oldest slots hold the highest
+ * levels — so the k-th building's level is a lookup against these boundaries
+ * and stays a pure function of counts. The save stays a handful of numbers and
+ * positions stay derived.
+ *
+ * If a spatially varying input ever arrives — a pollution radius, per-district
+ * coverage, anything a building's own position changes the answer to — that is
+ * the point at which per-instance state earns its cost, and not before.
+ */
+export type LevelCohort = number[];
+
+/** A fresh cohort with everything at level 0. */
+export const cohortOf = (count = 0): LevelCohort => {
+  const levels = new Array<number>(LEVELS).fill(0);
+  levels[0] = Math.max(0, count);
+  return levels;
+};
+
 export interface Fire {
   readonly kind: FireKind;
   readonly index: number;
@@ -18,7 +55,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 /**
  * The entire game, in a handful of fields.
@@ -36,6 +73,52 @@ export interface GameState {
   homes: number;
   shops: number;
   industry: number;
+  /**
+   * Level cohorts per zone. Each sums to that zone's *standing* buildings —
+   * its count less the ones written off — because an abandoned building has no
+   * level to hold until it comes back.
+   */
+  homeLevels: LevelCohort;
+  shopLevels: LevelCohort;
+  industryLevels: LevelCohort;
+  /**
+   * Share of each zone's capacity that is actually filled, in [0, 1].
+   *
+   * Integrated rather than derived, exactly like demand and happiness, and in
+   * the save for the same reason: the lag is the mechanic. A city whose mood
+   * has just collapsed still has people in its houses for a few minutes, and
+   * recomputing this on load would empty them the instant the tab reopened.
+   */
+  occupancyR: number;
+  occupancyC: number;
+  occupancyI: number;
+  /** Seconds each zone has sat below OCCUPANCY_EMPTY. Reset the moment it does not. */
+  vacantR: number;
+  vacantC: number;
+  vacantI: number;
+  /**
+   * Buildings written off, taken from the newest end of each zone.
+   *
+   * They keep their plot and are drawn as ruins; they house nobody, earn
+   * nothing and hold no level. Recoverable, always — permanent loss is the
+   * fastest way to make someone close an idle game for good.
+   */
+  abandonedR: number;
+  abandonedC: number;
+  abandonedI: number;
+  /**
+   * Fractional buildings banked toward the next change in each zone: positive
+   * toward a recovery or a promotion, negative toward an abandonment.
+   *
+   * The accumulator that makes levelling step-size invariant. Promoting
+   * `floor(rate * dt)` buildings a tick would round a 0.1s tick's worth to
+   * nothing and never promote anything at all; banking the remainder and
+   * spending whole buildings out of it gives the same answer at any step size,
+   * which is the same trick `fireHazard` uses for ignition.
+   */
+  driftR: number;
+  driftC: number;
+  driftI: number;
   /**
    * Parks. One courtyard plot each, four to a district, no income at all.
    *
@@ -104,8 +187,6 @@ export interface GameState {
    * thresholds gives the same answer at any step size the loop is run at.
    */
   fireHazard: number;
-  /** Index into TIERS. */
-  tier: number;
   /** Districts annexed. Always at least 1. */
   districts: number;
   /** Lifetime earnings, for the ledger. */
@@ -124,6 +205,24 @@ export function createState(now = Date.now()): GameState {
     homes: 0,
     shops: 0,
     industry: 0,
+    homeLevels: cohortOf(),
+    shopLevels: cohortOf(),
+    industryLevels: cohortOf(),
+    // An empty zone is neither full nor empty. Starting at OCCUPANCY_FULL means
+    // the first house opens full rather than spending two minutes filling up,
+    // and it is the value a loaded save defaults to for the same reason.
+    occupancyR: OCCUPANCY_FULL,
+    occupancyC: OCCUPANCY_FULL,
+    occupancyI: OCCUPANCY_FULL,
+    vacantR: 0,
+    vacantC: 0,
+    vacantI: 0,
+    abandonedR: 0,
+    abandonedC: 0,
+    abandonedI: 0,
+    driftR: 0,
+    driftC: 0,
+    driftI: 0,
     parks: 0,
     hospitals: 0,
     police: 0,
@@ -140,7 +239,6 @@ export function createState(now = Date.now()): GameState {
     fires: [],
     fireCursor: 0,
     fireHazard: 0,
-    tier: 0,
     districts: 1,
     earned: 0,
     autoDevelop: false,

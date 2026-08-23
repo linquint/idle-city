@@ -4,11 +4,10 @@ import {
   FRONTAGE_TARGET,
   HOME_BASE,
   INDUSTRY_BASE,
+  LEVEL_CAPACITY,
   MAX_DISTRICTS,
-  REZONE_MIN_HOMES,
   SHOP_BASE,
   SHOP_BONUS,
-  TIERS,
 } from '../src/sim/config';
 import {
   annexBlocker,
@@ -16,23 +15,22 @@ import {
   canBuildHome,
   canBuildIndustry,
   canBuildShop,
-  canRezone,
   civicSiteCapacity,
+  developed,
   homeCapacity,
   homeCost,
   income,
   industryCapacity,
   industryCost,
-  occupancy,
   plotCapacity,
   plotsUsed,
   residents,
-  rezoneBlocker,
   shopCapacity,
   shopCost,
 } from '../src/sim/economy';
 import { PLOTS_PER_DISTRICT } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
+import { built, housed, making, trading } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 
@@ -122,15 +120,19 @@ describe('income', () => {
     expect(income(state())).toBe(0);
   });
 
-  it('counts residents by the active tier', () => {
-    for (let tier = 0; tier < TIERS.length; tier++) {
-      expect(residents(state({ homes: 10, tier }))).toBe(10 * TIERS[tier]!.capacity);
+  it('counts residents cohort by cohort', () => {
+    for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
+      expect(residents(state(housed(10, level)))).toBe(10 * (LEVEL_CAPACITY[level] ?? 0));
     }
+    // And a mixed skyline is the sum of its parts rather than one global level,
+    // which is the whole thing cohorts buy over the tier they replaced.
+    const mixed = state({ homes: 10, homeLevels: [4, 3, 2, 1], occupancyR: 1 });
+    expect(residents(mixed)).toBe(4 * 4 + 3 * 16 + 2 * 70 + 1 * 300);
   });
 
   it('rises with shops and with districts', () => {
-    const base = state({ homes: 20, cash: 0 });
-    expect(income({ ...base, shops: 5 })).toBeGreaterThan(income(base));
+    const base = state({ ...housed(20), cash: 0 });
+    expect(income({ ...base, ...trading(5) })).toBeGreaterThan(income(base));
     expect(income({ ...base, districts: 3 })).toBeGreaterThan(income(base));
   });
 });
@@ -162,33 +164,18 @@ describe('capacity', () => {
   });
 
   it('counts every kind of building against the same total', () => {
-    const s = state({ homes: 3, shops: 2, industry: 4, hospitals: 1, police: 1 });
+    const s = state({ ...built(3, 2, 4), hospitals: 1, police: 1 });
     expect(plotsUsed(s)).toBe(11);
-    expect(occupancy(s)).toBeCloseTo(11 / plotCapacity(s), 12);
+    expect(developed(s)).toBeCloseTo(11 / plotCapacity(s), 12);
   });
 
   it('refuses to build past the land you own', () => {
-    const full = state({ homes: homeCapacity(state()), cash: Infinity, happiness: 1 });
-    expect(canBuildHome(full)).toBe(false);
-    const shopsFull = state({ shops: shopCapacity(state()), cash: Infinity });
+    const atCapacity = state({ ...housed(homeCapacity(state())), cash: Infinity, happiness: 1 });
+    expect(canBuildHome(atCapacity)).toBe(false);
+    const shopsFull = state({ ...trading(shopCapacity(state())), cash: Infinity });
     expect(canBuildShop(shopsFull)).toBe(false);
-    const worksFull = state({ industry: industryCapacity(state()), cash: Infinity });
+    const worksFull = state({ ...making(industryCapacity(state())), cash: Infinity });
     expect(canBuildIndustry(worksFull)).toBe(false);
-  });
-});
-
-describe('rezoning', () => {
-  it('needs homes before it needs money', () => {
-    const poor = state({ homes: REZONE_MIN_HOMES - 1, cash: Infinity });
-    expect(canRezone(poor)).toBe(false);
-    expect(rezoneBlocker(poor)).toContain(String(REZONE_MIN_HOMES));
-    expect(canRezone({ ...poor, homes: REZONE_MIN_HOMES })).toBe(true);
-  });
-
-  it('stops at the last tier', () => {
-    const top = state({ homes: 50, cash: Infinity, tier: TIERS.length - 1 });
-    expect(canRezone(top)).toBe(false);
-    expect(rezoneBlocker(top)).toBe('Zoning maxed');
   });
 });
 
@@ -200,21 +187,20 @@ describe('annexation', () => {
 
     // Housing alone no longer reaches the gate: with industry folded in, a
     // district is 48% residential against a denominator of every plot it owns.
-    const developed = state({
+    const full = state({
       cash: Infinity,
-      homes: homeCapacity(state()),
-      shops: shopCapacity(state()),
-      industry: industryCapacity(state()),
+      ...built(homeCapacity(state()), shopCapacity(state()), industryCapacity(state())),
     });
-    expect(occupancy(developed)).toBeGreaterThanOrEqual(ANNEX_MIN_OCCUPANCY);
-    expect(canAnnex(developed)).toBe(true);
+    expect(developed(full)).toBeGreaterThanOrEqual(ANNEX_MIN_OCCUPANCY);
+    expect(canAnnex(full)).toBe(true);
   });
 
   it('stops at the city limits', () => {
     const maxed = state({ cash: Infinity, districts: MAX_DISTRICTS });
-    maxed.homes = homeCapacity(maxed);
-    maxed.shops = shopCapacity(maxed);
-    maxed.industry = industryCapacity(maxed);
+    Object.assign(
+      maxed,
+      built(homeCapacity(maxed), shopCapacity(maxed), industryCapacity(maxed)),
+    );
     expect(canAnnex(maxed)).toBe(false);
     expect(annexBlocker(maxed)).toBe('City limits reached');
   });

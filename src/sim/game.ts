@@ -1,10 +1,13 @@
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
+  CATCHUP_MAX_ABANDONED,
   CATCHUP_MAX_LOSSES,
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
   IGNITION_HAZARD_CAP,
   MAX_ACTIVE_FIRES,
+  LEVEL_EDUCATION,
+  LEVELS,
   OFFLINE_CAP_SECONDS,
   SERVICES,
   TICK_RATE,
@@ -20,23 +23,36 @@ import {
   canBuildPark,
   canBuildService,
   canBuildShop,
-  canRezone,
   civicBuildings,
   clampDemand,
   demandStep,
   demandTargets,
+  educationCoverage,
   happinessStep,
   happinessTarget,
   homeCost,
   ignitionRate,
   income,
   industryCost,
+  isAbandoning,
   isBurning,
+  isRecovering,
+  abandonedOf,
+  isVacant,
+  levelsOf,
+  driftOf,
+  occupancyOf,
+  vacantOf,
+  occupancyStep,
+  occupancyTarget,
   parkCost,
+  promoteRate,
+  recoverRate,
+  abandonRate,
   recreationCoverage,
   residents,
   resolvesAt,
-  rezoneCost,
+  standingOf,
   serviceCost,
   serviceCount,
   serviceNeeded,
@@ -44,8 +60,15 @@ import {
   staffAfterBuild,
   staffStep,
   wouldBurnOut,
+  ZONE_KINDS,
 } from './economy.ts';
-import { createState, type Fire, type FireKind, type GameState } from './state.ts';
+import {
+  createState,
+  type Fire,
+  type GameState,
+  type LevelCohort,
+  type ZoneKind,
+} from './state.ts';
 
 /**
  * Salt for the fire stream.
@@ -70,6 +93,52 @@ const ignitionWait = (cursor: number): number =>
 
 /** Backstop on the ignition loop. Well above what IGNITION_HAZARD_CAP can spend. */
 const IGNITION_GUARD = IGNITION_HAZARD_CAP * 4;
+
+/**
+ * The four per-zone writers.
+ *
+ * `economy.ts` is pure reads by design, so its `occupancyOf`/`vacantOf` and
+ * friends have no setters to pair with — these are them, and they live here
+ * because this is the file that is allowed to mutate. Written as a lookup
+ * rather than three copies of the same `if` chain at every call site.
+ */
+const setOccupancy = (s: GameState, kind: ZoneKind, v: number): void => {
+  if (kind === 'home') s.occupancyR = v;
+  else if (kind === 'shop') s.occupancyC = v;
+  else s.occupancyI = v;
+};
+
+const setVacant = (s: GameState, kind: ZoneKind, v: number): void => {
+  if (kind === 'home') s.vacantR = v;
+  else if (kind === 'shop') s.vacantC = v;
+  else s.vacantI = v;
+};
+
+const setAbandoned = (s: GameState, kind: ZoneKind, v: number): void => {
+  if (kind === 'home') s.abandonedR = v;
+  else if (kind === 'shop') s.abandonedC = v;
+  else s.abandonedI = v;
+};
+
+const setDrift = (s: GameState, kind: ZoneKind, v: number): void => {
+  if (kind === 'home') s.driftR = v;
+  else if (kind === 'shop') s.driftC = v;
+  else s.driftI = v;
+};
+
+/** Adds one building to a zone, at level 0. The only way a cohort grows. */
+const addBuilding = (levels: LevelCohort): void => {
+  levels[0] = (levels[0] ?? 0) + 1;
+};
+
+/** Takes one building out of a zone, newest — that is, lowest — level first. */
+const removeBuilding = (levels: LevelCohort): void => {
+  for (let l = 0; l < levels.length; l++) {
+    if ((levels[l] ?? 0) <= 0) continue;
+    levels[l] = (levels[l] ?? 0) - 1;
+    return;
+  }
+};
 
 export interface AwayReport {
   /** Seconds credited, already clamped to OFFLINE_CAP_SECONDS. */
@@ -99,6 +168,16 @@ export interface AwayReport {
   firesStarted: number;
   firesExtinguished: number;
   firesLost: number;
+  /**
+   * Buildings boarded up while away, and buildings brought back.
+   *
+   * Reported for the same reason fires are: a player who returns to a city with
+   * dark plots in it and no explanation has been robbed, and one who is told
+   * "four homes abandoned" has been handed the argument for a hospital. Both
+   * halves, because "and two came back" is the half that says it is fixable.
+   */
+  abandoned: number;
+  recovered: number;
 }
 
 /** What one pass of auto-development put on the ground. */
@@ -133,6 +212,9 @@ export class Game {
   private firesStarted = 0;
   private firesExtinguished = 0;
   private firesLost = 0;
+  /** Lifetime decay tallies. `catchUp` differences them like the fire ones. */
+  private abandoned = 0;
+  private recovered = 0;
   /**
    * Buildings this run of the simulation may still destroy.
    *
@@ -142,9 +224,25 @@ export class Game {
    * absence from silently demolishing a city.
    */
   private lossesLeft = Number.POSITIVE_INFINITY;
+  /**
+   * Buildings this run may still write off. Infinite while the player is
+   * watching — a district you saw empty out is a consequence you can act on —
+   * and CATCHUP_MAX_ABANDONED for the length of one catch-up call.
+   */
+  private abandonsLeft = Number.POSITIVE_INFINITY;
+  /** Reused by `promote`, which runs every tick and must not allocate. */
+  private readonly scratch: number[] = new Array<number>(LEVELS).fill(0);
 
   constructor(state: GameState = createState()) {
     this.inner = state;
+    // The cohorts are the only fields of a state that are not a number, and an
+    // array handed in is an array the caller still holds a reference to. Two
+    // games built from one patch object would otherwise share a skyline and
+    // silently promote each other's buildings. Copied rather than documented:
+    // the simulation owns its numbers, and that has to include these.
+    this.inner.homeLevels = [...state.homeLevels];
+    this.inner.shopLevels = [...state.shopLevels];
+    this.inner.industryLevels = [...state.industryLevels];
   }
 
   get state(): Readonly<GameState> {
@@ -175,6 +273,10 @@ export class Game {
     this.integrateStaffing(dt);
     this.integrateHappiness(dt);
     this.integrateDemand(dt);
+    // Occupancy after both, because its target reads happiness and demand; the
+    // level pass after occupancy, because every one of its gates reads it.
+    this.integrateOccupancy(dt);
+    this.integrateLevels(dt);
     // Fires after the integrators and before auto-development: income above
     // was charged against the fires that were burning at the top of the tick,
     // and auto-development should get to rebuild inside the same tick a
@@ -234,11 +336,16 @@ export class Game {
    * will not do — the fire is over by the time the count moves, and a city one
    * building smaller is the part the player is owed.
    */
-  private demolish(kind: FireKind): void {
+  private demolish(kind: ZoneKind): void {
     const s = this.inner;
     if (kind === 'home') s.homes = Math.max(0, s.homes - 1);
     else if (kind === 'shop') s.shops = Math.max(0, s.shops - 1);
     else s.industry = Math.max(0, s.industry - 1);
+    // The count and the cohort are two views of one thing, so they move
+    // together or the invariant breaks. A ruin is taken first — the newest
+    // plots are the ruins, and the newest plot is the one the count drops.
+    if (abandonedOf(s, kind) > 0) setAbandoned(s, kind, abandonedOf(s, kind) - 1);
+    else removeBuilding(levelsOf(s, kind));
   }
 
   /** A fire whose building no longer exists stops being a fire. */
@@ -295,7 +402,7 @@ export class Game {
     if (s.fires.length >= MAX_ACTIVE_FIRES) return;
 
     const pick = kindRoll * burnableBuildings(s);
-    const kind: FireKind =
+    const kind: ZoneKind =
       pick < s.homes ? 'home' : pick < s.homes + s.shops ? 'shop' : 'industry';
     const of = burnableOf(s, kind);
     if (of <= 0) return;
@@ -368,6 +475,192 @@ export class Game {
     s.demandR = Math.min(s.demandR, s.happiness);
   }
 
+  // ------------------------------------------------------------- occupancy
+
+  /**
+   * Eases each zone toward the occupancy its mood and its demand justify, and
+   * runs the vacancy clock underneath it.
+   *
+   * The clock is a plain integral of time spent below the line and resets the
+   * moment the zone climbs back over it, which is the whole of what makes
+   * abandonment need *sustained* vacancy: a dip that lasts a minute leaves
+   * nothing behind, because a minute is not ABANDON_SECONDS and the counter is
+   * back at zero before it could have been.
+   */
+  private integrateOccupancy(dt: number): void {
+    const s = this.inner;
+    const k = occupancyStep(dt);
+    for (const kind of ZONE_KINDS) {
+      // A zone with nothing standing is held rather than integrated. There is
+      // nothing to be occupied, so the number means nothing — but it is what
+      // the *first* building of that zone will open at, and a zone that had
+      // decayed to zero while empty would hand the player a house that takes
+      // two minutes to let. Its vacancy clock is not running either.
+      if (standingOf(s, kind) <= 0) {
+        setVacant(s, kind, 0);
+        continue;
+      }
+      const target = occupancyTarget(s, kind);
+      const moved = occupancyOf(s, kind) + (target - occupancyOf(s, kind)) * k;
+      // Clamped as well as stepped, for the reason every other integrator here
+      // is: the step preserves [0, 1] only if the state arrived inside it, and
+      // a doctored save is exactly where it would not have.
+      setOccupancy(s, kind, Math.max(0, Math.min(1, moved)));
+      setVacant(s, kind, isVacant(s, kind) ? vacantOf(s, kind) + dt : 0);
+    }
+  }
+
+  // -------------------------------------------------------------- levelling
+
+  /**
+   * Moves buildings between cohorts: back from the ruins, down into them, or up
+   * a level.
+   *
+   * Exactly one of the three runs per zone per pass, in that priority. Recovery
+   * first, because a city should finish repairing itself before it starts
+   * growing again; abandonment next, because a zone past its vacancy clock has
+   * no business promoting anything; promotion last, on what is left.
+   *
+   * All three spend out of one fractional accumulator so the pass is step-size
+   * invariant. `floor(rate * dt)` would round a tenth-of-a-second tick's worth
+   * to zero and never do anything at all, and a Bernoulli trial per tick would
+   * make sixty one-second ticks a different distribution from one sixty-second
+   * catch-up step. Banking the remainder gives the same answer at any step.
+   */
+  private integrateLevels(dt: number): void {
+    const s = this.inner;
+    for (const kind of ZONE_KINDS) {
+      // Deliberately *not* clamped before it is spent. A 60-second catch-up
+      // step banks sixty seconds of rate and has to spend all of it, or the
+      // step size decides how fast the city grows — which is the exact
+      // dependence this accumulator exists to remove. Nothing can bank while a
+      // gate is shut, because a shut gate makes the rate zero rather than
+      // making the accumulation illegal, so there is no hoard to release.
+      setDrift(s, kind, driftOf(s, kind) + this.driftRate(kind) * dt);
+      this.spendDrift(kind);
+    }
+  }
+
+  /** Buildings per second the zone is moving, signed: up positive, down negative. */
+  private driftRate(kind: ZoneKind): number {
+    const s = this.inner;
+    if (isRecovering(s, kind)) return recoverRate(s, kind);
+    if (isAbandoning(s, kind)) return -abandonRate(s, kind);
+    return promoteRate(s, kind);
+  }
+
+  /**
+   * Spends whole buildings out of the accumulator.
+   *
+   * One sweep, not a loop of single moves. The difference matters: a 60-second
+   * catch-up step banks tens of promotions, and promoting them one at a time
+   * would walk a building from level 0 to level 3 inside a single pass, because
+   * every call after the first would find it sitting in the cohort above.
+   * `promote` therefore takes a budget and makes one ordered pass with it.
+   *
+   * A short move — fewer buildings than the budget asked for — means the zone
+   * ran out of anything to move, so the remainder is dropped rather than banked
+   * against some future tick that might have something.
+   */
+  private spendDrift(kind: ZoneKind): void {
+    const s = this.inner;
+    let drift = driftOf(s, kind);
+    if (drift >= 1) {
+      const budget = Math.floor(drift);
+      const moved = isRecovering(s, kind)
+        ? this.recover(kind, budget)
+        : this.promote(kind, budget);
+      drift = moved < budget ? 0 : drift - moved;
+    } else if (drift <= -1) {
+      const budget = Math.floor(-drift);
+      const moved = this.abandon(kind, budget);
+      drift = moved < budget ? 0 : drift + moved;
+    }
+    setDrift(s, kind, drift);
+  }
+
+  /**
+   * Climbs up to `budget` buildings one level each, in one pass.
+   *
+   * Bottom cohort first, and that ordering is the mechanic rather than an
+   * implementation detail. Promoting the *highest* eligible cohort first — the
+   * obvious reading of "climb a level" — races one building to the top while
+   * everything else sits at level 0: measured, a single arcology appeared
+   * inside thirty seconds while twenty-three houses never moved. Draining the
+   * bottom cohort first makes the city climb as a wave, which is what
+   * LEVEL_UP_SECONDS is a statement about and what gives the skyline its
+   * mixed-age look.
+   *
+   * Bottom-up needs the snapshot to hold "never more than one level per
+   * building per pass": level l + 1 is read after level l has been written, so
+   * without `before` the buildings that just arrived there would be eligible to
+   * move again inside the same pass. The scratch buffer is reused because this
+   * runs on every tick.
+   */
+  private promote(kind: ZoneKind, budget: number): number {
+    const levels = levelsOf(this.inner, kind);
+    const before = this.scratch;
+    for (let l = 0; l < LEVELS; l++) before[l] = levels[l] ?? 0;
+
+    let left = budget;
+    for (let l = 0; l < LEVELS - 1 && left > 0; l++) {
+      if (!this.educated(l + 1)) continue;
+      const take = Math.min(left, before[l] ?? 0);
+      if (take <= 0) continue;
+      levels[l] = (levels[l] ?? 0) - take;
+      levels[l + 1] = (levels[l + 1] ?? 0) + take;
+      left -= take;
+    }
+    return budget - left;
+  }
+
+  /**
+   * Writes up to `budget` buildings off, taken from the newest cohort.
+   *
+   * Newest means lowest level, because buildings take levels in build order —
+   * so the plots that go dark are the ones at the growing edge of the city and
+   * the decay reads as spreading inward rather than as random gaps.
+   */
+  private abandon(kind: ZoneKind, budget: number): number {
+    const s = this.inner;
+    const levels = levelsOf(s, kind);
+    let moved = 0;
+    for (let l = 0; l < LEVELS && moved < budget; l++) {
+      const take = Math.min(budget - moved, levels[l] ?? 0, this.abandonsLeft);
+      if (take <= 0) continue;
+      levels[l] = (levels[l] ?? 0) - take;
+      setAbandoned(s, kind, abandonedOf(s, kind) + take);
+      this.abandonsLeft -= take;
+      this.abandoned += take;
+      moved += take;
+    }
+    return moved;
+  }
+
+  /** Brings up to `budget` ruins back, at level 0. Nothing here is lost for good. */
+  private recover(kind: ZoneKind, budget: number): number {
+    const s = this.inner;
+    const take = Math.min(budget, abandonedOf(s, kind));
+    if (take <= 0) return 0;
+    const levels = levelsOf(s, kind);
+    levels[0] = (levels[0] ?? 0) + take;
+    setAbandoned(s, kind, abandonedOf(s, kind) - take);
+    this.recovered += take;
+    return take;
+  }
+
+  /**
+   * Whether the city's schooling reaches far enough to justify this level.
+   *
+   * The third gate, and the one that has nothing built behind it yet: schools
+   * and universities are the next change. Until they exist the city offers no
+   * education and LEVEL_EDUCATION asks for none, so this passes — the shape is
+   * here so that adding the supply is the only thing left to do.
+   */
+  private educated(level: number): boolean {
+    return educationCoverage(this.inner) >= (LEVEL_EDUCATION[level] ?? 0);
+  }
+
   // ---------------------------------------------------------------- actions
 
   buildHome(): boolean {
@@ -375,6 +668,7 @@ export class Game {
     if (!canBuildHome(s)) return false;
     s.cash -= homeCost(s);
     s.homes++;
+    addBuilding(s.homeLevels);
     return true;
   }
 
@@ -383,6 +677,7 @@ export class Game {
     if (!canBuildShop(s)) return false;
     s.cash -= shopCost(s);
     s.shops++;
+    addBuilding(s.shopLevels);
     return true;
   }
 
@@ -391,6 +686,7 @@ export class Game {
     if (!canBuildIndustry(s)) return false;
     s.cash -= industryCost(s);
     s.industry++;
+    addBuilding(s.industryLevels);
     return true;
   }
 
@@ -427,18 +723,6 @@ export class Game {
     }
   }
 
-  /**
-   * Tier replacement: the plot count never changes, only what stands on it.
-   * That is what keeps an exponential economy inside a world you can render.
-   */
-  rezone(): boolean {
-    const s = this.inner;
-    if (!canRezone(s)) return false;
-    s.cash -= rezoneCost(s);
-    s.tier++;
-    return true;
-  }
-
   /** The expansion axis: more land, more plots, a permanent civic bonus. */
   annex(): boolean {
     const s = this.inner;
@@ -464,7 +748,10 @@ export class Game {
     this.firesStarted = 0;
     this.firesExtinguished = 0;
     this.firesLost = 0;
+    this.abandoned = 0;
+    this.recovered = 0;
     this.lossesLeft = Number.POSITIVE_INFINITY;
+    this.abandonsLeft = Number.POSITIVE_INFINITY;
   }
 
   /**
@@ -495,6 +782,7 @@ export class Game {
           cost: homeCost(s),
           buy: () => {
             s.homes++;
+            addBuilding(s.homeLevels);
             built.homes++;
           },
         });
@@ -504,6 +792,7 @@ export class Game {
           cost: shopCost(s),
           buy: () => {
             s.shops++;
+            addBuilding(s.shopLevels);
             built.shops++;
           },
         });
@@ -513,6 +802,7 @@ export class Game {
           cost: industryCost(s),
           buy: () => {
             s.industry++;
+            addBuilding(s.industryLevels);
             built.industry++;
           },
         });
@@ -581,12 +871,17 @@ export class Game {
       started: this.firesStarted,
       extinguished: this.firesExtinguished,
       lost: this.firesLost,
+      abandoned: this.abandoned,
+      recovered: this.recovered,
     };
 
     // The hard guard, for the length of this call and no longer. However many
     // fires resolve badly across a twelve-hour absence, the city comes back at
     // most one building smaller; the rest are put out instead and still counted.
     this.lossesLeft = CATCHUP_MAX_LOSSES;
+    // The same guard for decay. However long the absence, the city comes back
+    // at most CATCHUP_MAX_ABANDONED plots darker than it was left.
+    this.abandonsLeft = CATCHUP_MAX_ABANDONED;
 
     // Fixed steps, not a fixed step count: coarse steps let auto-development
     // buy against a demand curve that has already jumped to its asymptote.
@@ -597,6 +892,7 @@ export class Game {
     const dt = credited / steps;
     for (let i = 0; i < steps; i++) this.step(dt);
     this.lossesLeft = Number.POSITIVE_INFINITY;
+    this.abandonsLeft = Number.POSITIVE_INFINITY;
 
     const s = this.inner;
     return {
@@ -615,6 +911,8 @@ export class Game {
       firesStarted: this.firesStarted - before.started,
       firesExtinguished: this.firesExtinguished - before.extinguished,
       firesLost: this.firesLost - before.lost,
+      abandoned: this.abandoned - before.abandoned,
+      recovered: this.recovered - before.recovered,
     };
   }
 }

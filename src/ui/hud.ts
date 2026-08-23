@@ -3,6 +3,8 @@ import {
   ANNEX_MIN_OCCUPANCY,
   HAPPINESS_MIN_BUILD,
   HOMES_PER_PARK,
+  LEVEL_NAMES,
+  LEVELS,
   MAX_DISTRICTS,
   SERVICES,
 } from '../sim/config';
@@ -16,30 +18,26 @@ import {
   canBuildPark,
   canBuildService,
   canBuildShop,
-  canRezone,
   demandTargets,
+  developed,
   homeBlocker,
   homeCapacity,
   homeCost,
   income,
   industryCapacity,
   industryCost,
-  nextTier,
-  occupancy,
   parkBlocker,
   parkCapacity,
   parkCost,
   priceModifier,
+  population,
   recreationCoverage,
   residents,
-  rezoneBlocker,
-  rezoneCost,
   serviceBlocker,
   serviceCost,
   serviceReadings,
   shopCapacity,
   shopCost,
-  tierOf,
 } from '../sim/economy';
 import type { AwayReport, Game } from '../sim/game';
 
@@ -61,6 +59,12 @@ const CHIP_DEADBAND = 0.005;
 const TREND_DEADBAND = 0.004;
 
 const pct = (n: number): string => `${Math.round(n * 100)}%`;
+
+/** The highest level anything in a cohort has reached. 0 for an empty city. */
+function topLevel(levels: readonly number[]): number {
+  for (let l = LEVELS - 1; l > 0; l--) if ((levels[l] ?? 0) > 0) return l;
+  return 0;
+}
 
 /**
  * The HUD is a read-only subscriber, exactly like the renderer. It reads the
@@ -109,14 +113,11 @@ export class Hud {
     parksBuilt: el('svc-parks-built'),
     parksCovers: el('svc-parks-covers'),
     parksRow: el('svc-parks-built').parentElement as HTMLElement,
-    rezoneLabel: el('rezone-label'),
-    rezoneCost: el('rezone-cost'),
     annexLabel: el('annex-label'),
     annexCost: el('annex-cost'),
     home: el<HTMLButtonElement>('build-home'),
     shop: el<HTMLButtonElement>('build-shop'),
     industry: el<HTMLButtonElement>('build-industry'),
-    rezone: el<HTMLButtonElement>('rezone'),
     annex: el<HTMLButtonElement>('annex'),
     auto: el<HTMLButtonElement>('auto'),
     reset: el<HTMLButtonElement>('reset'),
@@ -149,7 +150,6 @@ export class Hud {
     n.shop.addEventListener('click', () => this.act(() => this.game.buildShop()));
     n.industry.addEventListener('click', () => this.act(() => this.game.buildIndustry()));
     n.park.addEventListener('click', () => this.act(() => this.game.buildPark()));
-    n.rezone.addEventListener('click', () => this.act(() => this.game.rezone()));
     n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
 
     for (const { service, button } of this.serviceNodes) {
@@ -278,7 +278,7 @@ export class Hud {
     // The happiness panel. A bare percentage says nothing a player can act on,
     // so the binding term is named beside it: "Health coverage 41%" is the whole
     // reason this block exists rather than the number on its own.
-    const people = residents(s);
+    const people = population(s);
     const worst = bindingTerm(s);
     const why = `${worst.coverLabel} ${pct(worst.coverage)}`;
     n.moodPct.textContent = pct(s.happiness);
@@ -315,11 +315,13 @@ export class Hud {
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
-    const tier = tierOf(s);
-    n.zoneName.textContent = tier.name;
-    // Same pattern as rezone and annex: when the button is dead for a reason
-    // worth stating, the label states it instead of the verb.
-    n.homeLabel.textContent = homeBlocker(s) ?? tier.buildLabel;
+    // There is no single zoning any more, so the readout names the tallest
+    // thing standing rather than one city-wide tier — "towers" once the first
+    // tower is up, which is the milestone a player actually wants told.
+    n.zoneName.textContent = LEVEL_NAMES[topLevel(s.homeLevels)] ?? '';
+    // Same pattern as annex: when the button is dead for a reason worth
+    // stating, the label states it instead of the verb.
+    n.homeLabel.textContent = homeBlocker(s) ?? 'Build home';
     n.homeCost.textContent = fmt(homeCost(s));
     n.shopCost.textContent = fmt(shopCost(s));
     n.industryCost.textContent = fmt(industryCost(s));
@@ -337,19 +339,13 @@ export class Hud {
     n.park.disabled = !canBuildPark(s);
     n.park.title = parkBlocker(s) ?? 'Lay out a park';
 
-    const filled = occupancy(s);
+    const filled = developed(s);
     n.occupancyFill.style.width = `${Math.min(100, filled * 100).toFixed(1)}%`;
     n.occupancy.classList.toggle('ready', filled >= ANNEX_MIN_OCCUPANCY);
     n.occupancy.setAttribute(
       'aria-label',
       `Land developed: ${Math.round(filled * 100)} percent`,
     );
-
-    const rezoneWhy = rezoneBlocker(s);
-    const upgrade = nextTier(s);
-    n.rezoneLabel.textContent = rezoneWhy ?? `Rezone to ${upgrade?.name ?? ''}`;
-    n.rezoneCost.textContent = upgrade ? fmt(rezoneCost(s)) : '—';
-    n.rezone.disabled = !canRezone(s);
 
     const annexWhy = annexBlocker(s);
     const capped = s.districts >= MAX_DISTRICTS;
@@ -365,7 +361,8 @@ export class Hud {
   showAway(report: AwayReport): void {
     // A building lost is worth a sheet on its own. The earnings floor exists to
     // skip a report with nothing in it; a fire is something in it.
-    if (report.seconds < 60 || (report.earned < 1 && report.firesLost === 0)) return;
+    const notable = report.firesLost > 0 || report.abandoned > 0;
+    if (report.seconds < 60 || (report.earned < 1 && !notable)) return;
     const n = this.nodes;
     n.welcomeAway.textContent = fmtDuration(report.seconds);
 
@@ -383,6 +380,10 @@ export class Hud {
       rows.push(['Put out', fmtInt(report.firesExtinguished)]);
     }
     if (report.firesLost > 0) rows.push(['Lost to fire', fmtInt(report.firesLost)]);
+    // Both halves, and only when there is a story: "3 boarded up" on its own
+    // reads as a punishment, "3 boarded up, 2 reopened" reads as a city.
+    if (report.abandoned > 0) rows.push(['Boarded up', fmtInt(report.abandoned)]);
+    if (report.recovered > 0) rows.push(['Reopened', fmtInt(report.recovered)]);
     if (report.forfeited > 60) rows.push(['Uncollected', fmtDuration(report.forfeited)]);
 
     n.welcomeRows.replaceChildren(

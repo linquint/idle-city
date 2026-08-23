@@ -22,6 +22,7 @@ import {
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { createState, type GameState } from '../src/sim/state';
+import { built, housed } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -41,7 +42,7 @@ const covered = (patch: Partial<GameState> = {}): Partial<GameState> => ({
 
 describe('the ignition rate', () => {
   it('is strictly positive with buildings and no fire service at all', () => {
-    const bare = state({ homes: 19, shops: 10 });
+    const bare = state(built(19, 10));
     expect(fireCoverage(bare)).toBe(0);
     expect(ignitionRate(bare)).toBeGreaterThan(0);
     // Per building per hour, converted to per second. Nothing else in it.
@@ -59,9 +60,9 @@ describe('the ignition rate', () => {
    * building to one.
    */
   it('is at or near zero at full fire coverage', () => {
-    const safe = state({ homes: 4, ...covered() });
+    const safe = state({ ...housed(4), ...covered() });
     expect(fireCoverage(safe)).toBe(1);
-    const bare = state({ homes: 4 });
+    const bare = state(housed(4));
     expect(ignitionRate(safe)).toBeLessThanOrEqual(ignitionRate(bare) * (1 - FIRE_SUPPRESSION));
     expect(ignitionRate(safe)).toBeLessThan(ignitionRate(bare) * 0.1);
   });
@@ -71,7 +72,7 @@ describe('the ignition rate', () => {
     // 94% rather than saturating the clamp partway up the sweep.
     let last = Infinity;
     for (const fireStaff of [0, 0.2, 0.5, 0.8, 1]) {
-      const rate = ignitionRate(state({ homes: 100, tier: 1, fire: 1, fireStaff }));
+      const rate = ignitionRate(state({ ...housed(100, 1), fire: 1, fireStaff }));
       expect(rate).toBeLessThan(last);
       last = rate;
     }
@@ -85,8 +86,8 @@ describe('the ignition rate', () => {
 
 describe('the response', () => {
   it('runs from EXTINGUISH_MAX uncovered to EXTINGUISH_MIN covered', () => {
-    expect(extinguishSeconds(state({ homes: 19 }))).toBeCloseTo(EXTINGUISH_MAX, 12);
-    expect(extinguishSeconds(state({ homes: 4, ...covered() }))).toBeCloseTo(EXTINGUISH_MIN, 12);
+    expect(extinguishSeconds(state(housed(19)))).toBeCloseTo(EXTINGUISH_MAX, 12);
+    expect(extinguishSeconds(state({ ...housed(4), ...covered() }))).toBeCloseTo(EXTINGUISH_MIN, 12);
   });
 
   /**
@@ -98,8 +99,8 @@ describe('the response', () => {
     const crossover = (EXTINGUISH_MAX - BURN_OUT_SECONDS) / (EXTINGUISH_MAX - EXTINGUISH_MIN);
     expect(crossover).toBeGreaterThan(0);
     expect(crossover).toBeLessThan(0.5);
-    expect(wouldBurnOut(state({ homes: 19 }))).toBe(true);
-    expect(wouldBurnOut(state({ homes: 4, ...covered() }))).toBe(false);
+    expect(wouldBurnOut(state(housed(19)))).toBe(true);
+    expect(wouldBurnOut(state({ ...housed(4), ...covered() }))).toBe(false);
   });
 });
 
@@ -110,7 +111,7 @@ describe('ignition is reproducible', () => {
    * never have produced.
    */
   it('gives the same fires from the same state and the same cursor', () => {
-    const patch = { homes: 19, shops: 20, industry: 8, cash: 0 };
+    const patch = { ...built(19, 20, 8), cash: 0 };
     const a = at(patch);
     const b = at(patch);
     run(a, 1_200);
@@ -122,7 +123,7 @@ describe('ignition is reproducible', () => {
   });
 
   it('carries on rather than restarting when a save is reopened', () => {
-    const patch = { homes: 19, shops: 20, industry: 8, cash: 0 };
+    const patch = { ...built(19, 20, 8), cash: 0 };
     const straight = at(patch);
     run(straight, 900);
 
@@ -143,48 +144,63 @@ describe('ignition is reproducible', () => {
    * and one at sixty are different distributions.
    */
   it('gives catch-up and real time the same fire history, within 1%', () => {
-    // Chosen so the rate is genuinely constant across the hour, which is the
-    // only condition under which the two step sizes are comparable at all:
-    // 375 apartment blocks are 6,000 residents against one station's 1,500, so
-    // fire coverage sits at exactly 0.25 and the staffing scalar is already
-    // full and stays there. That puts the response at 72.5s — inside
-    // BURN_OUT_SECONDS, so nothing is lost and the building count never moves
-    // — while still leaving 76% of the base rate, which is about 37 fires an
-    // hour over 975 buildings. Every ignition attempt costs exactly three
-    // draws, so the cursor is the fire history in one number. Measured: 111
-    // draws either way — 37 ignitions, identical — with the unspent hazard
-    // agreeing to twelve significant figures. The 1% band below is there for
-    // float drift, not for a difference in behaviour.
-    const patch = {
+    // Chosen so the rate is genuinely near-constant across the hour, which is
+    // the only condition under which two step sizes are comparable at all. That
+    // is harder than it was: residents are `cohort x capacity x occupancy` now,
+    // so a city whose mood is still moving has a moving population and a moving
+    // fire coverage underneath it. Three things pin it:
+    //
+    //   - every home is already at the top level, so `promotable` is zero and
+    //     no cohort can move. A climbing city is the destabiliser here — each
+    //     promotion multiplies residents and drops coverage under itself;
+    //   - hospitals, police and parks all cover the population outright, so
+    //     happiness settles rather than oscillating, and occupancy with it;
+    //   - fire alone is left short: one station against ~5,400 residents is
+    //     coverage 0.28, which puts the response at 70.6s — inside
+    //     BURN_OUT_SECONDS, so nothing burns down and the counts never move.
+    //
+    // That leaves 72% of the base rate over 622 buildings, about 22 fires an
+    // hour. Every ignition attempt costs exactly three draws, so the cursor is
+    // the fire history in one number. Measured: 22 ignitions either way, gap 0.
+    const patch = (): Partial<GameState> => ({
       districts: 21,
-      tier: 1,
-      homes: 375,
-      shops: 400,
-      industry: 200,
+      ...built(22, 400, 200, 3),
+      occupancyR: 0.7,
+      occupancyC: 0.7,
+      occupancyI: 0.7,
+      hospitals: 7,
+      hospitalStaff: 1,
+      police: 5,
+      policeStaff: 1,
       fire: 1,
       fireStaff: 1,
+      parks: 5,
       cash: 0,
-    };
-    const away = at(patch);
-    const watched = at(patch);
+    });
+    const away = at(patch());
+    const watched = at(patch());
     away.catchUp(3600);
     for (let i = 0; i < 3600; i++) watched.catchUp(1);
 
     const ignitions = (g: Game): number => g.state.fireCursor / 3;
     expect(ignitions(watched)).toBeGreaterThan(10);
-    expect(away.state.homes).toBe(375);
+    expect(away.state.homes).toBe(22);
+    expect(away.state.homeLevels).toEqual(watched.state.homeLevels);
     const gap = Math.abs(ignitions(away) - ignitions(watched));
     expect(gap).toBeLessThanOrEqual(Math.max(1, ignitions(watched) * 0.01));
-    // And the pressure still sitting unspent agrees to the same tolerance.
-    expect(away.state.fireHazard).toBeCloseTo(watched.state.fireHazard, 6);
+    // The pressure still sitting unspent agrees to well inside one fire. Not to
+    // twelve figures any more: the rate is *near* constant rather than exactly
+    // constant, because occupancy is still settling by a fraction of a percent
+    // across the hour and the rate reads it. Under half a fire of accumulated
+    // difference over 22 is the honest statement of that.
+    expect(Math.abs(away.state.fireHazard - watched.state.fireHazard)).toBeLessThan(0.5);
   });
 });
 
 describe('a fire while it burns', () => {
   const burning = (n: number): GameState =>
     state({
-      homes: 19,
-      shops: 10,
+      ...built(19, 10),
       fires: Array.from({ length: n }, (_, i) => ({
         kind: 'home' as const,
         index: i,
@@ -201,20 +217,19 @@ describe('a fire while it burns', () => {
   });
 
   it('takes a shop bonus off the ledger when the shop is the one alight', () => {
-    const quiet = state({ homes: 19, shops: 10 });
+    const quiet = state(built(19, 10));
     const alight = state({
-      homes: 19,
-      shops: 10,
+      ...built(19, 10),
       fires: [{ kind: 'shop', index: 3, startedAt: 0 }],
     });
     expect(income(alight)).toBeLessThan(income(quiet));
   });
 
   it('costs happiness in proportion, and never enough to brick housing', () => {
-    const clear = happinessTarget(state({ homes: 4, hospitals: 1, hospitalStaff: 1, police: 1, policeStaff: 1, ...covered() }));
+    const clear = happinessTarget(state({ ...housed(4), hospitals: 1, hospitalStaff: 1, police: 1, policeStaff: 1, ...covered() }));
     for (let n = 1; n <= MAX_ACTIVE_FIRES; n++) {
       const hit = happinessTarget({
-        ...state({ homes: 4, hospitals: 1, hospitalStaff: 1, police: 1, policeStaff: 1, ...covered() }),
+        ...state({ ...housed(4), hospitals: 1, hospitalStaff: 1, police: 1, policeStaff: 1, ...covered() }),
         fires: Array.from({ length: n }, (_, i) => ({ kind: 'home' as const, index: i, startedAt: 0 })),
       });
       expect(hit).toBeCloseTo(clear - FIRE_UNHAPPINESS * n, 9);
@@ -223,7 +238,7 @@ describe('a fire while it burns', () => {
   });
 
   it('never exceeds the cap, however long an uncovered city is left', () => {
-    const game = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
+    const game = at({ ...built(19, 28, 11), cash: 0 });
     for (let i = 0; i < 24; i++) {
       game.catchUp(1800);
       expect(game.state.fires.length).toBeLessThanOrEqual(MAX_ACTIVE_FIRES);
@@ -231,7 +246,7 @@ describe('a fire while it burns', () => {
   });
 
   it('never burns the same building twice at once', () => {
-    const game = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
+    const game = at({ ...built(19, 28, 11), cash: 0 });
     for (let i = 0; i < 200; i++) {
       run(game, 30);
       const keys = game.state.fires.map((f) => `${f.kind}:${f.index}`);
@@ -249,7 +264,7 @@ describe('the destruction guard', () => {
    */
   it('never destroys more than one building per catchUp, however long the absence', () => {
     for (const seconds of [3600, 6 * 3600, OFFLINE_CAP_SECONDS, OFFLINE_CAP_SECONDS * 4]) {
-      const game = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
+      const game = at({ ...built(19, 28, 11), cash: 0 });
       const before = burnableBuildings(game.state);
       const report = game.catchUp(seconds);
       expect(report.firesLost).toBeLessThanOrEqual(CATCHUP_MAX_LOSSES);
@@ -258,7 +273,7 @@ describe('the destruction guard', () => {
   });
 
   it('puts out the fires it refuses to lose rather than leaving them burning', () => {
-    const game = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
+    const game = at({ ...built(19, 28, 11), cash: 0 });
     const report = game.catchUp(OFFLINE_CAP_SECONDS);
     expect(report.firesStarted).toBeGreaterThan(MAX_ACTIVE_FIRES);
     // Everything that started is accounted for: out, lost, or still alight.
@@ -269,7 +284,7 @@ describe('the destruction guard', () => {
   });
 
   it('resets the budget for the next absence rather than spending it once', () => {
-    const game = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
+    const game = at({ ...built(19, 28, 11), cash: 0 });
     const first = game.catchUp(OFFLINE_CAP_SECONDS);
     const second = game.catchUp(OFFLINE_CAP_SECONDS);
     expect(first.firesLost).toBe(1);
@@ -277,7 +292,7 @@ describe('the destruction guard', () => {
   });
 
   it('loses nothing at all when the fire service can reach the fire in time', () => {
-    const game = at({ homes: 4, cash: 0, ...covered() });
+    const game = at({ ...housed(4), cash: 0, ...covered() });
     const report = game.catchUp(OFFLINE_CAP_SECONDS);
     expect(report.firesLost).toBe(0);
     expect(game.state.homes).toBe(4);
@@ -286,7 +301,7 @@ describe('the destruction guard', () => {
 
 describe('the away report', () => {
   it('says what started, what was put out and what was lost', () => {
-    const game = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
+    const game = at({ ...built(19, 28, 11), cash: 0 });
     const report = game.catchUp(6 * 3600);
     expect(report.firesStarted).toBeGreaterThan(0);
     expect(report.firesExtinguished).toBeGreaterThan(0);
@@ -302,7 +317,7 @@ describe('the away report', () => {
   });
 
   it('counts only this absence, not every fire the city has ever had', () => {
-    const game = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
+    const game = at({ ...built(19, 28, 11), cash: 0 });
     game.catchUp(6 * 3600);
     const second = game.catchUp(60);
     expect(second.firesStarted).toBeLessThan(10);
@@ -317,8 +332,8 @@ describe('fires resolve inside the catch-up loop', () => {
    * against a city that was not the one on fire.
    */
   it('leaves an uncovered city no worse off than a covered one', () => {
-    const bare = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
-    const safe = at({ homes: 19, shops: 28, industry: 11, cash: 0, fire: 2, fireStaff: 1 });
+    const bare = at({ ...built(19, 28, 11), cash: 0 });
+    const safe = at({ ...built(19, 28, 11), cash: 0, fire: 2, fireStaff: 1 });
     bare.catchUp(6 * 3600);
     safe.catchUp(6 * 3600);
     expect(safe.state.cash).toBeGreaterThan(bare.state.cash);
@@ -326,7 +341,7 @@ describe('fires resolve inside the catch-up loop', () => {
   });
 
   it('leaves no fire older than the response time when the absence ends', () => {
-    const game = at({ homes: 19, shops: 28, industry: 11, cash: 0 });
+    const game = at({ ...built(19, 28, 11), cash: 0 });
     game.catchUp(6 * 3600);
     const limit = Math.min(extinguishSeconds(game.state), BURN_OUT_SECONDS);
     for (const fire of game.state.fires) {
@@ -338,7 +353,7 @@ describe('fires resolve inside the catch-up loop', () => {
 
 describe('a fire never outlives its building', () => {
   it('drops fires whose building was destroyed under them', () => {
-    const game = at({ homes: 1, cash: 0 });
+    const game = at({ ...housed(1), cash: 0 });
     run(game, 6 * 3600);
     for (const fire of game.state.fires) {
       const of = fire.kind === 'home' ? game.state.homes : fire.kind === 'shop' ? game.state.shops : game.state.industry;
@@ -347,7 +362,7 @@ describe('a fire never outlives its building', () => {
   });
 
   it('leaves a city that burned down completely in a legal state', () => {
-    const game = at({ homes: 2, cash: 0 });
+    const game = at({ ...housed(2), cash: 0 });
     run(game, 12 * 3600);
     expect(game.state.homes).toBeGreaterThanOrEqual(0);
     expect(game.state.fires.length).toBeLessThanOrEqual(game.state.homes);

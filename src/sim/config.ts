@@ -111,29 +111,197 @@ export const ZONE_SHARE = {
 /** Rings of districts around the centre: 7x7 grid of districts. */
 export const MAX_DISTRICTS = 49;
 
-export interface Tier {
-  /** Shown in the zoning readout. */
-  readonly name: string;
-  /** Verb on the build button while this tier is active. */
-  readonly buildLabel: string;
-  /** Residents housed per building. */
-  readonly capacity: number;
-  /** Footprint width in world units (must stay under CELL). */
-  readonly width: number;
-  /** Height in world units. */
-  readonly height: number;
-  /** Pitched roofs read as houses; flat roofs read as blocks. */
-  readonly pitched: boolean;
-  /** Tall tiers get an aircraft warning light, which is what sells their scale. */
-  readonly beacon: boolean;
-}
+/**
+ * Residents one home houses, per building level.
+ *
+ * The four numbers the old global rezoning tiers carried, kept exactly: a
+ * level-0 house holds 4, an apartment block 16, a tower 70, an arcology 300.
+ * Keeping them means every constant that was solved against those capacities —
+ * RENT against the opening minute, WORKING_SHARE against the labour market —
+ * still means what it meant. What changed is *who* holds them: a level is a
+ * property of a cohort of buildings now, not of the whole city at once.
+ */
+export const LEVEL_CAPACITY = [4, 16, 70, 300] as const;
 
-export const TIERS: readonly Tier[] = [
-  { name: 'detached housing', buildLabel: 'Build home',            capacity: 4,   width: 2.2, height: 1.6,  pitched: true,  beacon: false },
-  { name: 'apartments',       buildLabel: 'Build apartment block', capacity: 16,  width: 2.6, height: 4.6,  pitched: false, beacon: false },
-  { name: 'towers',           buildLabel: 'Raise tower',           capacity: 70,  width: 2.8, height: 11.5, pitched: false, beacon: true  },
-  { name: 'arcologies',       buildLabel: 'Seal arcology',         capacity: 300, width: 3.0, height: 22.0, pitched: false, beacon: true  },
-];
+/** How many levels a building can climb through. */
+export const LEVELS = LEVEL_CAPACITY.length;
+
+/**
+ * What a building at each level *earns*, in level-0 buildings.
+ *
+ * An income ladder and nothing else, and the "nothing else" is load-bearing.
+ * The obvious generalisation — one ladder for capacity, jobs, trips and output
+ * alike — was built and measured, and it breaks the game in two places:
+ *
+ *   - a level-2 shop serving 17.5x the trips means the city needs 17.5x fewer
+ *     shops, so commercial land can never be filled. Measured over 24 hours,
+ *     auto-develop stalled at 7 shops of 31 and 65.2% developed against a 70%
+ *     annexation gate, and no policy annexed even once in a day;
+ *   - jobs scaling with capacity freezes the job/worker ratio at whatever it is
+ *     at level 0, which deletes the arc WORKING_SHARE is built around: young
+ *     cities are job-rich and pull people in, mature ones are worker-rich and
+ *     have to go and find them work.
+ *
+ * So levels raise what a building is worth to the ledger, and leave the number
+ * of people it employs and the number of customers it serves per plot alone.
+ * A district still needs more shops as its towers fill, which is what fills the
+ * land, and the land filling is what makes annexation reachable.
+ *
+ * Derived from LEVEL_CAPACITY rather than typed out, so the two can never drift.
+ */
+export const LEVEL_SCALE = LEVEL_CAPACITY.map((c) => c / LEVEL_CAPACITY[0]) as readonly number[];
+
+/** What the zoning readout calls a level, and the verb on the build button. */
+export const LEVEL_NAMES = ['detached housing', 'apartments', 'towers', 'arcologies'] as const;
+
+// --------------------------------------------------------------- occupancy
+
+/**
+ * Seconds for occupancy to close ~63% of the gap to its target.
+ *
+ * Slower than demand (25s) and than happiness (45s) on purpose: people move
+ * house on a longer clock than a price moves or a mood turns. Same exponential
+ * form as both, and for the same reason — it saturates at 1 for any step size,
+ * so a 60-second offline catch-up step lands where 60 one-second ticks would.
+ */
+export const OCCUPANCY_TAU = 120;
+
+/**
+ * What share of its capacity a perfectly happy zone fills.
+ *
+ * Not 1. A city at literally full occupancy has no slack for anyone to move
+ * into, and a bar pinned at 100% tells the player nothing. 0.92 leaves the top
+ * of the gauge as headroom the demand term can reach into.
+ */
+export const OCCUPANCY_FULL = 0.92;
+
+/** How far a zone's own demand can pull its occupancy target either way. */
+export const OCCUPANCY_DEMAND = 0.15;
+
+
+
+/**
+ * What share of a zone stays put however bad things get.
+ *
+ * The occupancy twin of HAPPINESS_FLOOR, and there for the same reason it is:
+ * a neglected city should feel like one that has stopped growing, not one that
+ * has been switched off. Without a floor, occupancy reaches zero, residents
+ * reach zero, and income reaches *exactly* zero — measured, a city that spent
+ * its treasury on shops and no services ended a 24-hour run with 33 in the bank
+ * and no way to earn the 130 a hospital costs. That is a soft-lock, which is
+ * worse than the loss the floor is protecting against.
+ *
+ * 0.08 is well under OCCUPANCY_EMPTY, so the vacancy clock still runs and
+ * buildings still get boarded up. What it buys is a trickle of income to climb
+ * back with: 8% of a zone at the happiness floor is about 4% of peak earnings.
+ */
+export const OCCUPANCY_FLOOR = 0.08;
+
+/** Below this occupancy a zone is sitting empty and starts its vacancy clock. */
+export const OCCUPANCY_EMPTY = 0.25;
+
+/**
+ * The happiness at which a zone starts emptying out fast enough to rot.
+ *
+ * Derived rather than chosen, because it is a consequence of the other three:
+ * occupancy runs linearly from OCCUPANCY_FLOOR at happiness 0 to
+ * OCCUPANCY_FULL at happiness 1, so this is simply where that line crosses
+ * OCCUPANCY_EMPTY. Naming it is still worth it — it is the number the HUD and
+ * the tests mean by "the city is losing people" — but it must not be tuned on
+ * its own or the three constants stop agreeing.
+ *
+ * The line used to start at a *threshold* — occupancy zero at happiness 0.30,
+ * ramping up from there — and that turned out to double-count unhappiness. The
+ * ledger already scales with happiness through HAPPINESS_FLOOR, so a city at
+ * 0.34 happiness was earning 0.55 of its rate on 5% of its residents: 3% of
+ * peak. Measured, that made the opening a 45-minute stall where the old build
+ * had a two-minute one, and the tutorial the happiness gate is supposed to be
+ * became a wait. A floor-plus-range keeps the mechanic — an unhappy city really
+ * does lose the people in the houses it built — without charging for it twice.
+ */
+export const HAPPINESS_MIN_OCCUPANCY =
+  (OCCUPANCY_EMPTY - OCCUPANCY_FLOOR) / (OCCUPANCY_FULL - OCCUPANCY_FLOOR);
+
+/**
+ * Seconds a zone must sit below OCCUPANCY_EMPTY before anything is written off.
+ *
+ * The whole difference between a dip and a decline. Five minutes is long enough
+ * that a bad minute costs nothing — occupancy moves on a 120s constant, so a
+ * transient cannot hold the zone under the line for anything like this long —
+ * and short enough that a genuinely emptied city visibly rots.
+ */
+export const ABANDON_SECONDS = 300;
+
+/**
+ * Seconds for a fully vacant zone to write off its whole standing stock, and to
+ * bring it all back.
+ *
+ * Rates rather than counts, so the pace scales with the city: a 24-home
+ * district loses one home every 50 seconds, a 1,176-home one loses one a
+ * second. Recovery is four times faster than decay, which is not symmetry for
+ * its own sake — coming back has to feel like relief, and an idle game that
+ * makes you wait as long to repair as you waited to break is one you quit.
+ */
+export const ABANDON_SPREAD_SECONDS = 1_200;
+export const RECOVER_SPREAD_SECONDS = 300;
+
+/**
+ * Abandonments a single `catchUp` call may make, however long the absence.
+ *
+ * The same guard CATCHUP_MAX_LOSSES puts on fire, at three rather than one
+ * because these are recoverable: a returning player can see three boarded-up
+ * plots and get them back, where a building lost to fire is gone. Without it a
+ * twelve-hour absence from an unhappy city returns a ruin nobody watched form.
+ */
+export const CATCHUP_MAX_ABANDONED = 3;
+
+// ----------------------------------------------------------------- levelling
+
+/**
+ * The three gates a building has to pass to climb a level, all at once.
+ *
+ * Occupancy says the building is wanted, happiness says the city is worth
+ * expanding into, and education (LEVEL_EDUCATION) says the people are trained
+ * for what the next level is. Any one of them short holds the cohort still —
+ * they are an AND, not a weighted score, because a weighted score would let a
+ * city buy its way past a gate it has not actually cleared.
+ *
+ * 0.65 and 0.55 are set against what coverage a city can actually reach: a
+ * fully served city with parks settles at happiness 1 and occupancy 0.92, and
+ * one with the three services but no parks at 0.82 and 0.68. So the park-less
+ * city still grows, slowly, and a city short of a whole service (0.60 or less)
+ * does not.
+ */
+export const LEVEL_UP_OCCUPANCY = 0.65;
+export const LEVEL_UP_HAPPINESS = 0.55;
+
+/**
+ * Seconds for a zone to promote its entire eligible stock by one level.
+ *
+ * A rate, like abandonment, so a big city climbs faster in absolute terms and
+ * at the same pace per building. Five minutes a level and four levels to climb
+ * puts a fully gated district about twenty minutes from detached housing to
+ * arcologies — against the old rezone, which was one button and 3,000 cash.
+ * The pacing lever moved from the treasury to the happiness panel, which is the
+ * point of the change.
+ */
+export const LEVEL_UP_SECONDS = 300;
+
+/**
+ * Education coverage a building needs before it may climb *to* each level.
+ *
+ * Indexed by the level being climbed to, so level 0 asks for nothing.
+ *
+ * Education gates levelling and is deliberately *not* a happiness term. The
+ * four happiness weights were calibrated to sum to exactly 1 last cycle, and a
+ * fifth would re-open that whole calibration for nothing — coverage would buy a
+ * little more income and the skyline would be unaffected. As a gate it does
+ * something happiness cannot: it decides how tall the city is allowed to get.
+ * Do not "tidy" it into the happiness sum.
+ *
+ * Zero throughout until there is anything that supplies education.
+ */
+export const LEVEL_EDUCATION = [0, 0, 0, 0] as const;
 
 /**
  * Cash per resident per second.
@@ -234,12 +402,6 @@ export const INDUSTRY_GROWTH = 1.2;
  * nothing at all and was not civic would simply never be worth a plot.
  */
 export const INDUSTRY_BONUS = 0.11;
-
-export const REZONE_BASE = 3_000;
-export const REZONE_GROWTH = 26;
-
-/** Rezoning is a district-wide programme; it needs a district worth building on. */
-export const REZONE_MIN_HOMES = 12;
 
 export const ANNEX_BASE = 60_000;
 export const ANNEX_GROWTH = 3.4;
