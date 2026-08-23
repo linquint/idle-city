@@ -230,8 +230,24 @@ describe('pacing', () => {
   it('does not open with a minute of nothing to do', () => {
     // The first house has to pay for itself fast enough that the second one is
     // a decision rather than a wait. This is the guard on that.
+    //
+    // Counted in *purchases* rather than in homes, because commerce is now
+    // priced beside housing rather than behind it: a player buying whatever is
+    // cheapest gets 7 homes and 7 shops in the opening minute where they used
+    // to get 8 homes and almost no shops. The opening got busier, not thinner —
+    // but the guard has to say so, or "shops are affordable now" reads as a
+    // regression in the one place it is most clearly an improvement.
     const opening = playFor(60);
-    expect(opening.state.homes).toBeGreaterThanOrEqual(8);
+    expect(opening.state.homes + opening.state.shops).toBeGreaterThanOrEqual(8);
+    // And the pacing this was really guarding — how fast a house pays for
+    // itself, which is RENT against HOME_BASE and nothing to do with shops —
+    // measured on its own rather than through a mixed policy.
+    const housingOnly = new Game(createState(0));
+    for (let i = 0; i < 600; i++) {
+      housingOnly.advance(0.1);
+      while (housingOnly.buildHome());
+    }
+    expect(housingOnly.state.homes).toBeGreaterThanOrEqual(8);
   });
 
   it('still takes real time to fill the first district', () => {

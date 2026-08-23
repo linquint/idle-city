@@ -123,8 +123,34 @@ export const TIERS: readonly Tier[] = [
  */
 export const RENT = 0.14;
 
-/** Each shop adds this share of base income. */
-export const SHOP_BONUS = 0.18;
+/**
+ * Each shop adds this share of base income.
+ *
+ * Retuned with the commercial price curve below, not after it — the two are one
+ * change. At 90 / 1.22 the first ten shops cost 2,579 and bought 1.80x base
+ * income, which is 1,433 of treasury for each 1.0 of multiplier. At 9 / 1.18
+ * those same ten shops cost 212, so leaving the bonus at 0.18 would have been a
+ * twelve-fold discount on the strongest income multiplier in the game and the
+ * whole opening would have collapsed into "buy shops, ignore everything else".
+ * 0.05 puts the price of a multiplier back at 423 — still cheaper than it was,
+ * because it should be, but a third of the way rather than a twelfth.
+ *
+ * Chosen by sweeping 0.03 to 0.09 against three measured targets and taking the
+ * only value that clears all of them (see tools/economy.calibrate.mjs):
+ *
+ *   - share of income attributable to the shop multiplier, at 1h / 6h / 24h.
+ *     Was 61/60/60 greedy and 57/66/68 disciplined — already over the 60% line
+ *     before this change. Now 39/39/36 and 28/39/39, with auto-develop at 9%.
+ *   - time to first rezone and first annex, against the pre-change build.
+ *     Greedy 56.8m -> 59.8m (+5%) and 1.63h -> 1.43h (-12%); disciplined 54.8m
+ *     -> 52.0m (-5%) and 1.28h -> 1.41h (+10%). All inside +-20%. At 0.07 the
+ *     greedy first annex ran 25% early and at 0.09 the first rezone ran 21%
+ *     early; at 0.03 the greedy first rezone ran 24% late.
+ *   - no demand signal newly pinned. See the note in DEMAND_SCALE: the endgame
+ *     pinning under greedy and disciplined predates this change and is a limit
+ *     of a constant scale, not of the price. It got shorter, not longer.
+ */
+export const SHOP_BONUS = 0.05;
 
 /** Each district past the first adds this share of base income (civic economies of scale). */
 export const DISTRICT_BONUS = 0.05;
@@ -132,14 +158,48 @@ export const DISTRICT_BONUS = 0.05;
 export const HOME_BASE = 8;
 export const HOME_GROWTH = 1.14;
 
-export const SHOP_BASE = 90;
-export const SHOP_GROWTH = 1.22;
+/**
+ * Commerce opens at about what a house costs and compounds a little faster.
+ *
+ * 9 against HOME_BASE's 8 is a 12.5% gap at the first of each; by the twentieth
+ * a shop is 246 against a home's 110, which is 2.2x — "a bit faster", not a
+ * different curve. It was 11.3x at the first and 43.7x at the twentieth, which
+ * is what made commerce a thing you unlocked rather than a thing you chose.
+ *
+ * The number to keep an eye on is not this pair but the *plot ratio* it
+ * compounds over. A district sells 28 commercial plots against 19 residential —
+ * 47% more — so the faster curve runs over 47% more buildings, and filling one
+ * district's commerce still costs 5,098 against housing's 632, or 8.1x. That
+ * ratio is inverted against ZONE_SHARE (R 0.48, C 0.31), which was solved on
+ * *zoned* land; only 19 of a district's 43 zoned residential plots front a
+ * street, while all 28 commercial ones do. Pricing has to be judged against the
+ * frontage split, and the 8.1x is what says commerce is still the expensive
+ * half of a district even at these numbers — it was 169x before.
+ *
+ * One thing this genuinely changes: the demand surcharge starts biting. It used
+ * to be inert in the opening ten minutes (worst +0%, 2 shops open under a
+ * discount-chasing player) and peaked at +31% across a whole day. Now that
+ * player has 12 shops open inside ten minutes and is paying +20% for them, and
+ * the run peak is +56% against PRICE_SURCHARGE_MAX's +60% ceiling. The
+ * surcharge is what stops "buy shops, ignore everything else" now, and it is
+ * doing that four points short of saturating — so the cap still bites and is
+ * still not the binding constraint. Raising it would be a change to the model
+ * rather than a repair.
+ */
+export const SHOP_BASE = 9;
+export const SHOP_GROWTH = 1.18;
 
 /**
- * Industry is priced between a shop and a rezone, and compounds more slowly
- * than commerce does. There are only 19 industrial plots to a district against
- * 28 commercial ones, so a steeper curve would price the zone out before the
- * demand loop ever had a chance to ask for it.
+ * Industry is priced between a shop and a rezone.
+ *
+ * It used to compound more slowly than commerce as well; bringing SHOP_GROWTH
+ * down to 1.18 has left 1.2 marginally the steeper of the two, which is fine
+ * and is not worth a retune: a district holds 11 industrial plots against 28
+ * commercial, so the steeper curve runs over less than half the buildings and
+ * a full district's industry still costs a fraction of its commerce. Measured
+ * over 24 hours after the commercial rebalance, every policy still builds
+ * industry out — 9 under auto-develop, 59 disciplined, 65 greedy — so the
+ * demand loop is still what gates the zone rather than the price.
  */
 export const INDUSTRY_BASE = 240;
 export const INDUSTRY_GROWTH = 1.2;
@@ -250,7 +310,7 @@ export const DEMAND_TAU = 25;
  * stays derived from the same equilibrium the zoning budget is.
  *
  * Measured over 24 hours: nothing pins under idle or auto-develop, and
- * auto-develop ends at R +0.65 / C -0.03 / I -0.02 — lively, and well short of
+ * auto-develop ends at R +0.57 / C -0.02 / I -0.02 — lively, and well short of
  * the bounds.
  *
  * The honest limit of a *constant* scale, also measured: under the two policies

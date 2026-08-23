@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   ANNEX_MIN_OCCUPANCY,
+  FRONTAGE_TARGET,
   HOME_BASE,
   INDUSTRY_BASE,
   MAX_DISTRICTS,
   REZONE_MIN_HOMES,
   SHOP_BASE,
+  SHOP_BONUS,
   TIERS,
 } from '../src/sim/config';
 import {
@@ -51,6 +53,65 @@ describe('costs', () => {
   it('discounts what the city wants and surcharges what it has too much of', () => {
     expect(homeCost(state({ homes: 5, demandR: 0.8 }))).toBeLessThan(homeCost(state({ homes: 5 })));
     expect(shopCost(state({ shops: 5, demandC: -0.8 }))).toBeGreaterThan(shopCost(state({ shops: 5 })));
+  });
+});
+
+/**
+ * Housing and commerce are two curves out of one starting price now, rather
+ * than two different games. A shop used to open at 11.3x a house and reach
+ * 43.7x by the twentieth of each, which made commerce something you unlocked;
+ * it opens at 1.13x and reaches 2.24x, which makes it something you choose.
+ *
+ * Undiscounted throughout: a fresh city sits at zero demand, so these are the
+ * constants themselves and not what a demand swing did to them.
+ */
+describe('residential and commercial parity', () => {
+  const home = (n: number): number => homeCost(state({ homes: n }));
+  const shop = (n: number): number => shopCost(state({ shops: n }));
+
+  it('opens both types at within 25% of each other', () => {
+    const gap = Math.abs(shop(0) - home(0)) / Math.max(shop(0), home(0));
+    expect(gap).toBeLessThanOrEqual(0.25);
+  });
+
+  it('has commerce compounding faster, but only somewhat', () => {
+    const ratio = shop(20) / home(20);
+    expect(ratio).toBeGreaterThanOrEqual(1.5);
+    expect(ratio).toBeLessThanOrEqual(3);
+    // Faster at every step, not just at the twentieth: the gap only ever opens.
+    for (let n = 1; n <= 40; n++) {
+      expect(shop(n) / home(n)).toBeGreaterThan(shop(n - 1) / home(n - 1));
+    }
+  });
+
+  /**
+   * The trap this change had to avoid. Cheap shops are only a rebalance if the
+   * bonus moves with them; left alone, the strongest income multiplier in the
+   * game goes on sale and the opening collapses into one button.
+   */
+  it('keeps the price of the shop multiplier from collapsing', () => {
+    const tenShops = Array.from({ length: 10 }, (_, n) => shop(n)).reduce((a, b) => a + b, 0);
+    const perMultiplier = tenShops / (SHOP_BONUS * 10);
+    // Cheaper than it was — 1,433 — because that was the point, but nowhere
+    // near the 118 that leaving SHOP_BONUS at 0.18 would have made it.
+    expect(perMultiplier).toBeGreaterThan(300);
+    expect(perMultiplier).toBeLessThan(1_433);
+  });
+
+  /**
+   * A district sells 28 commercial plots against 19 residential, so the faster
+   * curve compounds over 47% more buildings. Commerce is still the expensive
+   * half of a district — that is what stops "shops are cheap now" becoming
+   * "shops are free".
+   */
+  it('leaves commerce the dearer half of a district to fill', () => {
+    const fill = (cost: (n: number) => number, plots: number): number =>
+      Array.from({ length: plots }, (_, n) => cost(n)).reduce((a, b) => a + b, 0);
+    const housing = fill(home, FRONTAGE_TARGET.residential);
+    const commerce = fill(shop, FRONTAGE_TARGET.commercial);
+    expect(FRONTAGE_TARGET.commercial / FRONTAGE_TARGET.residential).toBeCloseTo(1.47, 2);
+    expect(commerce).toBeGreaterThan(housing * 4);
+    expect(commerce).toBeLessThan(housing * 20);
   });
 });
 
