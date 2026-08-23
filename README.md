@@ -69,6 +69,20 @@ about the same as a city of forty.
 - Fog depths are measured from the camera, so they track the orbit distance as
   well as the size of the city.
 
+## Deploying
+
+The game is a static bundle — no server, no API, saves live in `localStorage` —
+so GitHub Pages serves it as-is. `.github/workflows/deploy.yml` builds `dist/`
+and publishes it on every push to `master`.
+
+Turn it on once, under **Settings → Pages → Build and deployment**, by setting
+the source to **GitHub Actions**. The site then lands at
+`https://<owner>.github.io/idle-city/`.
+
+`base: './'` in `vite.config.ts` keeps every asset path relative, so the bundle
+works at that subpath, at a custom domain, or opened from disk without a
+rebuild.
+
 ## Balance
 
 Every tunable is in `src/sim/config.ts`, and nothing else in that file imports
