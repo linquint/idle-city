@@ -10,6 +10,9 @@ import {
 import {
   civicBuildings,
   cohortTotal,
+  mergeCapacity,
+  mergedCohort,
+  plotsOf,
   happinessTarget,
   homeCapacity,
   industryCapacity,
@@ -62,12 +65,16 @@ afterEach(() => {
 
 describe('round trip', () => {
   it('restores every field', () => {
-    const state = { ...createState(0), cash: 1234.5, ...housed(40, 2), ...trading(7), districts: 3 };
+    // 24 towers on three districts: 48 of its 72 housing plots, and inside the
+    // ~31 pairs the land offers. A merged level is two plots a building now, so
+    // a round trip is only a round trip for a city that fits.
+    const state = { ...createState(0), cash: 1234.5, ...housed(24, 2), ...trading(7), districts: 3 };
     const at = save(state, 5_000);
     const back = load(6_000);
     expect(back).not.toBeNull();
-    expect(back).toMatchObject({ cash: 1234.5, homes: 40, shops: 7, districts: 3 });
-    expect(back?.homeLevels).toEqual([0, 0, 40, 0]);
+    expect(back).toMatchObject({ cash: 1234.5, homes: 24, shops: 7, districts: 3 });
+    expect(back?.homeLevels).toEqual([0, 0, 24, 0]);
+    expect(back?.mergedR).toBe(24);
     expect(back?.savedAt).toBe(at);
     expect(secondsAway(back!, 6_000)).toBe(1);
   });
@@ -121,8 +128,10 @@ describe('migration', () => {
     expect(back!.cash).toBe(0);
     expect(back!.elapsed).toBe(0);
     expect(back!.districts).toBe(MAX_DISTRICTS);
-    expect(back!.homes).toBe(homeCapacity(back!));
-    expect(back!.shops).toBe(shopCapacity(back!));
+    // Plots, not buildings: `tier: 99` clamps to the top level, every building
+    // there stands on two plots, and the land is what bounds the pair of them.
+    expect(plotsOf(back!, 'home')).toBe(homeCapacity(back!));
+    expect(plotsOf(back!, 'shop')).toBe(shopCapacity(back!));
   });
 
   it('never leaves buildings on land the save no longer owns', () => {
@@ -430,7 +439,7 @@ describe('the v4 migration', () => {
   });
 });
 
-describe('the v5 migration', () => {
+describe('the v6 migration', () => {
   /** What a v4 save looks like: one global tier, no cohorts, no occupancy. */
   const v4 = {
     version: 4,
@@ -453,7 +462,10 @@ describe('the v5 migration', () => {
     fires: [{ kind: 'shop', index: 3, startedAt: 8_950 }],
     fireCursor: 42,
     fireHazard: 0.31,
-    tier: 2,
+    // Tier 1 rather than 2, so this city still fits its one district under v6.
+    // A tier-2 city of 19 homes wants 38 plots of the 24 a district sells; the
+    // clamp that follows from that has a test of its own below.
+    tier: 1,
     districts: 1,
     earned: 400_000,
     autoDevelop: true,
@@ -462,12 +474,36 @@ describe('the v5 migration', () => {
 
   it('turns a global tier into a cohort of every standing building', () => {
     const back = migrate(v4, 2_000)!;
-    expect(back.homeLevels).toEqual([0, 0, 19, 0]);
-    expect(back.shopLevels).toEqual([0, 0, 20, 0]);
-    expect(back.industryLevels).toEqual([0, 0, 7, 0]);
+    expect(back.homeLevels).toEqual([0, 19, 0, 0]);
+    expect(back.shopLevels).toEqual([0, 20, 0, 0]);
+    expect(back.industryLevels).toEqual([0, 7, 0, 0]);
     expect(back.version).toBe(SAVE_VERSION);
+    // Nothing below MERGE_LEVEL has merged, so no parcels are claimed either.
+    expect([back.mergedR, back.mergedC, back.mergedI]).toEqual([0, 0, 0]);
     // And the field itself is gone rather than carried along dead.
     expect('tier' in back).toBe(false);
+  });
+
+  it('gives a tier the parcels its footprint implies', () => {
+    // A v5 or v4 city above MERGE_LEVEL was never told how much land it was
+    // standing on, because merging did not exist. The cohorts are believed and
+    // the parcels are raised to match, which is what opens such a save with its
+    // skyline intact rather than flattened.
+    const back = migrate({ ...v4, tier: 2, homes: 10, shops: 10, industry: 3 }, 0)!;
+    expect(back.homeLevels).toEqual([0, 0, 10, 0]);
+    expect(back.mergedR).toBe(10);
+    expect(plotsOf(back, 'home')).toBe(20);
+  });
+
+  it('flattens a city taller than the land can now carry', () => {
+    // 19 towers want 38 plots and 19 pairs; a district sells 24 plots and offers
+    // about ten pairs. What cannot stand is demoted tallest-first and what still
+    // does not fit is shed from the newest end.
+    const back = migrate({ ...v4, tier: 2 }, 0)!;
+    expect(plotsOf(back, 'home')).toBeLessThanOrEqual(homeCapacity(back));
+    expect(mergedCohort(back.homeLevels)).toBe(back.mergedR);
+    expect(back.mergedR).toBeLessThanOrEqual(mergeCapacity(back, 'home'));
+    expect(cohortTotal(back.homeLevels)).toBe(back.homes - back.abandonedR);
   });
 
   it('opens a v4 save with its city intact', () => {
@@ -558,12 +594,62 @@ describe('the v5 migration', () => {
     expect(back.driftC).toBe(-1);
   });
 
-  it('finds a v4 save under its own key when there is no v5 one', () => {
+  it('finds a v4 save under its own key when there is no v6 one', () => {
     localStorage.setItem('idle-city/save/v4', JSON.stringify(v4));
     const state = load(2_000)!;
     expect(state.homes).toBe(19);
     expect(state.version).toBe(SAVE_VERSION);
-    expect(state.homeLevels).toEqual([0, 0, 19, 0]);
+    expect(state.homeLevels).toEqual([0, 19, 0, 0]);
+  });
+
+  /**
+   * The upgrade the player actually takes: a v5 city, written before parcels
+   * existed, opening on a build that has them.
+   */
+  it('opens a v5 save with everything it had', () => {
+    const v5 = {
+      version: 5,
+      cash: 4_321,
+      elapsed: 12_000,
+      homes: 20,
+      shops: 12,
+      industry: 5,
+      homeLevels: [8, 12, 0, 0],
+      shopLevels: [12, 0, 0, 0],
+      industryLevels: [5, 0, 0, 0],
+      districts: 2,
+      parks: 4,
+      hospitals: 2,
+      police: 1,
+      fire: 1,
+      schools: 1,
+      universities: 0,
+      happiness: 0.81,
+      demandR: 0.25,
+      demandC: -0.15,
+      demandI: 0.05,
+      fires: [{ kind: 'home', index: 2, startedAt: 11_950 }],
+      fireCursor: 15,
+      earned: 55_000,
+      savedAt: 1_000,
+    };
+    const back = migrate(v5, 2_000)!;
+    expect(back).toMatchObject({
+      cash: 4_321,
+      homes: 20,
+      shops: 12,
+      industry: 5,
+      districts: 2,
+      demandR: 0.25,
+      demandC: -0.15,
+      demandI: 0.05,
+      happiness: 0.81,
+    });
+    expect(back.homeLevels).toEqual([8, 12, 0, 0]);
+    expect(back.fires).toEqual([{ kind: 'home', index: 2, startedAt: 11_950 }]);
+    // The fields v6 added, at the defaults a city that has never merged has.
+    expect([back.mergedR, back.mergedC, back.mergedI]).toEqual([0, 0, 0]);
+    expect(back.version).toBe(SAVE_VERSION);
   });
 });
 

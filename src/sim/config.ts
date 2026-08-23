@@ -112,19 +112,60 @@ export const ZONE_SHARE = {
 export const MAX_DISTRICTS = 49;
 
 /**
- * Residents one home houses, per building level.
+ * Residents one *plot* of housing holds, per building level.
  *
  * The four numbers the old global rezoning tiers carried, kept exactly: a
  * level-0 house holds 4, an apartment block 16, a tower 70, an arcology 300.
  * Keeping them means every constant that was solved against those capacities —
- * RENT against the opening minute, WORKING_SHARE against the labour market —
- * still means what it meant. What changed is *who* holds them: a level is a
- * property of a cohort of buildings now, not of the whole city at once.
+ * RENT against the opening minute, WORKING_SHARE against the labour market,
+ * LEVEL_EDUCATION against what a district of towers holds — still means what it
+ * meant.
+ *
+ * Per plot, and that qualifier is what merging cost this comment. A tower
+ * covers two plots (LEVEL_FOOTPRINT), so the *building* holds 140 and the land
+ * under it still holds 70 a plot. Reading these as per-building instead would
+ * halve the population of every merged district, which is not a small change to
+ * one number: it is a change to the denominator of every coverage in the game.
+ * Measured, it lets a district of towers be covered by schools alone and takes
+ * the top of the skyline away from the university. See LEVEL_HOUSING.
  */
 export const LEVEL_CAPACITY = [4, 16, 70, 300] as const;
 
 /** How many levels a building can climb through. */
 export const LEVELS = LEVEL_CAPACITY.length;
+
+/**
+ * Plots a building covers at each level.
+ *
+ * The two ones and the two twos are the whole of the merging mechanic: levels 0
+ * and 1 stand on a single plot, climbing to level 2 merges a building with its
+ * neighbour, and level 3 grows upward on that same footprint. It stops at two
+ * because two is what the land offers — see `parcelOrder` in layout.ts, which
+ * carries the measurement. A [1, 1, 2, 4] ladder was measured and is not
+ * buildable: a district holds 0.0 residential quads.
+ */
+export const LEVEL_FOOTPRINT = [1, 1, 2, 2] as const;
+
+/**
+ * The first level that stands on a merged parcel.
+ *
+ * Derived rather than typed, so the ladder above is the only place the shape of
+ * the mechanic is stated. Promotion *to* this level is the merge; everything
+ * above it grows on the footprint the merge bought.
+ */
+export const MERGE_LEVEL = LEVEL_FOOTPRINT.findIndex((f) => f > 1);
+
+/**
+ * Residents one *building* holds at each level: its plots times what a plot of
+ * that level holds.
+ *
+ * Derived rather than typed for the same reason LEVEL_SCALE is: the ladder and
+ * the footprint are each stated once, and a change to either cannot leave the
+ * other behind.
+ */
+export const LEVEL_HOUSING = LEVEL_CAPACITY.map(
+  (c, l) => c * (LEVEL_FOOTPRINT[l] ?? 1),
+) as readonly number[];
 
 /**
  * What a building at each level *earns*, in level-0 buildings.
@@ -147,9 +188,13 @@ export const LEVELS = LEVEL_CAPACITY.length;
  * A district still needs more shops as its towers fill, which is what fills the
  * land, and the land filling is what makes annexation reachable.
  *
- * Derived from LEVEL_CAPACITY rather than typed out, so the two can never drift.
+ * Derived from LEVEL_CAPACITY rather than typed out, so the two can never drift,
+ * and multiplied by the footprint for the same reason LEVEL_HOUSING is: this is
+ * what one *building* earns, and a merged one is standing on two plots.
  */
-export const LEVEL_SCALE = LEVEL_CAPACITY.map((c) => c / LEVEL_CAPACITY[0]) as readonly number[];
+export const LEVEL_SCALE = LEVEL_CAPACITY.map(
+  (c, l) => (c / LEVEL_CAPACITY[0]) * (LEVEL_FOOTPRINT[l] ?? 1),
+) as readonly number[];
 
 /** What the zoning readout calls a level, and the verb on the build button. */
 export const LEVEL_NAMES = ['detached housing', 'apartments', 'towers', 'arcologies'] as const;

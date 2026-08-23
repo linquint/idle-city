@@ -32,6 +32,7 @@ import {
   parkBlocker,
   parkCapacity,
   parkCost,
+  plotsOf,
   priceModifier,
   population,
   recreationCoverage,
@@ -282,13 +283,18 @@ export class Hud {
     const homes = homeCapacity(s);
     const shops = shopCapacity(s);
     const industry = industryCapacity(s);
-    n.plotsResidential.textContent = `${fmtInt(s.homes)}/${fmtInt(homes)}`;
-    n.plotsCommercial.textContent = `${fmtInt(s.shops)}/${fmtInt(shops)}`;
-    n.plotsIndustrial.textContent = `${fmtInt(s.industry)}/${fmtInt(industry)}`;
+    // Plots taken, not buildings owned. A merged building covers two plots, so
+    // a row that counted buildings would show a district emptying as it grew.
+    const takenR = plotsOf(s, 'home');
+    const takenC = plotsOf(s, 'shop');
+    const takenI = plotsOf(s, 'industry');
+    n.plotsResidential.textContent = `${fmtInt(takenR)}/${fmtInt(homes)}`;
+    n.plotsCommercial.textContent = `${fmtInt(takenC)}/${fmtInt(shops)}`;
+    n.plotsIndustrial.textContent = `${fmtInt(takenI)}/${fmtInt(industry)}`;
     n.plots.setAttribute(
       'aria-label',
-      `Plots: residential ${s.homes} of ${homes}, ` +
-        `commercial ${s.shops} of ${shops}, industrial ${s.industry} of ${industry}`,
+      `Plots: residential ${takenR} of ${homes}, ` +
+        `commercial ${takenC} of ${shops}, industrial ${takenI} of ${industry}`,
     );
     n.districts.textContent = `${s.districts} / ${MAX_DISTRICTS}`;
     n.happiness.textContent = pct(s.happiness);
@@ -430,6 +436,10 @@ export class Hud {
     if (report.homes > 0) rows.push(['Homes built', fmtInt(report.homes)]);
     if (report.shops > 0) rows.push(['Shops opened', fmtInt(report.shops)]);
     if (report.industry > 0) rows.push(['Works built', fmtInt(report.industry)]);
+    // Reported alongside the counts rather than folded into them: a merge takes
+    // two buildings off the books without taking anything off the map, so the
+    // count on its own reads as a loss.
+    if (report.merges > 0) rows.push(['Buildings merged', fmtInt(report.merges)]);
     if (report.parks > 0) rows.push(['Parks laid out', fmtInt(report.parks)]);
     if (report.services > 0) rows.push(['Services opened', fmtInt(report.services)]);
     if (report.districts > 0) rows.push(['Districts annexed', fmtInt(report.districts)]);

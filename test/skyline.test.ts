@@ -117,7 +117,9 @@ describe('the skyline the renderer draws', () => {
     expect(cottages.get('roof:flat') ?? 0).toBe(0);
 
     // A whole district of arcologies: never pitched, and a mix of the other two.
-    buildings.sync(state(housed(24, 3)), 1);
+    // Ten of them rather than twenty-four — each stands on a merged parcel, and
+    // a district offers about ten pairs of housing frontage.
+    buildings.sync(state(housed(10, 3)), 1);
     const towers = counts();
     expect(towers.get('roof:pitched') ?? 0).toBe(0);
     expect(towers.get('roof:flat') ?? 0).toBeGreaterThan(0);

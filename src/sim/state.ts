@@ -55,7 +55,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /**
  * The entire game, in a handful of fields.
@@ -81,6 +81,24 @@ export interface GameState {
   homeLevels: LevelCohort;
   shopLevels: LevelCohort;
   industryLevels: LevelCohort;
+  /**
+   * Parcels of each zone holding one merged building, per LEVEL_FOOTPRINT.
+   *
+   * The second number a zone's land needs, and the reason capacity is counted in
+   * plots rather than buildings: `homes` says how many buildings there are and
+   * this says how much land they are standing on, because a level-2 building
+   * covers the two plots its merge consumed. `homes + mergedR` is the plots
+   * used, which is the quantity `homeCapacity` bounds.
+   *
+   * Not derivable from the cohorts, and the case that makes it so is a ruin: a
+   * merged building that is written off keeps both its plots — it is a boarded
+   * -up tower, not a boarded-up house — so the parcel stays merged while the
+   * cohort it was counted in does not. See `ParcelBook` for what the count
+   * indexes, and `Game.recover` for how such a ruin comes back.
+   */
+  mergedR: number;
+  mergedC: number;
+  mergedI: number;
   /**
    * Share of each zone's capacity that is actually filled, in [0, 1].
    *
@@ -217,6 +235,9 @@ export function createState(now = Date.now()): GameState {
     homeLevels: cohortOf(),
     shopLevels: cohortOf(),
     industryLevels: cohortOf(),
+    mergedR: 0,
+    mergedC: 0,
+    mergedI: 0,
     // An empty zone is neither full nor empty. Starting at OCCUPANCY_FULL means
     // the first house opens full rather than spending two minutes filling up,
     // and it is the value a loaded save defaults to for the same reason.

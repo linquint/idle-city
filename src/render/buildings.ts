@@ -1,8 +1,23 @@
 import * as THREE from 'three';
 import { hash01, mixSeed } from '../core/rng';
-import { CELL, CIVIC_SERVICES, LEVELS, SEED, SERVICES, type Service } from '../sim/config';
+import {
+  CELL,
+  CIVIC_SERVICES,
+  LEVELS,
+  SEED,
+  SERVICES,
+  type Service,
+} from '../sim/config';
+import { ZONE } from '../sim/citygen';
 import { cohortStart, cohortTotal, levelAt } from '../sim/economy';
-import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
+import {
+  createPlacement,
+  worldX,
+  worldZ,
+  type CityLayout,
+  type Coord,
+  type Placement,
+} from '../sim/layout';
 import type { GameState, LevelCohort, ZoneKind } from '../sim/state';
 import { Glow } from './glow';
 import { GrowableInstancedMesh } from './growable';
@@ -42,6 +57,16 @@ const HOME_STYLES: readonly LevelStyle[] = [
   { width: 2.8, height: 11.5, pitched: false, beacon: true },
   { width: 3.0, height: 22.0, pitched: false, beacon: true },
 ];
+
+/**
+ * The long side of a building standing on a merged parcel, in world units.
+ *
+ * Two plots less the same kerb gutter every other building leaves, so a tower
+ * spans its whole parcel rather than reading as two boxes touching. The short
+ * side stays the level's own width, which is what makes a merged building
+ * legible as one thing at a glance: nothing else in the city is oblong.
+ */
+const MERGED_SPAN = 2 * CELL - 1.2;
 
 /**
  * Everything that makes one building look unlike its neighbour, from its slot.
@@ -293,22 +318,24 @@ class LevelMeshes {
     index: number,
     slot: number,
     level: number,
-    cell: Coord,
+    at: Placement,
     scale: number,
     dummy: THREE.Object3D,
     tint: THREE.Color,
     roofs: Roofs,
     roofIndex: number,
   ): number {
-    const x = worldX(cell.x);
-    const z = worldZ(cell.z);
     const stretch = heightJitter(slot);
     const height = this.style.height * stretch;
-    const sx = widthJitter(slot);
-    const sz = depthJitter(slot);
+    // A merged parcel is drawn by stretching the level's own box along the
+    // parcel's axis rather than by a second geometry, exactly as the roofs and
+    // the jitter already do. One extra multiply, no extra draw call.
+    const span = at.plots > 1 ? MERGED_SPAN / this.style.width : 1;
+    const sx = widthJitter(slot) * (at.alongX ? span : 1);
+    const sz = depthJitter(slot) * (at.alongX ? 1 : span);
 
     dummy.rotation.set(0, 0, 0);
-    dummy.position.set(x, (height / 2) * scale, z);
+    dummy.position.set(at.x, (height / 2) * scale, at.z);
     dummy.scale.set(sx, stretch * scale, sz);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
@@ -344,6 +371,7 @@ class LevelMeshes {
 }
 
 const SHOP_H = 2.4;
+const SHOP_W = 3;
 
 /**
  * Shops are a single tier: a low box wearing a lit fascia under a dark cap.
@@ -365,7 +393,7 @@ class ShopMeshes {
   constructor(scene: THREE.Scene, capacity: number) {
     this.body = new GrowableInstancedMesh(
       scene,
-      new THREE.BoxGeometry(3, SHOP_H, 3),
+      new THREE.BoxGeometry(SHOP_W, SHOP_H, SHOP_W),
       new THREE.MeshLambertMaterial({ color: PALETTE.shop }),
       capacity,
       { castShadow: true, receiveShadow: true, name: 'shop:body' },
@@ -427,13 +455,12 @@ class ShopMeshes {
     this.standing = n;
   }
 
-  write(index: number, cell: Coord, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
-    const x = worldX(cell.x);
-    const z = worldZ(cell.z);
-    const sx = widthJitter(index);
-    const sz = depthJitter(index);
+  write(index: number, at: Placement, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
+    const span = at.plots > 1 ? MERGED_SPAN / SHOP_W : 1;
+    const sx = widthJitter(index) * (at.alongX ? span : 1);
+    const sz = depthJitter(index) * (at.alongX ? 1 : span);
     dummy.rotation.set(0, 0, 0);
-    dummy.position.set(x, (SHOP_H / 2) * scale, z);
+    dummy.position.set(at.x, (SHOP_H / 2) * scale, at.z);
     dummy.scale.set(sx, scale, sz);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
@@ -527,17 +554,20 @@ class IndustryMeshes {
     this.body.flush();
   }
 
-  write(index: number, cell: Coord, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
-    const x = worldX(cell.x);
-    const z = worldZ(cell.z);
+  write(index: number, at: Placement, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
+    const x = at.x;
+    const z = at.z;
+    const span = at.plots > 1 ? MERGED_SPAN / INDUSTRY_W : 1;
+    const sx = at.alongX ? span : 1;
+    const sz = at.alongX ? 1 : span;
     dummy.rotation.set(0, 0, 0);
     dummy.position.set(x, (INDUSTRY_H / 2) * scale, z);
-    dummy.scale.set(1, scale, 1);
+    dummy.scale.set(sx, scale, sz);
     dummy.updateMatrix();
     this.body.setMatrixAt(index, dummy.matrix);
     this.body.setColorAt(index, this.bodyColor(tint));
 
-    dummy.scale.setScalar(scale);
+    dummy.scale.set(sx * scale, scale, sz * scale);
     dummy.position.y = (INDUSTRY_H + 0.1) * scale;
     dummy.updateMatrix();
     this.roof.setMatrixAt(index, dummy.matrix);
@@ -545,10 +575,11 @@ class IndustryMeshes {
     // Off to a corner rather than centred: a stack on the ridge reads as a lift
     // shaft, a stack at the edge reads as a chimney.
     const nudge = hash01(index ^ 0x1f3a55c1) < 0.5 ? -1 : 1;
+    dummy.scale.setScalar(scale);
     dummy.position.set(
-      x + nudge * INDUSTRY_W * 0.34,
+      x + nudge * INDUSTRY_W * 0.34 * sx,
       (INDUSTRY_H + STACK_H / 2) * scale,
-      z - INDUSTRY_W * 0.28,
+      z - INDUSTRY_W * 0.28 * sz,
     );
     dummy.updateMatrix();
     this.stack.setMatrixAt(index, dummy.matrix);
@@ -831,9 +862,17 @@ export class Buildings {
   private readonly tint = new THREE.Color();
 
   private shownHomes = 0;
+  private shownMergedHomes = -1;
   private shownShops = 0;
   private shownTrading = -1;
+  private shownMergedShops = -1;
   private shownIndustry = 0;
+  private shownMergedIndustry = -1;
+  /**
+   * One reusable placement. `place` fills it rather than returning a fresh
+   * object, because `update` asks for one per in-flight building per frame.
+   */
+  private readonly at = createPlacement();
   /**
    * The cohort the scene is currently drawing, and where each level's run of
    * slots begins.
@@ -902,6 +941,7 @@ export class Buildings {
         this.homeGrowth.clear();
       }
       this.shownHomes = state.homes;
+      this.shownMergedHomes = state.mergedR;
       this.shownRuins = state.homes - cohortTotal(state.homeLevels);
       for (let l = 0; l < LEVELS; l++) this.shownHomeLevels[l] = state.homeLevels[l] ?? 0;
       cohortStart(this.shownHomeLevels, this.homeStart);
@@ -911,29 +951,39 @@ export class Buildings {
     // A shop closing changes no count the loop below would notice — the plot is
     // still there and still has a shop on it — so the ruin count is part of
     // what "changed" means for commerce.
+    // A merge is a rewrite as surely as a purchase is: it moves a shop onto a
+    // two-plot footprint and shifts every slot behind it down the list.
     const tradingShops = state.shops - state.abandonedC;
-    if (state.shops > this.shownShops) {
+    const shopsMerged = state.mergedC !== this.shownMergedShops;
+    if (state.shops > this.shownShops && !shopsMerged) {
       const from = this.shownShops;
       this.shopGrowth.stage(from, state.shops, now, 1.4, WAVE_BUDGET);
       this.shops.setStanding(tradingShops);
-      this.writeShops(from, state.shops, now);
-    } else if (state.shops < this.shownShops || tradingShops !== this.shownTrading) {
-      this.shopGrowth.clear();
+      this.writeShops(from, state.shops, state.mergedC, now);
+    } else if (
+      state.shops !== this.shownShops ||
+      shopsMerged ||
+      tradingShops !== this.shownTrading
+    ) {
+      if (state.shops < this.shownShops) this.shopGrowth.clear();
       this.shops.setStanding(tradingShops);
-      this.writeShops(0, state.shops, now);
+      this.writeShops(0, state.shops, state.mergedC, now);
     }
     this.shownShops = state.shops;
+    this.shownMergedShops = state.mergedC;
     this.shownTrading = tradingShops;
 
-    if (state.industry > this.shownIndustry) {
+    const worksMerged = state.mergedI !== this.shownMergedIndustry;
+    if (state.industry > this.shownIndustry && !worksMerged) {
       const from = this.shownIndustry;
       this.industryGrowth.stage(from, state.industry, now, 1.4, WAVE_BUDGET);
-      this.writeIndustry(from, state.industry, now);
-    } else if (state.industry < this.shownIndustry) {
-      this.industryGrowth.clear();
-      this.writeIndustry(0, state.industry, now);
+      this.writeIndustry(from, state.industry, state.mergedI, now);
+    } else if (state.industry !== this.shownIndustry || worksMerged) {
+      if (state.industry < this.shownIndustry) this.industryGrowth.clear();
+      this.writeIndustry(0, state.industry, state.mergedI, now);
     }
     this.shownIndustry = state.industry;
+    this.shownMergedIndustry = state.mergedI;
 
     for (const set of this.civic) {
       const count = Buildings.count(state, set.service);
@@ -951,6 +1001,7 @@ export class Buildings {
   /** Whether anything about the housing stock the scene is drawing has moved. */
   private homesChanged(state: Readonly<GameState>): boolean {
     if (state.homes !== this.shownHomes) return true;
+    if (state.mergedR !== this.shownMergedHomes) return true;
     for (let l = 0; l < LEVELS; l++) {
       if ((state.homeLevels[l] ?? 0) !== this.shownHomeLevels[l]) return true;
     }
@@ -988,7 +1039,7 @@ export class Buildings {
           i,
           slot,
           slot < standing ? l : -1,
-          this.layout.homeCell(slot),
+          this.layout.place(ZONE.residential, slot, this.shownMergedHomes, this.at),
           this.homeGrowth.scaleAt(slot, now),
           this.dummy,
           this.tint,
@@ -1002,13 +1053,13 @@ export class Buildings {
     this.roofs.end();
   }
 
-  private writeShops(from: number, to: number, now: number): void {
+  private writeShops(from: number, to: number, merged: number, now: number): void {
     this.shops.ensure(to);
     this.shopGrowth.ensure(to);
     for (let i = from; i < to; i++) {
       this.shops.write(
         i,
-        this.layout.shopCell(i),
+        this.layout.place(ZONE.commercial, i, merged, this.at),
         this.shopGrowth.scaleAt(i, now),
         this.dummy,
         this.tint,
@@ -1018,13 +1069,13 @@ export class Buildings {
     this.shops.flush();
   }
 
-  private writeIndustry(from: number, to: number, now: number): void {
+  private writeIndustry(from: number, to: number, merged: number, now: number): void {
     this.industry.ensure(to);
     this.industryGrowth.ensure(to);
     for (let i = from; i < to; i++) {
       this.industry.write(
         i,
-        this.layout.industryCell(i),
+        this.layout.place(ZONE.industrial, i, merged, this.at),
         this.industryGrowth.scaleAt(i, now),
         this.dummy,
         this.tint,
@@ -1101,7 +1152,7 @@ export class Buildings {
         index,
         slot,
         level,
-        this.layout.homeCell(slot),
+        this.layout.place(ZONE.residential, slot, this.shownMergedHomes, this.at),
         scale,
         this.dummy,
         this.tint,
@@ -1115,12 +1166,14 @@ export class Buildings {
     }
 
     const shopsMoving = this.shopGrowth.update(now, (i, s) => {
-      this.shops.write(i, this.layout.shopCell(i), s, this.dummy, this.tint);
+      const at = this.layout.place(ZONE.commercial, i, this.shownMergedShops, this.at);
+      this.shops.write(i, at, s, this.dummy, this.tint);
     });
     if (shopsMoving) this.shops.flush();
 
     const industryMoving = this.industryGrowth.update(now, (i, s) => {
-      this.industry.write(i, this.layout.industryCell(i), s, this.dummy, this.tint);
+      const at = this.layout.place(ZONE.industrial, i, this.shownMergedIndustry, this.at);
+      this.industry.write(i, at, s, this.dummy, this.tint);
     });
     if (industryMoving) this.industry.flush();
 

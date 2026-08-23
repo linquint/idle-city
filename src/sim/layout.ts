@@ -119,16 +119,108 @@ export function civicSites(layout: DistrictLayout, taken = new Set<number>()): r
   return claim(squares(layout, 2), taken);
 }
 
+// ---------------------------------------------------------------- parcels
+
+/**
+ * The spatial unit a building stands on: one plot, or two adjacent ones.
+ *
+ * Levels 0 and 1 stand on a single plot; reaching level 2 *merges* two
+ * neighbours into one building, and level 3 grows upward on that same two-plot
+ * footprint (LEVEL_FOOTPRINT). So the thing capacity is counted in is the plot,
+ * and the thing a building occupies is the parcel.
+ *
+ * Two plots, never four. Measured over 100 districts by greedily pairing
+ * frontage into 2x1 dominoes and then pairing those into 2x2 quads
+ * (tools/parcels.calibrate.mjs):
+ *
+ *   residential  24 plots -> 10.5 dominoes (min 10), 3.0 unpairable (max 4), 0.0 quads
+ *   commercial   31 plots -> 15.0 dominoes (min 15), 1.0 unpairable (max 1), 0.4 quads
+ *   industrial    8 plots ->  3.0 dominoes (min  3), 2.0 unpairable (max 2), 0.0 quads
+ *
+ * Quads effectively do not exist, and that is structural rather than unlucky:
+ * `universitySites` and `civicSites` are ranked on dead land, so they take
+ * exactly the deep-block interiors, and what is left for sale is a one-plot-wide
+ * perimeter ring. A 2x2 merge would have to be carved back out of park or civic
+ * land. Do not "fix" the ordering below to find quads — there are none to find.
+ */
+
+/**
+ * Pairs one zone's frontage into parcels: adjacent pairs first, singles last.
+ *
+ * The matching walks cells in ascending index and prefers the horizontal
+ * partner over the vertical one, so it is a pure function of the layout and not
+ * of the build order it is handed. The *emission* order is the build order the
+ * generator shuffled, so a district still fills in unevenly — only now its two
+ * halves of a parcel arrive together.
+ *
+ * Singles last is what makes the merge rule expressible as a count: merging
+ * always takes the next two-plot parcel, so the unpairable plots of a district
+ * are the ones nothing ever merges and they cap at level 1. That is three
+ * residential plots a district — a permanent low-rise fringe, which is variety
+ * rather than a defect.
+ */
+export function parcelOrder(cells: readonly number[]): {
+  cells: readonly number[];
+  sizes: readonly number[];
+} {
+  const zoned = new Set(cells);
+  const partner = new Map<number, number>();
+  const paired = new Set<number>();
+  const last = DISTRICT_SPAN * DISTRICT_SPAN;
+
+  for (const cell of [...cells].sort((a, b) => a - b)) {
+    if (paired.has(cell)) continue;
+    const right = cell + 1;
+    const below = cell + DISTRICT_SPAN;
+    const mate =
+      cell % DISTRICT_SPAN !== DISTRICT_SPAN - 1 && zoned.has(right) && !paired.has(right)
+        ? right
+        : below < last && zoned.has(below) && !paired.has(below)
+          ? below
+          : -1;
+    if (mate < 0) continue;
+    paired.add(cell);
+    paired.add(mate);
+    partner.set(cell, mate);
+    partner.set(mate, cell);
+  }
+
+  const ordered: number[] = [];
+  const sizes: number[] = [];
+  const placed = new Set<number>();
+  for (const cell of cells) {
+    if (placed.has(cell) || !paired.has(cell)) continue;
+    const mate = partner.get(cell) as number;
+    placed.add(cell);
+    placed.add(mate);
+    ordered.push(cell, mate);
+    sizes.push(2);
+  }
+  for (const cell of cells) {
+    if (paired.has(cell)) continue;
+    ordered.push(cell);
+    sizes.push(1);
+  }
+  return { cells: ordered, sizes };
+}
+
 /** One district's land, split into what can be bought and what cannot. */
 export interface DistrictPlan {
   readonly layout: DistrictLayout;
   /** 3x3 university sites, reserved before anything else. */
   readonly universities: readonly CivicSite[];
   readonly sites: readonly CivicSite[];
-  /** Build order per zone: road-adjacent, and clear of every reserved site. */
+  /**
+   * Build order per zone: road-adjacent, clear of every reserved site, and
+   * ordered parcel by parcel — see `parcelOrder`.
+   */
   readonly residential: readonly number[];
   readonly commercial: readonly number[];
   readonly industrial: readonly number[];
+  /** Plots in each parcel, in the same order the lists above are laid out in. */
+  readonly residentialParcels: readonly number[];
+  readonly commercialParcels: readonly number[];
+  readonly industrialParcels: readonly number[];
   /** Zoned plots that are neither for sale nor reserved. Drawn as courtyards. */
   readonly courtyards: readonly number[];
 }
@@ -151,17 +243,30 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
   const sites = civicSites(layout, reserved);
 
   const keep = (cells: readonly number[]): number[] => cells.filter((c) => !reserved.has(c));
-  const residential = keep(layout.residential);
-  const commercial = keep(layout.commercial);
-  const industrial = keep(layout.industrial);
+  // Paired after the sites are reserved, never before: a plot a hospital is
+  // standing on is not a plot anything can merge with.
+  const residential = parcelOrder(keep(layout.residential));
+  const commercial = parcelOrder(keep(layout.commercial));
+  const industrial = parcelOrder(keep(layout.industrial));
 
   const courtyards: number[] = [];
-  const forSale = new Set([...residential, ...commercial, ...industrial]);
+  const forSale = new Set([...residential.cells, ...commercial.cells, ...industrial.cells]);
   for (let i = 0; i < layout.zone.length; i++) {
     if (layout.zone[i] === ZONE.road || reserved.has(i) || forSale.has(i)) continue;
     courtyards.push(i);
   }
-  return { layout, universities, sites, residential, commercial, industrial, courtyards };
+  return {
+    layout,
+    universities,
+    sites,
+    residential: residential.cells,
+    commercial: commercial.cells,
+    industrial: industrial.cells,
+    residentialParcels: residential.sizes,
+    commercialParcels: commercial.sizes,
+    industrialParcels: industrial.sizes,
+    courtyards,
+  };
 }
 
 /** Whether a plan hits the counts every district has to agree on. */
@@ -357,6 +462,146 @@ export function cityRadius(districts: number): number {
   return (ring + 0.5) * DISTRICT_WIDTH;
 }
 
+/**
+ * One zone's parcels across the whole city, appended district by district.
+ *
+ * The lookup that turns a building's *ordinal* into the land it stands on, with
+ * nothing spatial stored anywhere: given how many parcels of the zone have been
+ * merged, a building's parcel, footprint and cells are arithmetic over the two
+ * prefix tables below. Append-only, exactly like the plot lists it indexes, so
+ * annexing land never moves a building that is already standing.
+ *
+ * Slots are ordered merged-first: slot j < merged is the j-th two-plot parcel,
+ * and every slot past that is one plot of what is left, in parcel order. That
+ * ordering is what keeps `levelAt` a plain cohort walk — buildings take levels
+ * oldest-first and the merged ones are exactly the oldest.
+ */
+export class ParcelBook {
+  private readonly size: number[] = [];
+  /** Where each parcel starts in the zone's flat plot list. */
+  private readonly begin: number[] = [];
+  /** Parcel index of the j-th two-plot parcel. */
+  private readonly pairAt: number[] = [];
+  /** Two-plot parcels lying before each parcel. */
+  private readonly pairsBefore: number[] = [];
+  /** Two-plot parcels in the first d districts, indexed by d. */
+  private readonly pairsThrough: number[] = [0];
+  private total = 0;
+
+  /** Appends one district's parcels. Sizes are 1 or 2, pairs first. */
+  push(sizes: readonly number[]): void {
+    for (const size of sizes) {
+      this.begin.push(this.total);
+      this.pairsBefore.push(this.pairAt.length);
+      if (size === 2) this.pairAt.push(this.size.length);
+      this.size.push(size);
+      this.total += size;
+    }
+    this.pairsThrough.push(this.pairAt.length);
+  }
+
+  /**
+   * Two-plot parcels in the first `districts` districts. The ceiling on merges.
+   *
+   * Asked per district count rather than read off the whole book, because a book
+   * is grown by whoever needs the most land and never shrinks: a city of one
+   * district must not be told it owns the pairs of a city of forty that happened
+   * to be read first. Districts vary in how many pairs they offer — 10 to 11 of
+   * housing, measured — so this is a running total rather than a multiplication.
+   */
+  pairs(districts: number): number {
+    const at = Math.max(0, Math.min(districts, this.pairsThrough.length - 1));
+    return this.pairsThrough[at] as number;
+  }
+
+  /** Plots the city owns in this zone. Equals the zone's capacity. */
+  get plots(): number {
+    return this.total;
+  }
+
+  /** The two plot indices of the j-th merged parcel, into the flat plot list. */
+  mergedPlot(j: number, half: 0 | 1): number {
+    return (this.begin[this.pairAt[j] as number] as number) + half;
+  }
+
+  /**
+   * Where the next parcel to merge starts, counted in unmerged plots.
+   *
+   * Usually zero: merging takes the two-plot parcels off the front, so the front
+   * of what is left is the next one. It is not zero once a district's pairs are
+   * spent — its unpairable plots are then sitting at the front of the list and
+   * nothing will ever merge them, so the next pair is that many plots along.
+   */
+  pairFront(merged: number): number {
+    if (merged >= this.pairAt.length) return Number.POSITIVE_INFINITY;
+    return (this.begin[this.pairAt[merged] as number] as number) - 2 * merged;
+  }
+
+  /** Flat plot index of the u-th unmerged plot, with `merged` parcels taken. */
+  unmergedPlot(u: number, merged: number): number {
+    // Binary search for the last parcel whose unmerged start is at or before u.
+    // A merged parcel contributes nothing, so its start equals its successor's
+    // and taking the *last* match walks past it without a second test.
+    let lo = 0;
+    let hi = this.size.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.unmergedStart(mid, merged) <= u) lo = mid;
+      else hi = mid - 1;
+    }
+    return (this.begin[lo] as number) + (u - this.unmergedStart(lo, merged));
+  }
+
+  private unmergedStart(parcel: number, merged: number): number {
+    return (
+      (this.begin[parcel] as number) - 2 * Math.min(merged, this.pairsBefore[parcel] as number)
+    );
+  }
+}
+
+function parcelsOf(plan: DistrictPlan, zone: Zone): readonly number[] {
+  if (zone === ZONE.commercial) return plan.commercialParcels;
+  if (zone === ZONE.industrial) return plan.industrialParcels;
+  return plan.residentialParcels;
+}
+
+const PARCEL_ZONES: readonly Zone[] = [ZONE.residential, ZONE.commercial, ZONE.industrial];
+
+/** One set of books, per zone, grown district by district. */
+class ParcelBooks {
+  private readonly books = new Map<Zone, ParcelBook>(
+    PARCEL_ZONES.map((zone) => [zone, new ParcelBook()]),
+  );
+  private districts = 0;
+
+  of(zone: Zone, districts: number): ParcelBook {
+    for (let i = this.districts; i < districts; i++) {
+      const c = districtCoord(i);
+      const plan = districtPlanAt(c.x, c.z);
+      for (const z of PARCEL_ZONES) (this.books.get(z) as ParcelBook).push(parcelsOf(plan, z));
+    }
+    this.districts = Math.max(this.districts, districts);
+    return this.books.get(zone) as ParcelBook;
+  }
+}
+
+/**
+ * The simulation's parcel books.
+ *
+ * Module-level for the same reason `plans` is: `economy.ts` has no `CityLayout`
+ * of its own and needs to know how many pairs the city owns before it will let
+ * one merge. `CityLayout` keeps a set of its own rather than sharing this one —
+ * its plot lists are the thing the book indexes, and a book grown past the
+ * districts that layout has materialised would index off the end of them.
+ * District order is fixed, so two books at the same district count are equal.
+ */
+const cityBooks = new ParcelBooks();
+
+/** The parcel book for one zone, materialised out to `districts`. */
+export function parcelBook(zone: Zone, districts: number): ParcelBook {
+  return cityBooks.of(zone, districts);
+}
+
 interface DistrictPlots {
   readonly residential: Coord[];
   readonly commercial: Coord[];
@@ -407,11 +652,40 @@ function placeDistrict(index: number): DistrictPlots {
 }
 
 /**
+ * Where one building stands, filled in place.
+ *
+ * Written into a caller-owned object rather than returned fresh: the renderer
+ * asks this per building per rebuild and per in-flight animation per frame, and
+ * a `{ x, z }` per call is a per-frame allocation.
+ */
+export interface Placement {
+  /** World-space centre of the footprint. */
+  x: number;
+  z: number;
+  /** Plots it covers: one, or two once its parcel has merged. */
+  plots: number;
+  /** For a merged parcel, whether its two plots differ in x rather than in z. */
+  alongX: boolean;
+  /** Index of its first plot in the zone's flat list. Identifies the parcel. */
+  plot: number;
+}
+
+export const createPlacement = (): Placement => ({
+  x: 0,
+  z: 0,
+  plots: 1,
+  alongX: true,
+  plot: 0,
+});
+
+/**
  * The city's plot book. Districts are appended, never rewritten, so a building
  * placed in district 1 keeps its exact plot after you annex district 20.
  */
 export class CityLayout {
   private materialised = 0;
+  /** This layout's own parcel books. See `cityBooks` for why they are not shared. */
+  private readonly books = new ParcelBooks();
   private readonly _residential: Coord[] = [];
   private readonly _commercial: Coord[] = [];
   private readonly _industrial: Coord[] = [];
@@ -449,6 +723,43 @@ export class CityLayout {
 
   get districts(): readonly District[] {
     return this._districts;
+  }
+
+  /**
+   * Where the k-th building of a zone stands, given how many of its parcels
+   * have merged.
+   *
+   * A pure function of two counts and the seed, which is the whole point: the
+   * save carries `{ homes, mergedR }` and the position of every building in the
+   * city falls out of them. Slots are merged-first — see `ParcelBook`.
+   */
+  place(zone: Zone, slot: number, merged: number, out: Placement): Placement {
+    const book = this.books.of(zone, this.materialised);
+    const cells = this.zoneCells(zone);
+    // Clamped rather than trusted. `migrate` and `Game` both keep the counts
+    // inside the land, but this is the one place a state that got past them
+    // would index off the end of a plot list — and the renderer's answer to a
+    // broken save has to be a wrong-looking city, not a thrown frame.
+    merged = Math.max(0, Math.min(merged, book.pairs(this.materialised)));
+    if (slot < merged) {
+      const first = book.mergedPlot(slot, 0);
+      const a = cells[first] as Coord;
+      const b = cells[book.mergedPlot(slot, 1)] as Coord;
+      out.plot = first;
+      out.plots = 2;
+      out.alongX = a.x !== b.x;
+      out.x = (worldX(a.x) + worldX(b.x)) / 2;
+      out.z = (worldZ(a.z) + worldZ(b.z)) / 2;
+      return out;
+    }
+    const plot = Math.min(book.unmergedPlot(slot - merged, merged), cells.length - 1);
+    const cell = (cells[Math.max(0, plot)] ?? cells[0]) as Coord;
+    out.plot = plot;
+    out.plots = 1;
+    out.alongX = true;
+    out.x = worldX(cell.x);
+    out.z = worldZ(cell.z);
+    return out;
   }
 
   /** Plot for the i-th home ever built. Index is stable across expansion. */

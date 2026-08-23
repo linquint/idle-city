@@ -5,6 +5,7 @@ import {
   HOME_BASE,
   INDUSTRY_BASE,
   LEVEL_CAPACITY,
+  LEVEL_HOUSING,
   MAX_DISTRICTS,
   SHOP_BASE,
   SHOP_BONUS,
@@ -123,12 +124,13 @@ describe('income', () => {
 
   it('counts residents cohort by cohort', () => {
     for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
-      expect(residents(state(housed(10, level)))).toBe(10 * (LEVEL_CAPACITY[level] ?? 0));
+      // Per building, so a merged level counts its whole footprint's worth.
+      expect(residents(state(housed(10, level)))).toBe(10 * (LEVEL_HOUSING[level] ?? 0));
     }
     // And a mixed skyline is the sum of its parts rather than one global level,
     // which is the whole thing cohorts buy over the tier they replaced.
     const mixed = state({ homes: 10, homeLevels: [4, 3, 2, 1], occupancyR: 1 });
-    expect(residents(mixed)).toBe(4 * 4 + 3 * 16 + 2 * 70 + 1 * 300);
+    expect(residents(mixed)).toBe(4 * 4 + 3 * 16 + 2 * 140 + 1 * 600);
   });
 
   it('rises with shops and with districts', () => {

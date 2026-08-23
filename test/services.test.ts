@@ -5,6 +5,7 @@ import {
   CIVIC_SERVICES,
   HAPPINESS_MIN_BUILD,
   LEVEL_CAPACITY,
+  LEVEL_HOUSING,
   SERVICES,
 } from '../src/sim/config';
 import {
@@ -222,9 +223,11 @@ describe('the build gate', () => {
     const small = state({ homes: 1, districts: 9 });
     expect(serviceAllowed(small, hospital)).toBe(1);
     const large = state({ ...housed(19, 3), districts: 9 });
-    expect(residents(large)).toBe(19 * 300);
+    // An arcology stands on two plots and holds both plots' worth of people.
+    const people = 19 * (LEVEL_HOUSING[3] ?? 0);
+    expect(residents(large)).toBe(people);
     expect(serviceAllowed(large, hospital)).toBe(
-      Math.floor((19 * 300) / hospital.capacity) + 1,
+      Math.floor(people / hospital.capacity) + 1,
     );
   });
 

@@ -4,7 +4,7 @@ import {
   CATCHUP_MAX_ABANDONED,
   CATCHUP_STEP_SECONDS,
   HAPPINESS_MIN_OCCUPANCY,
-  LEVEL_CAPACITY,
+  LEVEL_HOUSING,
   LEVEL_UP_HAPPINESS,
   LEVEL_UP_OCCUPANCY,
   LEVELS,
@@ -16,6 +16,11 @@ import {
   cohortStart,
   cohortTotal,
   levelAt,
+  mergedCohort,
+  mergeCapacity,
+  plotsOf,
+  capacityOf,
+  mergedOf,
   occupancyStep,
   occupancyTarget,
   residents,
@@ -26,7 +31,7 @@ import { Game } from '../src/sim/game';
 import { hash01 } from '../src/core/rng';
 import { createState, type GameState, type ZoneKind } from '../src/sim/state';
 import { migrate } from '../src/sim/save';
-import { built, cohort, housed } from './levels';
+import { built, cohort, housed, served } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -36,25 +41,6 @@ const run = (game: Game, seconds: number): Game => {
   for (let i = 0; i < Math.round(seconds * 10); i++) game.advance(0.1);
   return game;
 };
-
-/**
- * Everything a city can be covered by: happiness near 1 *and* education past
- * every rung of LEVEL_EDUCATION, so promotion is gated only on the two things
- * these tests are about.
- */
-const served = (): Partial<GameState> => ({
-  hospitals: 40,
-  police: 40,
-  fire: 40,
-  schools: 40,
-  universities: 40,
-  hospitalStaff: 1,
-  policeStaff: 1,
-  fireStaff: 1,
-  schoolStaff: 1,
-  universityStaff: 1,
-  parks: 200,
-});
 
 /** The level of every slot of a zone, oldest first. The skyline, as a list. */
 const skyline = (s: Readonly<GameState>, kind: ZoneKind): number[] => {
@@ -82,6 +68,21 @@ const unbalanced = (s: Readonly<GameState>): string | null => {
     const total = cohortTotal(levels);
     if (total !== standingOf(s, kind)) {
       return `${kind}: cohorts sum to ${total}, standing stock is ${standingOf(s, kind)}`;
+    }
+    // The parcel half of the same invariant. Merged parcels are the oldest
+    // slots and ruins are taken from the newest end, so the buildings standing
+    // on a merged parcel are exactly `min(merged, standing)` — they fall short
+    // of the parcel count only while one of them is boarded up.
+    const merged = mergedOf(s, kind);
+    const held = mergedCohort(levels);
+    if (held !== Math.min(merged, total)) {
+      return `${kind}: ${held} merged buildings against ${merged} parcels and ${total} standing`;
+    }
+    if (merged > mergeCapacity(s, kind)) {
+      return `${kind}: ${merged} merged parcels, land offers ${mergeCapacity(s, kind)}`;
+    }
+    if (plotsOf(s, kind) > capacityOf(s, kind)) {
+      return `${kind}: ${plotsOf(s, kind)} plots taken of ${capacityOf(s, kind)}`;
     }
   }
   return null;
@@ -325,9 +326,9 @@ describe('abandonment', () => {
     Object.assign(game.state, { ...served(), happiness: 1 });
     run(game, 3_600);
     expect(game.state.abandonedR).toBe(0);
-    expect(game.state.homes).toBe(24);
-    // Back at the bottom of the ladder, not at the level they were written off
-    // from — a plot that went dark comes back as a plot, not as a tower.
+    // Plots, not buildings: a recovered city goes straight back to climbing,
+    // and climbing merges pairs, so the count falls while the land does not.
+    expect(plotsOf(game.state, 'home')).toBe(24);
     assertBalanced(game.state);
   });
 
@@ -364,7 +365,7 @@ describe('promotion', () => {
     const game = at(ready());
     run(game, 900);
     expect(game.state.homeLevels[0]).toBeLessThan(24);
-    expect(cohortTotal(game.state.homeLevels)).toBe(24);
+    expect(plotsOf(game.state, 'home')).toBe(24);
   });
 
   it('holds the cohort still when happiness is short', () => {
@@ -416,12 +417,15 @@ describe('promotion', () => {
     const game = at(ready());
     const before = residents(game.state);
     run(game, 1_800);
-    expect(game.state.homes).toBe(24);
+    // Not a plot. The building count falls as pairs merge; the land is exactly
+    // what it was, which is the claim this test is making.
+    expect(plotsOf(game.state, 'home')).toBe(24);
+    expect(game.state.homes).toBeLessThan(24);
     expect(residents(game.state)).toBeGreaterThan(before);
     // And the population is exactly what the cohorts say it is.
     let people = 0;
     for (let l = 0; l < LEVELS; l++) {
-      people += (game.state.homeLevels[l] ?? 0) * (LEVEL_CAPACITY[l] ?? 0);
+      people += (game.state.homeLevels[l] ?? 0) * (LEVEL_HOUSING[l] ?? 0);
     }
     expect(residents(game.state)).toBeCloseTo(people * game.state.occupancyR, 9);
   });
