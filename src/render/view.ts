@@ -2,6 +2,7 @@ import { cityCentre, cityRadius, CityLayout } from '../sim/layout';
 import type { GameState } from '../sim/state';
 import { Buildings } from './buildings';
 import { CameraRig } from './cameraRig';
+import { Cars } from './cars';
 import { createSkyReading, dayPhase, DUSK_PHASE, sampleSky } from './daylight';
 import { Ground } from './ground';
 import { World } from './world';
@@ -24,6 +25,7 @@ export class View {
   private readonly buildings: Buildings;
   private readonly zones: Zones;
   private readonly courtyards: Courtyards;
+  private readonly cars: Cars;
   private elapsed = 0;
   private shownDistricts = 0;
   /**
@@ -35,14 +37,16 @@ export class View {
   private readonly cycling: boolean;
 
   constructor(canvas: HTMLCanvasElement, layout: CityLayout) {
+    const reducedMotion =
+      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     this.world = new World(canvas);
     this.ground = new Ground(this.world.scene, layout);
     this.buildings = new Buildings(this.world.scene, layout);
     this.zones = new Zones(this.world.scene, layout);
     this.courtyards = new Courtyards(this.world.scene, layout);
+    this.cars = new Cars(this.world.scene, layout, !reducedMotion);
 
-    const reducedMotion =
-      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.rig = new CameraRig(this.world.camera, canvas, !reducedMotion);
     // A sun crossing the sky is motion, and a slow full-screen colour ramp is
     // the kind of motion the preference exists for. Holding at DUSK_PHASE is
@@ -100,6 +104,7 @@ export class View {
     this.buildings.sync(state, this.elapsed);
     this.zones.sync(state);
     this.courtyards.sync(state);
+    this.cars.sync(state);
   }
 
   /** Advances animations and draws one frame. */
@@ -113,6 +118,9 @@ export class View {
     // frame costs nothing once the city has settled.
     this.ground.update(this.elapsed);
     this.buildings.update(this.elapsed);
+    // After `focusShadows`, so traffic is culled against the focus the rest of
+    // the frame was drawn from rather than against last frame's.
+    this.cars.update(dt, this.rig.target, this.sky.night);
 
     this.world.render();
   }

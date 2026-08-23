@@ -235,3 +235,66 @@ describe('migration', () => {
     expect(Number.isFinite(back!.elapsed)).toBe(true);
   });
 });
+
+/**
+ * The line between the two halves of this codebase, asserted rather than
+ * assumed. Traffic, fire trucks and the flames on a burning roof are all
+ * readouts of numbers the simulation already holds — positions, headings and
+ * animation clocks are recomputed from counts and the seed on every frame. The
+ * moment one of them needed saving, offline progress would be holding state it
+ * could not reproduce, and the save would stop being a handful of integers.
+ */
+describe('the view keeps nothing in the save', () => {
+  const VIEW_WORDS = [
+    'car',
+    'truck',
+    'vehicle',
+    'traffic',
+    'lane',
+    'route',
+    'heading',
+    'speed',
+    'flame',
+    'glow',
+    'ember',
+    'smoke',
+    'sprite',
+    'mesh',
+    'instance',
+    'camera',
+    'phase',
+    'sky',
+    'sun',
+    'light',
+    'x',
+    'y',
+    'z',
+    'coord',
+    'position',
+  ];
+
+  it('serialises no key belonging to the renderer', () => {
+    save({ ...createState(0), homes: 40, shops: 12, districts: 3 }, 1_000);
+    const raw = localStorage.getItem(SAVE_KEY);
+    expect(raw).not.toBeNull();
+    const keys = Object.keys(JSON.parse(raw as string) as Record<string, unknown>);
+    for (const key of keys) {
+      const word = key.toLowerCase();
+      for (const banned of VIEW_WORDS) {
+        // Whole-word, so `fires` is not caught by `fire` being a substring of
+        // something else and `elapsed` is not caught by `lane`.
+        expect(word === banned || word === `${banned}s`).toBe(false);
+      }
+    }
+  });
+
+  it('round-trips a state the renderer has been driving from', () => {
+    const before = { ...createState(0), homes: 19, shops: 9, elapsed: 4_812.5, districts: 2 };
+    save(before, 2_000);
+    const after = load(2_000);
+    // Time of day is a read over `elapsed`, so this one field is the whole of
+    // what the day/night cycle persists — and it is one the game already had.
+    expect(after?.elapsed).toBe(4_812.5);
+    expect(Object.keys(after ?? {}).sort()).toEqual(Object.keys(createState(0)).sort());
+  });
+});
