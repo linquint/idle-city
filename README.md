@@ -70,17 +70,27 @@ and a seed, so the same save renders the same city on every device — and a
 building placed in district 1 does not move when district 20 is annexed.
 `test/layout.test.ts` guards exactly that.
 
-**Tier replacement.** Rezoning swaps houses for apartments for towers for
-arcologies. A purchase changes *what* stands on a plot, not how many plots
-exist — which is how an exponential economy stays inside a world you can
-actually draw. Expansion is the second axis: annexing a district adds land,
-plots, and a permanent civic bonus.
+**Levels, not new plots.** A building climbs five rungs — houses, apartments,
+towers, arcologies, megastructures — and a promotion changes *what* stands on a
+plot rather than how many plots exist, which is how an exponential economy stays
+inside a world you can actually draw. Commerce and industry climb the same
+rungs. Expansion is the second axis: annexing a district adds land, plots, and a
+permanent civic bonus.
+
+**Style is a hash, not a field.** Each zone has three styles at every level — 45
+looks in all — and a style is a parameter set rather than a mesh: proportions, a
+colour band, how many lit window bands, and which of the shared unit-geometry
+detail parts it wears. Which one a building gets is `hash(slot, SEED)`, so it is
+stable forever, identical on every device, and nowhere in the save.
 
 ### Rendering notes
 
-The city is a handful of `InstancedMesh` draw calls — one per building tier,
-plus roads, kerbs and land tiles — so a city of four thousand buildings costs
-about the same as a city of forty.
+The city is a handful of `InstancedMesh` draw calls — 15 bodies, one per (zone,
+level), and 9 shared detail parts, plus roads, kerbs and land tiles — so a city
+of four thousand buildings costs about the same as a city of forty. The 24 is a
+budget rather than an accident, and `test/skyline.test.ts` asserts it: the naive
+version of the same variety is 45 draw calls for what is fundamentally the same
+box.
 
 - `GrowableInstancedMesh` reallocates and copies instance buffers when the city
   outgrows them, doubling capacity so it stays amortised O(1) per instance.

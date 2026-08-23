@@ -8,6 +8,7 @@ import {
   EDUCATION_SERVICES,
   HAPPINESS_SERVICES,
   LEVEL_CAPACITY,
+  LEVELS,
   MERGE_LEVEL,
   RECREATION_WEIGHT,
   SERVICES,
@@ -216,7 +217,7 @@ describe('the happiness weights', () => {
    * load. 0.82 against 0.35 is not close.
    */
   it('cap a park-less city at 0.82, well clear of the housing gate', () => {
-    for (const level of [0, 1, 2, 3]) {
+    for (let level = 0; level < LEVELS; level++) {
       const best = state({ ...housed(19, level), parks: 0, ...served() });
       expect(happinessTarget(best)).toBeLessThanOrEqual(0.82 + 1e-12);
       expect(happinessTarget(best)).toBeGreaterThan(HAPPINESS_MIN_BUILD);

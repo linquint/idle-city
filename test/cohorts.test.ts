@@ -4,13 +4,19 @@ import {
   CATCHUP_MAX_ABANDONED,
   CATCHUP_STEP_SECONDS,
   HAPPINESS_MIN_OCCUPANCY,
+  LEVEL_CAPACITY,
+  LEVEL_EDUCATION,
+  LEVEL_FOOTPRINT,
   LEVEL_HOUSING,
+  LEVEL_NAMES,
+  LEVEL_SCALE,
   LEVEL_UP_HAPPINESS,
   LEVEL_UP_OCCUPANCY,
   LEVELS,
   OCCUPANCY_EMPTY,
   OCCUPANCY_FLOOR,
   OCCUPANCY_TAU,
+  ZONE_LEVEL_NAMES,
 } from '../src/sim/config';
 import {
   cohortStart,
@@ -29,7 +35,7 @@ import {
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { hash01 } from '../src/core/rng';
-import { createState, type GameState, type ZoneKind } from '../src/sim/state';
+import { cohortOf, createState, type GameState, type ZoneKind } from '../src/sim/state';
 import { migrate } from '../src/sim/save';
 import { built, cohort, housed, served } from './levels';
 
@@ -89,6 +95,42 @@ const unbalanced = (s: Readonly<GameState>): string | null => {
 };
 
 const assertBalanced = (s: Readonly<GameState>): void => expect(unbalanced(s)).toBeNull();
+
+/**
+ * The ladder is data, and every table hung off it has to agree about how long
+ * it is.
+ *
+ * The rung that went from four to five found these by hand: a name table one
+ * short leaves the HUD calling the top level `undefined`, and an education
+ * table one short leaves it ungated. Asserting the lengths is what turns the
+ * next rung into a config edit rather than a hunt.
+ */
+describe('the level ladder', () => {
+  it('is as long as LEVELS says, in every table that indexes by level', () => {
+    expect(LEVELS).toBeGreaterThanOrEqual(5);
+    expect(LEVEL_CAPACITY).toHaveLength(LEVELS);
+    expect(LEVEL_FOOTPRINT).toHaveLength(LEVELS);
+    expect(LEVEL_HOUSING).toHaveLength(LEVELS);
+    expect(LEVEL_SCALE).toHaveLength(LEVELS);
+    expect(LEVEL_EDUCATION).toHaveLength(LEVELS);
+    expect(LEVEL_NAMES).toHaveLength(LEVELS);
+    for (const kind of ZONE_KINDS) expect(ZONE_LEVEL_NAMES[kind]).toHaveLength(LEVELS);
+    expect(cohortOf()).toHaveLength(LEVELS);
+  });
+
+  it('climbs, and stands on land the parcels can offer', () => {
+    for (let l = 1; l < LEVELS; l++) {
+      expect(LEVEL_CAPACITY[l] ?? 0).toBeGreaterThan(LEVEL_CAPACITY[l - 1] ?? 0);
+      expect(LEVEL_EDUCATION[l] ?? 0).toBeGreaterThanOrEqual(LEVEL_EDUCATION[l - 1] ?? 0);
+      // Footprints never shrink, and never exceed the pair a parcel can hold —
+      // `parcelOrder` measured that a district holds no residential quads.
+      expect(LEVEL_FOOTPRINT[l] ?? 0).toBeGreaterThanOrEqual(LEVEL_FOOTPRINT[l - 1] ?? 0);
+      expect(LEVEL_FOOTPRINT[l] ?? 0).toBeLessThanOrEqual(2);
+    }
+    // The top rung of education has to be reachable, or the top level is not.
+    expect(LEVEL_EDUCATION[LEVELS - 1] ?? 0).toBeLessThanOrEqual(1);
+  });
+});
 
 describe('the cohort invariant', () => {
   it('holds while the city is built, promoted and abandoned', () => {

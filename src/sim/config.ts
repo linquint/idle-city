@@ -101,6 +101,35 @@ export const FRONTAGE_TARGET = {
  * workers: 14R = 8C + 20I with R + C + I = 1, at I = 0.21. Rounding them to
  * 0.50/0.30/0.20 leaves 7.0 workers chasing 6.4 jobs and breaks the demand loop
  * the moment industry is wired into the economy.
+ *
+ * Re-checked at the new top when the ladder grew to five rungs, because the
+ * split is solved at level 0 and every rung above it walks away from the
+ * solution. The labour market clears at 25.5 residents a plot (14 /
+ * WORKING_SHARE), and a plot holds 2.2 / 8.8 / 38.5 / 165 / 660 workers as it
+ * climbs — so a young city is job-rich and pulls people in, and a mature one is
+ * worker-rich and has to go and find them work. That arc is the design.
+ *
+ * A district built out at one level, measured through `demandTargets`:
+ *
+ *   level              w/j    demand R      C      I
+ *   detached housing  0.13       +1.00  -0.98  +0.37
+ *   apartments        0.52       +0.16  -0.12  +0.09
+ *   towers            2.31       -0.10  +0.10  +0.02
+ *   arcologies        9.90       -0.16  +0.15   0.00
+ *   megastructures   39.60       -0.17  +0.16   0.00
+ *
+ * The fifth rung adds a hundredth of a demand point to a signal already
+ * settled, which is `demandScale` doing its job: it divides by `cityScale`, so
+ * the imbalance a built city can reach and the scale it is read against climb
+ * together. The ratios above are therefore still the ones to solve, and they
+ * did not move.
+ *
+ * What the rung *does* move is a mixed city. Over 24 hours the discount-chasing
+ * policy — which buys housing and lets commerce lag — now pins residential at
+ * -1 for 1,145 of 1,440 minutes where it pinned nothing before: it reaches
+ * 146,000 residents against 74 shops. That is the surcharge doing what it is
+ * for rather than a broken ratio, and it is the one thing to watch if the
+ * ladder ever gains a sixth rung. See tools/economy.calibrate.mjs.
  */
 export const ZONE_SHARE = {
   residential: 0.48,
@@ -117,9 +146,16 @@ export const MAX_DISTRICTS = 49;
  * The four numbers the old global rezoning tiers carried, kept exactly: a
  * level-0 house holds 4, an apartment block 16, a tower 70, an arcology 300.
  * Keeping them means every constant that was solved against those capacities —
- * RENT against the opening minute, WORKING_SHARE against the labour market,
- * LEVEL_EDUCATION against what a district of towers holds — still means what it
- * meant.
+ * RENT against the opening minute, WORKING_SHARE against the labour market —
+ * still means what it meant.
+ *
+ * The fifth rung is 1,200, and it is the ladder's own opening ratio rather than
+ * a new number: 4 -> 16 is x4, and the two above it are x4.4 and x4.3, so the
+ * mean would put the top at 1,290. x4 is taken instead because the rung already
+ * widens the range every demand signal is read over — DEMAND_SCALE is a
+ * constant and the imbalance a built city can reach scales with this ladder, so
+ * 4 -> 1,200 is a 300x spread where 4 -> 300 was 75x. Measured, the drift that
+ * buys is reported against ZONE_SHARE.
  *
  * Per plot, and that qualifier is what merging cost this comment. A tower
  * covers two plots (LEVEL_FOOTPRINT), so the *building* holds 140 and the land
@@ -134,7 +170,7 @@ export const MAX_DISTRICTS = 49;
  * property worth protecting. What this ladder still sets is the population,
  * and through it RENT, the labour market and every demand target.
  */
-export const LEVEL_CAPACITY = [4, 16, 70, 300] as const;
+export const LEVEL_CAPACITY = [4, 16, 70, 300, 1_200] as const;
 
 /** How many levels a building can climb through. */
 export const LEVELS = LEVEL_CAPACITY.length;
@@ -142,14 +178,16 @@ export const LEVELS = LEVEL_CAPACITY.length;
 /**
  * Plots a building covers at each level.
  *
- * The two ones and the two twos are the whole of the merging mechanic: levels 0
- * and 1 stand on a single plot, climbing to level 2 merges a building with its
- * neighbour, and level 3 grows upward on that same footprint. It stops at two
- * because two is what the land offers — see `parcelOrder` in layout.ts, which
- * carries the measurement. A [1, 1, 2, 4] ladder was measured and is not
- * buildable: a district holds 0.0 residential quads.
+ * The ones and the twos are the whole of the merging mechanic: levels 0 and 1
+ * stand on a single plot, climbing to level 2 merges a building with its
+ * neighbour, and everything above it grows upward on that same footprint. It
+ * stops at two because two is what the land offers — see `parcelOrder` in
+ * layout.ts, which carries the measurement. A [1, 1, 2, 4] ladder was measured
+ * and is not buildable: a district holds 0.0 residential quads, so the fifth
+ * rung takes a 2 like the two below it rather than opening a quad tier that
+ * nothing could ever stand on.
  */
-export const LEVEL_FOOTPRINT = [1, 1, 2, 2] as const;
+export const LEVEL_FOOTPRINT = [1, 1, 2, 2, 2] as const;
 
 /**
  * The first level that stands on a merged parcel.
@@ -202,21 +240,30 @@ export const LEVEL_SCALE = LEVEL_CAPACITY.map(
 ) as readonly number[];
 
 /** What the zoning readout calls a level, and the verb on the build button. */
-export const LEVEL_NAMES = ['detached housing', 'apartments', 'towers', 'arcologies'] as const;
+export const LEVEL_NAMES = [
+  'detached housing',
+  'apartments',
+  'towers',
+  'arcologies',
+  'megastructures',
+] as const;
 
 /**
  * What each zone calls its levels.
  *
  * Names rather than numbers, because "retail park" says what a level-2 shop is
  * and "level 2" says only that it is above level 1. Commerce and industry climb
- * the same four rungs housing does and merge at the same one, so a level-2 shop
- * is a pair of shopfronts knocked together and a level-2 works is a plant that
- * has taken the yard next door — which is what these names are trying to say.
+ * the same rungs housing does and merge at the same one, so a level-2 shop is a
+ * pair of shopfronts knocked together and a level-2 works is a plant that has
+ * taken the yard next door — which is what these names are trying to say.
+ *
+ * One entry per level, and the tests assert that: a ladder with a rung the HUD
+ * cannot name is a ladder the player cannot read.
  */
 export const ZONE_LEVEL_NAMES = {
   home: LEVEL_NAMES,
-  shop: ['corner shops', 'high street', 'retail park', 'exchange'],
-  industry: ['workshops', 'factory', 'plant', 'refinery'],
+  shop: ['corner shops', 'high street', 'retail park', 'exchange', 'trade towers'],
+  industry: ['workshops', 'factory', 'plant', 'refinery', 'combines'],
 } as const;
 
 // --------------------------------------------------------------- occupancy
@@ -344,9 +391,10 @@ export const LEVEL_UP_HAPPINESS = 0.55;
  * Seconds for a zone to promote its entire eligible stock by one level.
  *
  * A rate, like abandonment, so a big city climbs faster in absolute terms and
- * at the same pace per building. Five minutes a level and four levels to climb
- * puts a fully gated district about twenty minutes from detached housing to
- * arcologies — against the old rezone, which was one button and 3,000 cash.
+ * at the same pace per building. Five minutes a level and five levels to climb
+ * puts a fully gated district about twenty-five minutes from detached housing
+ * to megastructures — against the old rezone, which was one button and 3,000
+ * cash.
  * The pacing lever moved from the treasury to the happiness panel, which is the
  * point of the change.
  */
@@ -377,9 +425,15 @@ export const LEVEL_UP_SECONDS = 300;
  *   - 0.85 to reach level 3 is covered by neither type alone — schools top out
  *     at 78% and a university reaches 75% — so the top of the skyline needs the
  *     university *and* the schools already standing, which is what pooling the
- *     two in `educationCoverage` is for.
+ *     two in `educationCoverage` is for;
+ *   - 1 to reach level 4 is education with no slack left in it. The land always
+ *     holds enough to get there — a district's school and university sites
+ *     between them reach 33 plots against its 24, and the ratio only improves
+ *     as the interleave evens out — but it takes both types built out rather
+ *     than the two buildings 0.85 needs. In a one-district city the two rungs
+ *     coincide, because one school and one university are all the land has.
  */
-export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85] as const;
+export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85, 1] as const;
 
 /**
  * Cash per resident per second.
@@ -489,20 +543,22 @@ export const ANNEX_GROWTH = 3.4;
  *
  * Left at 0.7 through the change that made annexation automatic, and measured
  * rather than assumed. Demand-neutral build-out, holding every home at one
- * level — a player who never buys into a surcharge. Re-measured after Part 0
- * made coverage land-denominated, against the reading before it:
+ * level — a player who never buys into a surcharge. Re-measured after coverage
+ * became land-denominated, against the reading before it:
  *
  *                     before   after
  *   detached housing   69.6%   63.5%
  *   apartments         68.6%   69.3%
  *   towers             67.1%   67.1%
  *   arcologies         65.7%   65.7%
+ *   megastructures        —    65.7%
  *
- * All four sat under the gate before the change and all four still do, so this
- * is the shape rather than a regression Part 0 introduced: a demand-neutral
- * player does not annex, and the two levels the change touched moved 6 points
- * down and 1 up. Annexation in an actual run is unmoved — auto-develop still
- * reaches 4 districts in 24 hours and its first annex moved 1.23h -> 1.25h.
+ * Every rung sat under the gate before the change and every rung still does, so
+ * this is the shape rather than a regression: a demand-neutral player does not
+ * annex, and the two levels the change touched moved 6 points down and 1 up.
+ * The fifth rung lands exactly where the fourth does. Annexation in an actual
+ * run is unmoved — auto-develop still reaches 4 districts in 24 hours and its
+ * first annex moved 1.23h -> 1.25h.
  *
  * It is deliberate: a city of towers is worker-rich, its residential demand
  * runs negative, and filling the last of its housing means paying the surcharge
@@ -605,14 +661,16 @@ export const DEMAND_TAU = 25;
  * auto-develop ends at R +0.57 / C -0.02 / I -0.02 — lively, and well short of
  * the bounds.
  *
- * The honest limit of a *constant* scale, also measured: under the two policies
- * that rezone to arcologies and annex five or six districts inside a day,
- * residential pins at -1 and commercial at +1 for about 21 of the 24 hours. The
- * imbalance a built city can reach scales with tier capacity, which spans 4 to
- * 300, and no single constant covers a 75x range — a scale set for arcologies
- * would leave the opening hour flat. Fixing it properly means dividing by a
- * size term rather than a constant, which is a change to the model the brief
- * specifies rather than a calibration. See tools/economy.calibrate.mjs.
+ * Not a constant scale, and this is the constant it is built out of rather than
+ * the scale itself: `demandScale` multiplies it by `cityScale`, the mean
+ * LEVEL_SCALE a housing plot carries. The imbalance a built city can reach
+ * scales with the level ladder, which now spans 4 to 1,200 residents a plot —
+ * 300x — and no single constant covers that: a scale set for megastructures
+ * would leave the opening hour flat, and one set for the opening pins
+ * everything above towers. Dividing by the size term is what keeps one number
+ * meaningful at both ends, and it is why the fifth rung moved a built-out
+ * district's demand by 0.01. See ZONE_SHARE for the measurement, and
+ * tools/economy.calibrate.mjs for the runs.
  */
 export const DEMAND_SCALE = 300;
 

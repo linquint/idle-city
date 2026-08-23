@@ -18,7 +18,7 @@ import {
   shopCapacity,
 } from '../src/sim/economy';
 import { createState, type GameState } from '../src/sim/state';
-import { built, housed, trading } from './levels';
+import { built, cohort, housed, trading } from './levels';
 
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
 
@@ -60,7 +60,7 @@ describe('purchases', () => {
     const game = at({ cash: 1e9 });
     for (let i = 0; i < 5; i++) expect(game.buildHome()).toBe(true);
     expect(game.state.homes).toBe(5);
-    expect(game.state.homeLevels).toEqual([5, 0, 0, 0]);
+    expect(game.state.homeLevels).toEqual(cohort(5, 0));
   });
 
   it('annexation adds plots without disturbing what is built', () => {

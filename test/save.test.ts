@@ -16,6 +16,7 @@ import {
   happinessTarget,
   homeCapacity,
   industryCapacity,
+  parkCapacity,
   serviceAllowed,
   serviceCount,
   shopCapacity,
@@ -24,7 +25,7 @@ import {
 import { BUILDABLE_PARKS_PER_DISTRICT } from '../src/sim/layout';
 import { load, migrate, save, SAVE_KEY, secondsAway } from '../src/sim/save';
 import { createState, SAVE_VERSION, type GameState } from '../src/sim/state';
-import { built, housed, trading } from './levels';
+import { built, cohort, housed, mix, trading } from './levels';
 
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
@@ -73,7 +74,7 @@ describe('round trip', () => {
     const back = load(6_000);
     expect(back).not.toBeNull();
     expect(back).toMatchObject({ cash: 1234.5, homes: 24, shops: 7, districts: 3 });
-    expect(back?.homeLevels).toEqual([0, 0, 24, 0]);
+    expect(back?.homeLevels).toEqual(cohort(24, 2));
     expect(back?.mergedR).toBe(24);
     expect(back?.savedAt).toBe(at);
     expect(secondsAway(back!, 6_000)).toBe(1);
@@ -111,7 +112,7 @@ describe('migration', () => {
   it('fills in fields a older save never had', () => {
     const back = migrate({ cash: 10, homes: 4 }, 1_000);
     expect(back).toMatchObject({ cash: 10, homes: 4, shops: 0, districts: 1 });
-    expect(back?.homeLevels).toEqual([4, 0, 0, 0]);
+    expect(back?.homeLevels).toEqual(cohort(4, 0));
     expect(back?.autoDevelop).toBe(false);
   });
 
@@ -159,7 +160,7 @@ describe('migration', () => {
     const back = migrate(v1, 2_000);
     expect(back).toMatchObject({ cash: 12_345.6, homes: 30, shops: 9, districts: 3 });
     // A v1 save's global tier becomes a cohort, exactly as a v4 one does.
-    expect(back!.homeLevels).toEqual([0, 0, 30, 0]);
+    expect(back!.homeLevels).toEqual(cohort(30, 2));
     expect(back!.version).toBe(SAVE_VERSION);
     expect(back!.industry).toBe(0);
     expect(civicBuildings(back!)).toBe(0);
@@ -475,9 +476,9 @@ describe('the v6 migration', () => {
 
   it('turns a global tier into a cohort of every standing building', () => {
     const back = migrate(v4, 2_000)!;
-    expect(back.homeLevels).toEqual([0, 19, 0, 0]);
-    expect(back.shopLevels).toEqual([0, 20, 0, 0]);
-    expect(back.industryLevels).toEqual([0, 7, 0, 0]);
+    expect(back.homeLevels).toEqual(cohort(19, 1));
+    expect(back.shopLevels).toEqual(cohort(20, 1));
+    expect(back.industryLevels).toEqual(cohort(7, 1));
     expect(back.version).toBe(SAVE_VERSION);
     // Nothing below MERGE_LEVEL has merged, so no parcels are claimed either.
     expect([back.mergedR, back.mergedC, back.mergedI]).toEqual([0, 0, 0]);
@@ -491,7 +492,7 @@ describe('the v6 migration', () => {
     // the parcels are raised to match, which is what opens such a save with its
     // skyline intact rather than flattened.
     const back = migrate({ ...v4, tier: 2, homes: 10, shops: 10, industry: 3 }, 0)!;
-    expect(back.homeLevels).toEqual([0, 0, 10, 0]);
+    expect(back.homeLevels).toEqual(cohort(10, 2));
     expect(back.mergedR).toBe(10);
     expect(plotsOf(back, 'home')).toBe(20);
   });
@@ -600,7 +601,7 @@ describe('the v6 migration', () => {
     const state = load(2_000)!;
     expect(state.homes).toBe(19);
     expect(state.version).toBe(SAVE_VERSION);
-    expect(state.homeLevels).toEqual([0, 19, 0, 0]);
+    expect(state.homeLevels).toEqual(cohort(19, 1));
   });
 
   /**
@@ -615,9 +616,9 @@ describe('the v6 migration', () => {
       homes: 20,
       shops: 12,
       industry: 5,
-      homeLevels: [8, 12, 0, 0],
+      homeLevels: mix(8, 12),
       shopLevels: [12, 0, 0, 0],
-      industryLevels: [5, 0, 0, 0],
+      industryLevels: mix(5),
       districts: 2,
       parks: 4,
       hospitals: 2,
@@ -646,11 +647,78 @@ describe('the v6 migration', () => {
       demandI: 0.05,
       happiness: 0.81,
     });
-    expect(back.homeLevels).toEqual([8, 12, 0, 0]);
+    expect(back.homeLevels).toEqual(mix(8, 12));
     expect(back.fires).toEqual([{ kind: 'home', index: 2, startedAt: 11_950 }]);
     // The fields v6 added, at the defaults a city that has never merged has.
     expect([back.mergedR, back.mergedC, back.mergedI]).toEqual([0, 0, 0]);
     expect(back.version).toBe(SAVE_VERSION);
+  });
+});
+
+/**
+ * The upgrade the fifth level costs a player: a v6 city, written against a
+ * four-rung ladder, opening on a build with five.
+ */
+describe('the v7 migration', () => {
+  /** A city at the *old* top of the ladder, with its parcels claimed. */
+  const v6 = {
+    version: 6,
+    cash: 9_000,
+    elapsed: 30_000,
+    homes: 12,
+    shops: 8,
+    industry: 3,
+    // Four wide, which is the whole point: written when LEVELS was 4.
+    homeLevels: [0, 0, 0, 12],
+    shopLevels: [2, 0, 6, 0],
+    industryLevels: [3, 0, 0, 0],
+    mergedR: 12,
+    mergedC: 6,
+    mergedI: 0,
+    districts: 2,
+    parks: 4,
+    hospitals: 2,
+    happiness: 0.9,
+    savedAt: 1_000,
+  };
+
+  it('extends every cohort to the new width without inventing a level', () => {
+    const back = migrate(v6, 2_000)!;
+    for (const levels of [back.homeLevels, back.shopLevels, back.industryLevels]) {
+      expect(levels).toHaveLength(LEVELS);
+    }
+    // The city was at the old top, and it stays at the old top. Promoting it on
+    // load would hand a returning player a level they never earned — and one
+    // LEVEL_EDUCATION's new rung says has to be paid for.
+    expect(back.homeLevels).toEqual(cohort(12, 3));
+    expect(back.homeLevels[LEVELS - 1]).toBe(0);
+    expect(back.shopLevels).toEqual(mix(2, 0, 6));
+    expect(back.industryLevels).toEqual(cohort(3, 0));
+  });
+
+  it('keeps the standing stock, the parcels and the version', () => {
+    const back = migrate(v6, 2_000)!;
+    expect(back).toMatchObject({ homes: 12, shops: 8, industry: 3, districts: 2 });
+    expect(cohortTotal(back.homeLevels)).toBe(12);
+    expect([back.mergedR, back.mergedC, back.mergedI]).toEqual([12, 6, 0]);
+    expect(back.version).toBe(SAVE_VERSION);
+  });
+
+  it('re-clamps every count against the capacities of the build it opens on', () => {
+    // The guard that matters across a version bump: the new build may hold less
+    // of something than the old one did, and a save is never trusted about it.
+    const back = migrate({ ...v6, homes: 9_999, hospitals: 99, parks: 99 }, 2_000)!;
+    expect(plotsOf(back, 'home')).toBeLessThanOrEqual(homeCapacity(back));
+    expect(back.hospitals).toBeLessThanOrEqual(siteCapacity(back, 'hospital'));
+    expect(back.parks).toBeLessThanOrEqual(parkCapacity(back));
+  });
+
+  it('finds a v6 save under its own key when there is no v7 one', () => {
+    localStorage.setItem('idle-city/save/v6', JSON.stringify(v6));
+    const state = load(2_000)!;
+    expect(state.homes).toBe(12);
+    expect(state.homeLevels).toEqual(cohort(12, 3));
+    expect(state.version).toBe(SAVE_VERSION);
   });
 });
 

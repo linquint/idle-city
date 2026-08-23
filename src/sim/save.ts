@@ -31,16 +31,17 @@ import {
   type LevelCohort,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v6';
+export const SAVE_KEY = 'idle-city/save/v7';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v6 miss falls back through
+ * new build has not agreed to lose their city — so a v7 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v6',
   'idle-city/save/v5',
   'idle-city/save/v4',
   'idle-city/save/v3',
@@ -76,12 +77,20 @@ const share = (v: unknown, fallback: number): number =>
 /**
  * Rebuilds one zone's level cohort from untrusted JSON.
  *
- * Three shapes arrive here. A v5 save has the array, which is read a level at a
- * time and never past LEVELS — a save claiming a fifth level simply does not
- * have one to claim. A v4 save has no array but does have a global `tier`, and
- * the honest reading of "the whole city is towers" is a cohort with every
- * standing building at that level, which is what `fallback` carries in. Anything
- * older has neither and starts where a fresh city does, at level 0.
+ * Three shapes arrive here. A v5 or v6 save has the array, which is read a level
+ * at a time and never past LEVELS — a save claiming a level the game does not
+ * have simply does not have one to claim. A v4 save has no array but does have a
+ * global `tier`, and the honest reading of "the whole city is towers" is a
+ * cohort with every standing building at that level, which is what `fallback`
+ * carries in. Anything older has neither and starts where a fresh city does, at
+ * level 0.
+ *
+ * A *shorter* array is the case v7 added, and it is handled by the same loop
+ * rather than by a special case: a v6 save has four entries, `raw[4]` is
+ * undefined, and `count` reads that as 0. So the cohort comes back five wide
+ * with the new rung empty and every building that was at the old top still at
+ * the old top — which is the only reading that does not hand a returning player
+ * a level they never earned. LEVEL_EDUCATION's fifth rung is theirs to climb.
  *
  * Whatever arrives is then reconciled to `standing` rather than trusted, because
  * the sum is the one invariant the rest of the game reads: buildings are trimmed

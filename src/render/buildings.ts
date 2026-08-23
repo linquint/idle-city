@@ -8,7 +8,7 @@ import {
   SERVICES,
   type Service,
 } from '../sim/config';
-import { ZONE } from '../sim/citygen';
+import { ZONE, type Zone } from '../sim/citygen';
 import {
   cohortStart,
   cohortTotal,
@@ -24,7 +24,6 @@ import {
   worldZ,
   type CityLayout,
   type Coord,
-  type Placement,
 } from '../sim/layout';
 import type { GameState, LevelCohort, ZoneKind } from '../sim/state';
 import { Glow } from './glow';
@@ -40,31 +39,6 @@ const WAVE_BUDGET = 320;
 
 const prefersReducedMotion = (): boolean =>
   typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-/**
- * What a home looks like at each level.
- *
- * These used to be fields on `Tier` in sim config, which was the wrong home for
- * them: a footprint width and a roof pitch change nothing the simulation can
- * observe. The capacities they sat beside are still simulation and stayed there
- * as LEVEL_CAPACITY; the geometry is the renderer's business and lives here.
- */
-interface LevelStyle {
-  /** Footprint width in world units (must stay under CELL). */
-  readonly width: number;
-  readonly height: number;
-  /** Pitched roofs read as houses; flat roofs read as blocks. */
-  readonly pitched: boolean;
-  /** Tall levels get an aircraft warning light, which is what sells their scale. */
-  readonly beacon: boolean;
-}
-
-const HOME_STYLES: readonly LevelStyle[] = [
-  { width: 2.2, height: 1.6, pitched: true, beacon: false },
-  { width: 2.6, height: 4.6, pitched: false, beacon: false },
-  { width: 2.8, height: 11.5, pitched: false, beacon: true },
-  { width: 3.0, height: 22.0, pitched: false, beacon: true },
-];
 
 /**
  * The long side of a building standing on a merged parcel, in world units.
@@ -105,34 +79,12 @@ const shade = (i: number): number => 0.84 + hash01(i ^ 0x2545f491) * 0.28;
 const widthJitter = (slot: number): number => 0.88 + variety(slot, 0x11) * 0.24;
 const depthJitter = (slot: number): number => 0.88 + variety(slot, 0x27) * 0.24;
 
+/** The top of each jitter's range, which is what the plot bound is checked at. */
+const JITTER_MAX = 1.12;
+const HEIGHT_JITTER_MAX = 1.24;
+
 /** A slight warm/cool tint per building, on top of the shade. */
 const tintJitter = (slot: number): number => 0.94 + variety(slot, 0x3d) * 0.12;
-
-/**
- * Roof shapes. Three of them, shared by every level and both zones.
- *
- * Shared is the point. Three variants across four levels and two zones would be
- * 24 growable meshes and 24 draw calls for what is fundamentally the same box —
- * so instead the geometry is a *unit* shape and the level's width and height
- * arrive as an instance scale, the same way a building's own jitter does. Three
- * meshes total, whatever the city is made of.
- */
-const ROOF = { pitched: 0, flat: 1, parapet: 2 } as const;
-const ROOF_VARIANTS = 3;
-
-/**
- * Which roof a building wears, from its slot and its level.
- *
- * Level-aware rather than free: a pitched roof is what makes a detached house
- * read as a house, and the same shape on an arcology reads as a mistake. So the
- * bottom of the ladder is mostly pitched and everything above it is flat or
- * parapeted, with the mix — not the rule — coming from the hash.
- */
-function roofVariant(slot: number, level: number): number {
-  const roll = variety(slot, 0x53);
-  if (level <= 0) return roll < 0.72 ? ROOF.pitched : ROOF.parapet;
-  return roll < 0.55 ? ROOF.flat : ROOF.parapet;
-}
 
 const targetColor = new THREE.Color();
 const materialColor = new THREE.Color();
@@ -154,69 +106,364 @@ function against(target: number, material: number, out: THREE.Color): THREE.Colo
   );
 }
 
+/** Bands a style may wear. Two index slots are reserved per building for them. */
+const BANDS_MAX = 2;
+
 /**
- * The city's roofs: three unit shapes, instanced, shared by every level.
+ * The shared detail bank: nine unit shapes, instanced, worn by every zone and
+ * every level.
  *
- * Instances are packed per variant rather than per building, so an instance
- * index here has nothing to do with a slot index — `Buildings` keeps the map.
- * Rebuilt whole whenever the skyline moves, which is the same rule the bodies
- * follow and the reason there is nothing to keep in step.
+ * Shared is the point, and it is the whole reason 45 building variants cost 24
+ * meshes rather than 45. Three variants across five levels and three zones would
+ * be forty-five growable meshes and forty-five draw calls for what is
+ * fundamentally the same box — so instead every shape here is a *unit* shape and
+ * the building's own proportions arrive as an instance scale, the same way a
+ * building's jitter does. Nine meshes total, whatever the city is made of.
+ *
+ * Instances are packed per part rather than per building, so an instance index
+ * here has nothing to do with a slot index — `Buildings` keeps the map, in
+ * `partAt`. Two of the nine are lit and ramp with the daylight cycle.
  */
-class Roofs {
+const PART = {
+  pitched: 0,
+  flat: 1,
+  parapet: 2,
+  awning: 3,
+  stack: 4,
+  setback: 5,
+  plant: 6,
+  /** A lit floor band girdling the body. Glow material, so it ramps at dusk. */
+  band: 7,
+  /** The aircraft warning light tall levels carry. Glow material. */
+  beacon: 8,
+} as const;
+
+const PART_COUNT = 9;
+
+/**
+ * Index slots reserved per building, in the order `writeParts` fills them:
+ * roof, awning, stack, setback, plant, two bands, beacon.
+ *
+ * A fixed stride rather than a list, because the growth animation rewrites one
+ * slot at a time long after the pack order was decided and has to find the same
+ * instances again. -1 means the building does not wear that part.
+ */
+const PART_SLOTS = 5 + BANDS_MAX + 1;
+
+/**
+ * What one level of one zone is, before a style or a jitter touches it.
+ *
+ * These used to be fields on `Tier` in sim config, which was the wrong home for
+ * them: a footprint width and a roof pitch change nothing the simulation can
+ * observe. The capacities they sat beside are still simulation and stayed there
+ * as LEVEL_CAPACITY; the geometry is the renderer's business and lives here.
+ *
+ * One row per level per zone, and the body geometry is built from it — so this
+ * is the *only* thing that costs a mesh. Everything else a building can look
+ * like is an instance scale on top. See `BuildStyle`.
+ */
+interface LevelShape {
+  /** Footprint width in world units (must stay under CELL once jittered). */
+  readonly width: number;
+  readonly height: number;
+  /** Depth as a share of the width. Industry is oblong; the rest are square. */
+  readonly depth: number;
+  /** Tall levels get an aircraft warning light, which is what sells their scale. */
+  readonly beacon: boolean;
+}
+
+/**
+ * The ladder, drawn. Five rungs a zone, and the shape of each is what the zone
+ * is trying to say.
+ *
+ * Housing climbs on *height*: 1.6 to 30 world units, which is the whole of how
+ * a district reads as having grown. Commerce climbs too but stays well under
+ * housing at every rung — 2.4 to 8.0 against 1.6 to 30 — because height is
+ * housing's signal and a shop that competed on it would read as a stunted
+ * apartment block. Industry barely climbs at all and holds one width: it is the
+ * anti-tower, wide and low, and its levels show in the plant on the roof rather
+ * than in the silhouette.
+ *
+ * Widths are bounded by the plot, and that bound is what sets them rather than
+ * taste: `widthJitter` reaches 1.12 and a style's own multiplier is at most
+ * 1.10, so a body can come out at width x 1.23 and has to stay under CELL (4)
+ * or it crosses its own kerb. Housing tops out at 3.1 x 1.10 x 1.12 = 3.82 and
+ * industry holds 3.5 against a style bound of 1.00, so 3.92 — which is why the
+ * industrial styles differ in height and plant rather than in width, and why
+ * industry is still the widest thing on the map. Asserted in
+ * test/skyline.test.ts, along with the ordering.
+ *
+ * The top rung was checked for slenderness rather than assumed. The tallest
+ * body the ladder can produce is the housing slab at level 4: 27 x 1.12 (its
+ * style) x 1.24 (its jitter) = 37.5 tall. It stands on a merged parcel, so the
+ * side actually seen is 37.5 against MERGED_SPAN's 6.8 — an aspect of 5.5,
+ * against the arcology below it at 4.5. The ladder gets slenderer as it climbs,
+ * which is what a ladder of towers should do, and it stops well short of a
+ * needle. A height of 30 was measured first and came out at 6.1.
+ */
+const ZONE_SHAPES: Readonly<Record<ZoneKind, readonly LevelShape[]>> = {
+  home: [
+    { width: 2.2, height: 1.6, depth: 1, beacon: false },
+    { width: 2.6, height: 4.6, depth: 1, beacon: false },
+    { width: 2.8, height: 11.5, depth: 1, beacon: true },
+    { width: 3.0, height: 22.0, depth: 1, beacon: true },
+    { width: 3.1, height: 27.0, depth: 1, beacon: true },
+  ],
+  shop: [
+    { width: 3.0, height: 2.4, depth: 1, beacon: false },
+    { width: 3.0, height: 3.2, depth: 1, beacon: false },
+    { width: 3.1, height: 4.4, depth: 1, beacon: false },
+    { width: 3.2, height: 6.0, depth: 1, beacon: false },
+    { width: 3.2, height: 8.0, depth: 1, beacon: true },
+  ],
+  industry: [
+    { width: 3.5, height: 1.3, depth: 0.86, beacon: false },
+    { width: 3.5, height: 1.7, depth: 0.86, beacon: false },
+    { width: 3.5, height: 2.2, depth: 0.86, beacon: false },
+    { width: 3.5, height: 2.8, depth: 0.86, beacon: false },
+    { width: 3.5, height: 3.4, depth: 0.86, beacon: false },
+  ],
+};
+
+/**
+ * A style is a parameter set, not a mesh.
+ *
+ * Five levels x three styles x three zones is 45 variants, and as meshes that
+ * would be 45 draw calls for what is fundamentally the same box. So a style
+ * changes only things an *instance* can carry — proportions, a colour band,
+ * how many lit window bands it wears, and which of the shared detail parts it
+ * puts on — and the level's own `LevelShape` is the geometry underneath it.
+ * 45 looks, 15 bodies.
+ *
+ * Chosen by `hash(slot, SEED)` and never stored: a save is still counts, a
+ * building keeps its own character forever, and changing SEED reshuffles the
+ * city's look along with its streets.
+ */
+interface BuildStyle {
+  /** What the panel would call it. Not shown anywhere; it names the row. */
+  readonly name: string;
+  /** Multipliers on the level's own footprint and height. */
+  readonly width: number;
+  readonly height: number;
+  /** A colour band: a multiplier on the body's instance colour. */
+  readonly tint: number;
+  /** Roof shape from the shared bank. Level-0 housing overrides it — see `roofOf`. */
+  readonly roof: number;
+  /** Street-level overhang, as a share of the footprint. 0 = not worn. */
+  readonly awning: number;
+  /** Mast or chimney, as a share of the body height. 0 = not worn. */
+  readonly stack: number;
+  /** Stepped upper block, as a share of the body height. 0 = not worn. */
+  readonly setback: number;
+  /** Rooftop equipment, as a share of the footprint. 0 = not worn. */
+  readonly plant: number;
+  /** Lit window bands up the body, at most BANDS_MAX. */
+  readonly bands: number;
+}
+
+/**
+ * Three styles a zone, and the three are meant to be told apart in silhouette
+ * before colour: something plain, something stepped, and something with kit on
+ * it. Read a street of one zone and it should look built over time rather than
+ * stamped.
+ */
+const ZONE_STYLES: Readonly<Record<ZoneKind, readonly BuildStyle[]>> = {
+  home: [
+    // The baseline. A plain block with one lit floor band, and a pitched roof
+    // at level 0 — which is what makes a detached house read as a house.
+    { name: 'terrace', width: 1.0, height: 1.0, tint: 1.0, roof: PART.flat,
+      awning: 0, stack: 0, setback: 0, plant: 0, bands: 1 },
+    // Wider and shorter, stepping back near the top, with a little plant on the
+    // set-back roof. The one that reads as a block of flats at every rung.
+    { name: 'stepped', width: 1.1, height: 0.9, tint: 0.9, roof: PART.parapet,
+      awning: 0, stack: 0, setback: 0.24, plant: 0.34, bands: 1 },
+    // Narrow and tall with a mast and a canopy over the entrance. The one that
+    // makes a run of towers read as a skyline rather than as a comb.
+    { name: 'slab', width: 0.9, height: 1.12, tint: 1.1, roof: PART.flat,
+      awning: 0.3, stack: 0.12, setback: 0, plant: 0, bands: 2 },
+  ],
+  shop: [
+    // A canvas skirt at street level. The old default, kept as a style.
+    { name: 'canopy', width: 1.0, height: 1.0, tint: 1.0, roof: PART.flat,
+      awning: 0.4, stack: 0, setback: 0, plant: 0, bands: 1 },
+    // A sign board standing above the roofline, turned onto the long axis so a
+    // merged shop wears one long sign rather than two short ones.
+    { name: 'fin', width: 0.96, height: 1.06, tint: 1.08, roof: PART.parapet,
+      awning: 0, stack: 0.5, setback: 0, plant: 0, bands: 1 },
+    // Deep and low, stepped back over a shallow arcade, with plant on the roof.
+    { name: 'arcade', width: 1.08, height: 0.94, tint: 0.92, roof: PART.parapet,
+      awning: 0.22, stack: 0, setback: 0.2, plant: 0.32, bands: 2 },
+  ],
+  industry: [
+    // A shed with one tall stack. The old default.
+    { name: 'shed', width: 1.0, height: 1.0, tint: 1.0, roof: PART.flat,
+      awning: 0, stack: 1.35, setback: 0, plant: 0.7, bands: 0 },
+    // Taller and narrower, with a stepped block and the tallest stack. The one
+    // that reads as a works rather than as a warehouse.
+    { name: 'works', width: 0.92, height: 1.2, tint: 0.9, roof: PART.parapet,
+      awning: 0, stack: 1.9, setback: 0.2, plant: 0.4, bands: 1 },
+    // Low and sprawling, loading canopy down one side, kit everywhere.
+    { name: 'yard', width: 0.98, height: 0.88, tint: 1.1, roof: PART.flat,
+      awning: 0.3, stack: 0.9, setback: 0, plant: 1.1, bands: 0 },
+  ],
+};
+
+const STYLES_PER_ZONE = 3;
+
+/** A per-zone salt, so the three zones do not all pick style 2 on slot 7. */
+const ZONE_SALT: Readonly<Record<ZoneKind, number>> = {
+  home: 0x53,
+  shop: 0x61,
+  industry: 0x95,
+};
+
+/**
+ * Which of its zone's three styles a building wears.
+ *
+ * Exported so the tests can assert the one property that matters about it: it
+ * is a pure function of the slot and the seed, and it is nowhere in the save.
+ *
+ * A pure function of the slot and the seed and nothing else — not of the level,
+ * so a building keeps its character as it climbs, and not of anything in the
+ * save, so there is nothing to store. `variety` already mixes SEED in.
+ */
+export function buildingStyle(kind: ZoneKind, slot: number): number {
+  return Math.min(STYLES_PER_ZONE - 1, Math.floor(variety(slot, ZONE_SALT[kind]) * STYLES_PER_ZONE));
+}
+
+function styleOf(kind: ZoneKind, slot: number): BuildStyle {
+  const styles = ZONE_STYLES[kind];
+  return styles[buildingStyle(kind, slot)] ?? (styles[0] as BuildStyle);
+}
+
+/**
+ * The widest and tallest a body of one zone and level can come out, over every
+ * style and the whole jitter range.
+ *
+ * Exported for the tests rather than used here: the bound it reports is the one
+ * that stops a building crossing its own kerb, and a bound nothing checks is a
+ * bound that quietly stops holding the next time a style is added.
+ */
+export function bodyExtent(kind: ZoneKind, level: number): { width: number; height: number } {
+  const shape = shapeOf(kind, level);
+  let width = 0;
+  let height = 0;
+  for (const style of ZONE_STYLES[kind]) {
+    width = Math.max(width, shape.width * style.width * JITTER_MAX);
+    height = Math.max(height, shape.height * style.height * HEIGHT_JITTER_MAX);
+  }
+  return { width, height };
+}
+
+const shapeOf = (kind: ZoneKind, level: number): LevelShape => {
+  const shapes = ZONE_SHAPES[kind];
+  return shapes[Math.max(0, Math.min(shapes.length - 1, level))] ?? (shapes[0] as LevelShape);
+};
+
+/**
+ * Which roof a building wears.
+ *
+ * The style decides, with one override: a pitched roof is what makes a detached
+ * house read as a house, and the same shape on a megastructure reads as a
+ * mistake. So level-0 housing takes the pitch unless its style is the slab, and
+ * everything above it wears whatever its style says. A ruin wears the flattest
+ * thing in the bank — whatever it had is gone.
+ */
+function roofOf(kind: ZoneKind, level: number, style: BuildStyle): number {
+  if (level < 0) return PART.flat;
+  if (kind === 'home' && level === 0) return style.roof === PART.flat ? PART.pitched : PART.parapet;
+  return style.roof;
+}
+
+class PartBank {
   private readonly meshes: readonly GrowableInstancedMesh[];
-  private readonly counts = new Int32Array(ROOF_VARIANTS);
+  private readonly counts = new Int32Array(PART_COUNT);
+  private readonly glows: readonly Glow[];
 
   constructor(scene: THREE.Scene, capacity: number) {
-    const material = (color: number): THREE.Material =>
-      new THREE.MeshLambertMaterial({ color });
-    // Unit shapes: 1 x 1 x 1 before the instance scale, so one geometry covers
-    // a cottage roof and an arcology parapet alike.
+    const lambert = (color: number): THREE.Material => new THREE.MeshLambertMaterial({ color });
+    const unit = (): THREE.BufferGeometry => new THREE.BoxGeometry(1, 1, 1);
+    // Unit shapes: 1 x 1 x 1 before the instance scale, so one geometry covers a
+    // cottage roof and a megastructure parapet alike.
     const pitched = new THREE.ConeGeometry(0.72, 1, 4);
     // A four-sided cone is a hipped roof only once it is turned onto the grid,
     // and baking the turn into the geometry keeps it out of every write.
     pitched.rotateY(Math.PI / 4);
-    this.meshes = [
-      new GrowableInstancedMesh(scene, pitched, material(PALETTE.tile), capacity, {
-        castShadow: true,
-        name: 'roof:pitched',
-      }),
-      new GrowableInstancedMesh(scene, new THREE.BoxGeometry(0.62, 1, 0.62), material(PALETTE.parapet), capacity, {
-        castShadow: true,
-        name: 'roof:flat',
-      }),
-      new GrowableInstancedMesh(scene, new THREE.BoxGeometry(1.04, 1, 1.04), material(PALETTE.parapet), capacity, {
-        castShadow: true,
-        name: 'roof:parapet',
-      }),
-    ];
+    // A band is nearly invisible at midday and most of what a street reads as
+    // after dark; a warning light gets the lowest floor of the lit surfaces.
+    const bandGlow = new Glow(PALETTE.sodium, 0.42);
+    const beaconGlow = new Glow(PALETTE.sodium, 0.3);
+    this.glows = [bandGlow, beaconGlow];
+    const meshes: GrowableInstancedMesh[] = [];
+    meshes[PART.pitched] = new GrowableInstancedMesh(scene, pitched, lambert(PALETTE.tile), capacity, {
+      castShadow: true,
+      name: 'part:pitched',
+    });
+    meshes[PART.flat] = new GrowableInstancedMesh(
+      scene, new THREE.BoxGeometry(0.62, 1, 0.62), lambert(PALETTE.parapet), capacity,
+      { castShadow: true, name: 'part:flat' },
+    );
+    meshes[PART.parapet] = new GrowableInstancedMesh(
+      scene, new THREE.BoxGeometry(1.04, 1, 1.04), lambert(PALETTE.parapet), capacity,
+      { castShadow: true, name: 'part:parapet' },
+    );
+    meshes[PART.awning] = new GrowableInstancedMesh(scene, unit(), lambert(PALETTE.awning), capacity, {
+      castShadow: true,
+      name: 'part:awning',
+    });
+    meshes[PART.stack] = new GrowableInstancedMesh(scene, unit(), lambert(PALETTE.stack), capacity, {
+      castShadow: true,
+      name: 'part:stack',
+    });
+    meshes[PART.setback] = new GrowableInstancedMesh(scene, unit(), lambert(PALETTE.concrete), capacity, {
+      castShadow: true,
+      name: 'part:setback',
+    });
+    meshes[PART.plant] = new GrowableInstancedMesh(scene, unit(), lambert(PALETTE.vent), capacity, {
+      castShadow: true,
+      name: 'part:plant',
+    });
+    meshes[PART.band] = new GrowableInstancedMesh(scene, unit(), bandGlow.material, capacity, {
+      name: 'part:band',
+    });
+    meshes[PART.beacon] = new GrowableInstancedMesh(scene, unit(), beaconGlow.material, capacity, {
+      name: 'part:beacon',
+    });
+    this.meshes = meshes;
   }
 
-  /** Starts a rebuild. Every variant's instance list is written from scratch. */
+  setNight(night: number): void {
+    for (const glow of this.glows) glow.setNight(night);
+  }
+
+  /** Starts a rebuild. Every part's instance list is written from scratch. */
   begin(): void {
     this.counts.fill(0);
   }
 
-  /** Appends one roof and hands back the instance index it landed on. */
-  place(variant: number, matrix: THREE.Matrix4): number {
-    const mesh = this.meshes[variant];
-    if (!mesh) return 0;
-    const index = this.counts[variant] ?? 0;
-    this.counts[variant] = index + 1;
+  /** Appends one part and hands back the instance index it landed on. */
+  place(part: number, matrix: THREE.Matrix4, color: THREE.Color | null): number {
+    const mesh = this.meshes[part];
+    if (!mesh) return -1;
+    const index = this.counts[part] ?? 0;
+    this.counts[part] = index + 1;
     mesh.ensure(index + 1);
     mesh.setMatrixAt(index, matrix);
+    if (color) mesh.setColorAt(index, color);
     return index;
   }
 
-  /** Rewrites one roof already placed. Used by the growth animation. */
-  move(variant: number, index: number, matrix: THREE.Matrix4): void {
-    this.meshes[variant]?.setMatrixAt(index, matrix);
+  /** Rewrites one part already placed. Used by the growth animation. */
+  move(part: number, index: number, matrix: THREE.Matrix4): void {
+    if (index < 0) return;
+    this.meshes[part]?.setMatrixAt(index, matrix);
   }
 
   end(): void {
-    for (let v = 0; v < ROOF_VARIANTS; v++) {
-      const mesh = this.meshes[v];
+    for (let p = 0; p < PART_COUNT; p++) {
+      const mesh = this.meshes[p];
       if (!mesh) continue;
-      mesh.count = this.counts[v] ?? 0;
+      mesh.count = this.counts[p] ?? 0;
       mesh.flush();
     }
   }
@@ -226,500 +473,541 @@ class Roofs {
   }
 }
 
+/** The material colour a zone's bodies are made of. */
+const ZONE_COLOR: Readonly<Record<ZoneKind, number>> = {
+  home: PALETTE.concrete,
+  shop: PALETTE.shop,
+  industry: PALETTE.industry,
+};
+
 /**
- * One InstancedMesh set per building level.
+ * One InstancedMesh per (zone, level). Fifteen in the city, and the only meshes
+ * the ladder costs.
  *
  * A level's buildings are a *contiguous run of slots* — the oldest hold the
- * highest levels — so each set draws one range and a promotion is a range
+ * highest levels — so each mesh draws one range and a promotion is a range
  * boundary moving by one. Instance index and slot index are therefore different
- * numbers, and every per-building hash below takes the slot: a building's
+ * numbers, and every per-building hash below takes the slot: a building's style,
  * height jitter and shade must not change when the cohort under it shifts.
  */
-class LevelMeshes {
-  private readonly body: GrowableInstancedMesh;
-  private readonly beacon: GrowableInstancedMesh | null;
-  /** Only levels tall enough to carry a warning light have one to ramp. */
-  private readonly beaconGlow: Glow | null;
-  /** Zone colour while the overlay is on, null for the city's own palette. */
-  private overlay: number | null = null;
+class BodyMeshes {
+  readonly mesh: GrowableInstancedMesh;
 
-  constructor(scene: THREE.Scene, readonly style: LevelStyle, level: number, capacity: number) {
-    const w = style.width;
-    this.body = new GrowableInstancedMesh(
+  constructor(
+    scene: THREE.Scene,
+    readonly kind: ZoneKind,
+    readonly level: number,
+    capacity: number,
+  ) {
+    const shape = shapeOf(kind, level);
+    this.mesh = new GrowableInstancedMesh(
       scene,
-      new THREE.BoxGeometry(w, style.height, w),
-      new THREE.MeshLambertMaterial({ color: PALETTE.concrete }),
+      new THREE.BoxGeometry(shape.width, shape.height, shape.width * shape.depth),
+      new THREE.MeshLambertMaterial({ color: ZONE_COLOR[kind] }),
       capacity,
-      { castShadow: true, receiveShadow: true, name: `home:${level}` },
+      { castShadow: true, receiveShadow: true, name: `${kind}:${level}` },
     );
-    // A warning light is nearly invisible at midday and the whole silhouette
-    // after dark, so it gets the lowest floor of the three lit surfaces.
-    this.beaconGlow = style.beacon ? new Glow(PALETTE.sodium, 0.3) : null;
-    this.beacon = this.beaconGlow
-      ? new GrowableInstancedMesh(
-          scene,
-          new THREE.BoxGeometry(0.34, 0.34, 0.34),
-          this.beaconGlow.material,
-          capacity,
-        )
-      : null;
-  }
-
-  setNight(night: number): void {
-    this.beaconGlow?.setNight(night);
-  }
-
-  /** The mesh a click lands on. Roofs and beacons are decoration, not targets. */
-  get pickable(): GrowableInstancedMesh {
-    return this.body;
   }
 
   ensure(capacity: number): void {
-    this.body.ensure(capacity);
-    this.beacon?.ensure(capacity);
+    this.mesh.ensure(capacity);
+  }
+
+  setCount(n: number): void {
+    this.mesh.count = n;
+  }
+
+  flush(): void {
+    this.mesh.flush();
+  }
+}
+
+/**
+ * The colour of one building.
+ *
+ * The instance colour multiplies the material, so white is the identity and
+ * every jitter is a nudge either side of it. The style's own band is one of
+ * those nudges, which is what makes a run of one style read as a run.
+ *
+ * A ruin is the one case that is not a jitter: desaturated toward grey and
+ * darkened well below anything a lived-in building reaches, so a boarded-up
+ * plot is legible from the play camera without opening an overlay. It keeps the
+ * plot and loses everything else.
+ */
+function bodyColor(
+  kind: ZoneKind,
+  slot: number,
+  level: number,
+  overlay: number | null,
+  out: THREE.Color,
+): THREE.Color {
+  const base =
+    overlay === null ? out.setRGB(1, 1, 1) : against(overlay, ZONE_COLOR[kind], out);
+  if (level < 0) {
+    // Toward grey, then down. The zone overlay survives it — a ruin is still
+    // standing on the land it was zoned for, and the overlay states zoning.
+    const grey = (base.r + base.g + base.b) / 3;
+    return base.setRGB((base.r + grey) * 0.2, (base.g + grey) * 0.2, (base.b + grey) * 0.2);
+  }
+  // The per-building shade and tint survive the overlay, so the plan still reads
+  // as buildings rather than as a flat sheet of one colour.
+  return base.multiplyScalar(shade(slot) * tintJitter(slot) * styleOf(kind, slot).tint);
+}
+
+/**
+ * The canvas shade of an awning, and the concrete of a setback.
+ *
+ * Not overlay-aware, and deliberately: the zone overlay states zoning and only
+ * the bodies carry it, which is the rule the roofs and stacks already follow.
+ */
+function partColor(slot: number, out: THREE.Color): THREE.Color {
+  return out.setRGB(1, 1, 1).multiplyScalar(shade(slot) * tintJitter(slot));
+}
+
+/**
+ * Everything one zone draws: five body meshes, the cohort they are packed
+ * against, and the part indices each building's dressing landed on.
+ *
+ * The three zones were three near-identical classes before the ladder reached
+ * commerce and industry; they are one now, which is what makes "a shop climbs
+ * the same rungs a house does" true in the renderer as well as in the config.
+ */
+class ZoneLayer {
+  private readonly bodies: readonly BodyMeshes[];
+  readonly growth: GrowthSchedule;
+  /** The cohort the scene is drawing, and where each level's run of slots begins. */
+  private readonly cohort: LevelCohort = new Array<number>(LEVELS).fill(0);
+  private readonly starts: number[] = new Array<number>(LEVELS).fill(0);
+  private shown = 0;
+  private shownMerged = -1;
+  private ruins = 0;
+  private overlay: number | null = null;
+  /**
+   * Which part instance each of a building's dressing pieces landed on.
+   *
+   * Parts are packed per part, so the index bears no relation to the slot — and
+   * the growth animation rewrites one slot at a time, long after the pack order
+   * was decided. PART_SLOTS wide, indexed by slot, grown with the city.
+   */
+  private partAt = new Int32Array(0);
+
+  constructor(
+    scene: THREE.Scene,
+    readonly kind: ZoneKind,
+    private readonly zone: Zone,
+    private readonly layout: CityLayout,
+    duration: number,
+    capacity: number,
+  ) {
+    this.growth = new GrowthSchedule(duration);
+    this.bodies = Array.from(
+      { length: LEVELS },
+      (_, level) => new BodyMeshes(scene, kind, level, capacity),
+    );
+  }
+
+  /** How many buildings this layer is drawing. The append path's `from`. */
+  get shownCount(): number {
+    return this.shown;
+  }
+
+  /**
+   * Stages the growth animation for whatever arrived since the last write.
+   *
+   * A zone that lost buildings clears instead: a merge, an abandonment or a
+   * demolition renumbers every slot above it, so an animation keyed to the old
+   * numbering would play on the wrong buildings.
+   */
+  stage(state: Readonly<GameState>, now: number): void {
+    const count = countOf(state, this.kind);
+    if (count > this.shown) this.growth.stage(this.shown, count, now, 1.4, WAVE_BUDGET);
+    else if (count < this.shown) this.growth.clear();
   }
 
   setOverlay(hex: number | null): void {
     this.overlay = hex;
   }
 
-  /**
-   * The colour of one building.
-   *
-   * A ruin is the one case that is not a jitter: desaturated toward the concrete
-   * it is made of and darkened well below anything a lived-in building reaches,
-   * so a boarded-up plot is legible from the play camera without opening an
-   * overlay. It keeps the plot and loses everything else.
-   */
-  private bodyColor(slot: number, level: number, out: THREE.Color): THREE.Color {
-    const base =
-      this.overlay === null
-        ? out.setHex(PALETTE.concrete)
-        : against(this.overlay, PALETTE.concrete, out);
-    if (level < 0) {
-      // Toward grey, then down. The zone overlay survives it — a ruin is still
-      // standing on residential land and the overlay states zoning.
-      const grey = (base.r + base.g + base.b) / 3;
-      return base.setRGB(
-        (base.r + grey * 3) * 0.14,
-        (base.g + grey * 3) * 0.14,
-        (base.b + grey * 3) * 0.14,
-      );
+  /** Registers every body mesh's slot run, so a raycast hit resolves. */
+  register(ranges: SlotRanges<ZoneKind>): void {
+    for (let l = 0; l < LEVELS; l++) {
+      const body = this.bodies[l];
+      if (body) ranges.set(body.mesh, this.kind, this.starts[l] ?? 0);
     }
-    // The per-building shade and tint survive the overlay, so the plan still
-    // reads as buildings rather than as a flat sheet of one colour.
-    return base.multiplyScalar(shade(slot) * tintJitter(slot));
   }
 
-  /** Rewrites colours only. Matrices are untouched, so this is one buffer pass. */
-  recolor(from: number, count: number, standing: number, tint: THREE.Color): void {
-    for (let i = 0; i < count; i++) {
-      const slot = from + i;
-      this.body.setColorAt(i, this.bodyColor(slot, slot < standing ? 0 : -1, tint));
-    }
-    this.body.flush();
+  /** How many instances a level's mesh draws: its cohort, plus the ruins. */
+  private levelCount(l: number): number {
+    return (this.cohort[l] ?? 0) + (l === 0 ? this.ruins : 0);
+  }
+
+  /** Whether anything about what this zone draws has moved. */
+  changed(state: Readonly<GameState>): boolean {
+    if (countOf(state, this.kind) !== this.shown) return true;
+    if (mergedOf(state, this.kind) !== this.shownMerged) return true;
+    const levels = levelsOf(state, this.kind);
+    for (let l = 0; l < LEVELS; l++) if ((levels[l] ?? 0) !== this.cohort[l]) return true;
+    return false;
   }
 
   /**
-   * Writes one building, and hands its roof to the shared bank.
+   * How many buildings were appended at the end and nothing else, or -1 if the
+   * change needs the whole zone rewritten.
    *
-   * Returns the roof's instance index so the caller can find it again when a
-   * growth animation rewrites this slot: roofs are packed per variant, so the
-   * index has nothing to do with the slot it came from.
+   * A purchase adds at level 0 and moves nothing else, so its instances can be
+   * written straight onto the end of the level-0 run — which is what keeps a
+   * city being auto-developed from rewriting itself once a building. A
+   * promotion, a merge or an abandonment shifts every slot above it and has no
+   * incremental edit that is cheaper to get right.
+   *
+   * Ruins are the reason for the last clause: they are drawn at the end of the
+   * level-0 run, so appending in front of them would shift every one.
    */
-  write(
+  appended(state: Readonly<GameState>): number {
+    const count = countOf(state, this.kind);
+    const grew = count - this.shown;
+    if (grew <= 0) return -1;
+    if (mergedOf(state, this.kind) !== this.shownMerged) return -1;
+    if (this.ruins !== 0 || count - cohortTotal(levelsOf(state, this.kind)) !== 0) return -1;
+    const levels = levelsOf(state, this.kind);
+    if ((levels[0] ?? 0) !== (this.cohort[0] ?? 0) + grew) return -1;
+    for (let l = 1; l < LEVELS; l++) if ((levels[l] ?? 0) !== this.cohort[l]) return -1;
+    return grew;
+  }
+
+  /** Copies the state into the mirror the writes below are packed against. */
+  adopt(state: Readonly<GameState>): void {
+    const levels = levelsOf(state, this.kind);
+    this.shown = countOf(state, this.kind);
+    this.shownMerged = mergedOf(state, this.kind);
+    this.ruins = this.shown - cohortTotal(levels);
+    for (let l = 0; l < LEVELS; l++) this.cohort[l] = levels[l] ?? 0;
+    cohortStart(this.cohort, this.starts);
+    this.growth.ensure(this.shown);
+    if (this.partAt.length < this.shown * PART_SLOTS) {
+      this.partAt = new Int32Array(Math.max(64, this.shown * 2) * PART_SLOTS);
+    }
+  }
+
+  /** Rewrites every building in the zone, level by level. */
+  writeAll(bank: PartBank, dummy: THREE.Object3D, tint: THREE.Color, now: number): void {
+    const standing = this.shown - this.ruins;
+    for (let l = 0; l < LEVELS; l++) {
+      const body = this.bodies[l];
+      if (!body) continue;
+      const count = this.levelCount(l);
+      const start = this.starts[l] ?? 0;
+      body.ensure(count);
+      for (let i = 0; i < count; i++) {
+        const slot = start + i;
+        // Slots past the standing stock are the ruins. They live in the level-0
+        // set because they hold a plot and have to be drawn on it, and -1 is
+        // what tells the write they hold no level.
+        this.writeOne(body, i, slot, slot < standing ? l : -1, bank, dummy, tint, now, true);
+      }
+      body.setCount(count);
+      body.flush();
+    }
+  }
+
+  /** Writes a run of newly appended buildings onto the end of the level-0 set. */
+  writeRange(
+    bank: PartBank,
+    dummy: THREE.Object3D,
+    tint: THREE.Color,
+    from: number,
+    to: number,
+    now: number,
+  ): void {
+    const body = this.bodies[0];
+    if (!body) return;
+    const start = this.starts[0] ?? 0;
+    body.ensure(to - start);
+    for (let slot = from; slot < to; slot++) {
+      this.writeOne(body, slot - start, slot, 0, bank, dummy, tint, now, true);
+    }
+    body.setCount(to - start);
+    body.flush();
+  }
+
+  /** One building: its body, and its dressing out of the shared bank. */
+  private writeOne(
+    body: BodyMeshes,
     index: number,
     slot: number,
     level: number,
-    at: Placement,
-    scale: number,
+    bank: PartBank,
     dummy: THREE.Object3D,
     tint: THREE.Color,
-    roofs: Roofs,
-    roofIndex: number,
-  ): number {
-    const stretch = heightJitter(slot);
-    const height = this.style.height * stretch;
+    now: number,
+    place: boolean,
+  ): void {
+    const at = this.layout.place(this.zone, slot, this.shownMerged, SCRATCH_AT);
+    const scale = this.growth.scaleAt(slot, now);
+    const shape = shapeOf(this.kind, level);
+    const style = styleOf(this.kind, slot);
     // A merged parcel is drawn by stretching the level's own box along the
-    // parcel's axis rather than by a second geometry, exactly as the roofs and
+    // parcel's axis rather than by a second geometry, exactly as the parts and
     // the jitter already do. One extra multiply, no extra draw call.
-    const span = at.plots > 1 ? MERGED_SPAN / this.style.width : 1;
-    const sx = widthJitter(slot) * (at.alongX ? span : 1);
-    const sz = depthJitter(slot) * (at.alongX ? 1 : span);
+    const span = at.plots > 1 ? MERGED_SPAN / (shape.width * style.width) : 1;
+    const sx = style.width * widthJitter(slot) * (at.alongX ? span : 1);
+    const sz = style.width * depthJitter(slot) * (at.alongX ? 1 : span);
+    const stretch = style.height * heightJitter(slot);
+    const height = shape.height * stretch;
 
     dummy.rotation.set(0, 0, 0);
     dummy.position.set(at.x, (height / 2) * scale, at.z);
     dummy.scale.set(sx, stretch * scale, sz);
     dummy.updateMatrix();
-    this.body.setMatrixAt(index, dummy.matrix);
-    this.body.setColorAt(index, this.bodyColor(slot, level, tint));
+    body.mesh.setMatrixAt(index, dummy.matrix);
+    body.mesh.setColorAt(index, bodyColor(this.kind, slot, level, this.overlay, tint));
 
-    // A ruin wears the flattest thing in the bank: whatever it had is gone.
-    const variant = level < 0 ? ROOF.flat : roofVariant(slot, level);
-    const rise = variant === ROOF.pitched ? 1.15 : 0.5;
-    dummy.position.y = (height + rise / 2) * scale;
-    dummy.scale.set(this.style.width * sx, rise * scale, this.style.width * sz);
-    dummy.updateMatrix();
-    const placed = roofIndex < 0 ? roofs.place(variant, dummy.matrix) : roofIndex;
-    if (roofIndex >= 0) roofs.move(variant, roofIndex, dummy.matrix);
+    writeParts(
+      this.kind,
+      slot,
+      level,
+      at.x,
+      at.z,
+      at.alongX,
+      shape.width * sx,
+      shape.width * shape.depth * sz,
+      height,
+      scale,
+      bank,
+      dummy,
+      tint,
+      this.partAt,
+      place,
+    );
+  }
 
-    if (this.beacon) {
-      dummy.position.y = (height + rise + 0.35) * scale;
-      dummy.scale.setScalar(scale);
-      dummy.updateMatrix();
-      this.beacon.setMatrixAt(index, dummy.matrix);
+  /** Rewrites body colours only. Matrices are untouched, so this is one pass. */
+  recolor(tint: THREE.Color): void {
+    const standing = this.shown - this.ruins;
+    for (let l = 0; l < LEVELS; l++) {
+      const body = this.bodies[l];
+      if (!body) continue;
+      const start = this.starts[l] ?? 0;
+      for (let i = 0; i < this.levelCount(l); i++) {
+        const slot = start + i;
+        body.mesh.setColorAt(i, bodyColor(this.kind, slot, slot < standing ? l : -1, this.overlay, tint));
+      }
+      body.flush();
     }
-    return placed;
   }
 
-  setCount(n: number): void {
-    this.body.count = n;
-    if (this.beacon) this.beacon.count = n;
-  }
-
-  flush(): void {
-    this.body.flush();
-    this.beacon?.flush();
+  /** Advances this zone's in-flight growth animations. */
+  update(bank: PartBank, dummy: THREE.Object3D, tint: THREE.Color, now: number): boolean {
+    // Keyed by *slot*, not by instance, so an animation in flight survives a
+    // promotion moving the building between two mesh sets. The level and
+    // instance are recovered from the cohort the scene is drawing.
+    const standing = this.shown - this.ruins;
+    const moving = this.growth.update(now, (slot) => {
+      const found = levelAt(this.cohort, slot);
+      const level = slot < standing ? Math.max(0, found) : -1;
+      const body = this.bodies[Math.max(0, level)];
+      if (!body) return;
+      this.writeOne(
+        body,
+        slot - (this.starts[Math.max(0, level)] ?? 0),
+        slot,
+        level,
+        bank,
+        dummy,
+        tint,
+        now,
+        false,
+      );
+    });
+    if (moving) for (const body of this.bodies) body.flush();
+    return moving;
   }
 }
 
-const SHOP_H = 2.4;
-const SHOP_W = 3;
+/**
+ * One reusable placement. `place` fills it rather than returning a fresh object,
+ * because a rebuild asks for one per building and `update` asks for one per
+ * in-flight building per frame.
+ */
+const SCRATCH_AT = createPlacement();
 
 /**
- * Two ways to dress a shopfront, out of one unit box.
+ * Where each of a building's pieces is recorded in `partAt`.
  *
- * A *canopy* is a wide thin skirt at street level; a *fin* is a sign board
- * standing above the roofline. Which one a shop wears comes from its slot, so a
- * parade reads as a parade rather than as one block repeated — and both are
- * instances of the same 1x1x1 geometry, scaled, exactly as the roof bank does.
- * That is the whole budget for commercial variety: one extra draw call, shared
- * by every level and every shop in the city.
+ * A fixed stride rather than a list, because the growth animation rewrites one
+ * building at a time long after the pack order was decided and has to find the
+ * same instances again. -1 in a slot means the building does not wear that
+ * piece — which is why the stride is walked even for the pieces it skips.
  */
-const SHOPFRONT = { canopy: 0, fin: 1 } as const;
+const PS = {
+  roof: 0,
+  awning: 1,
+  stack: 2,
+  setback: 3,
+  plant: 4,
+  band: 5,
+  beacon: 5 + BANDS_MAX,
+} as const;
 
-/** Which one this shop wears. Roughly two canopies to every fin. */
-const shopfront = (slot: number): number =>
-  variety(slot, 0x61) < 0.66 ? SHOPFRONT.canopy : SHOPFRONT.fin;
+/** How far above the body a roof of each kind rises. */
+const roofRise = (part: number): number => (part === PART.pitched ? 1.15 : 0.5);
 
 /**
- * Shops are a single tier: a low box wearing a lit fascia under a dark cap.
+ * Appends or rewrites one piece of dressing.
  *
- * The obvious version puts the sodium slab on top, which from an overhead
- * camera turns every shop into a solid orange square and swamps the district.
- * Banding it below the roofline means commerce glows from street level and
- * reads as dark roofs from above, which is what a high street actually does.
+ * A free function rather than a closure over the write, because `writeParts`
+ * runs per in-flight building per frame and a pair of closures per call would
+ * be an allocation on the frame path.
  */
-class ShopMeshes {
-  private readonly body: GrowableInstancedMesh;
-  private readonly fascia: GrowableInstancedMesh;
-  private readonly cap: GrowableInstancedMesh;
-  /** Canopy or sign fin, one instance per shop. See SHOPFRONT. */
-  private readonly front: GrowableInstancedMesh;
-  private readonly fasciaGlow = new Glow(PALETTE.sodium, 0.42);
-  private overlay: number | null = null;
-  /** How many of the shops written are still trading. The rest are ruins. */
-  private standing = 0;
+function putPart(
+  bank: PartBank,
+  part: number,
+  at: number,
+  partAt: Int32Array,
+  dummy: THREE.Object3D,
+  color: THREE.Color | null,
+  place: boolean,
+): void {
+  dummy.updateMatrix();
+  if (place) partAt[at] = bank.place(part, dummy.matrix, color);
+  else bank.move(part, partAt[at] ?? -1, dummy.matrix);
+}
 
-  constructor(scene: THREE.Scene, capacity: number) {
-    this.body = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(SHOP_W, SHOP_H, SHOP_W),
-      new THREE.MeshLambertMaterial({ color: PALETTE.shop }),
-      capacity,
-      { castShadow: true, receiveShadow: true, name: 'shop:body' },
-    );
-    this.fascia = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(3.08, 0.34, 3.08),
-      this.fasciaGlow.material,
-      capacity,
-      { name: 'shop:fascia' },
-    );
-    this.cap = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(3.16, 0.26, 3.16),
-      new THREE.MeshLambertMaterial({ color: PALETTE.parapet }),
-      capacity,
-      { castShadow: true },
-    );
-    // A unit box, so one geometry is both a canopy and a fin. The material is
-    // the canvas colour and the instance colour is the per-shop jitter on top
-    // of it — the same setColorAt path the bodies already use.
-    this.front = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshLambertMaterial({ color: PALETTE.awning }),
-      capacity,
-      { castShadow: true, name: 'shop:front' },
-    );
-  }
+/**
+ * The dressing on one building, out of the shared bank.
+ *
+ * Which pieces it wears comes from its style and nothing else, so the same slot
+ * wears the same dressing forever and none of it is stored. Every piece is the
+ * same unit box scaled into place, which is why the whole variety budget costs
+ * nine meshes rather than one shape per level per zone.
+ *
+ * `place` appends to the bank and records where each piece landed; the growth
+ * animation passes false and rewrites the pieces already recorded, because the
+ * bank is packed per part and an animation frame must not repack it.
+ *
+ * A ruin wears the flattest roof in the bank and nothing else at all: it keeps
+ * its plot and loses everything else, lit bands included.
+ */
+function writeParts(
+  kind: ZoneKind,
+  slot: number,
+  level: number,
+  x: number,
+  z: number,
+  alongX: boolean,
+  footW: number,
+  footD: number,
+  height: number,
+  scale: number,
+  bank: PartBank,
+  dummy: THREE.Object3D,
+  tint: THREE.Color,
+  partAt: Int32Array,
+  place: boolean,
+): void {
+  const base = slot * PART_SLOTS;
+  const style = styleOf(kind, slot);
+  const ruin = level < 0;
 
-  get pickable(): GrowableInstancedMesh {
-    return this.body;
-  }
+  // 1. The roof. Every building has one, ruins included.
+  const roof = roofOf(kind, level, style);
+  const rise = roofRise(roof);
+  dummy.rotation.set(0, 0, 0);
+  dummy.position.set(x, (height + rise / 2) * scale, z);
+  dummy.scale.set(footW * scale, rise * scale, footD * scale);
+  putPart(bank, roof, base + PS.roof, partAt, dummy, null, place);
 
-  ensure(capacity: number): void {
-    this.body.ensure(capacity);
-    this.fascia.ensure(capacity);
-    this.cap.ensure(capacity);
-    this.front.ensure(capacity);
-  }
+  // 2. An awning: a skirt overhanging the whole footprint at street level. What
+  //    makes a parade of shops read as a parade rather than as one long block.
+  if (!ruin && style.awning > 0) {
+    const reach = style.awning * footW;
+    dummy.position.set(x, height * 0.32 * scale, z);
+    dummy.scale.set((footW + reach) * scale, 0.22 * scale, (footD + reach) * scale);
+    putPart(bank, PART.awning, base + PS.awning, partAt, dummy, partColor(slot, tint), place);
+  } else if (place) partAt[base + PS.awning] = -1;
 
-  setNight(night: number): void {
-    this.fasciaGlow.setNight(night);
-  }
-
-  setOverlay(hex: number | null): void {
-    this.overlay = hex;
-  }
-
-  /**
-   * Per-shop tint, and the shuttered read for a ruin.
-   *
-   * The material is already the dark shop blue, so white is the identity for
-   * the shader's multiply and the jitter is a nudge either side of it. A closed
-   * shop goes well under that and loses its lit sign entirely — the fascia is a
-   * separate instanced mesh, so the ruins simply fall off the end of its count
-   * rather than needing a per-instance emissive the material cannot carry.
-   */
-  private bodyColor(slot: number, out: THREE.Color): THREE.Color {
-    const closed = slot >= this.standing;
-    const base =
-      this.overlay === null ? out.setRGB(1, 1, 1) : against(this.overlay, PALETTE.shop, out);
-    if (closed) return base.multiplyScalar(0.4);
-    return base.multiplyScalar(shade(slot) * tintJitter(slot));
-  }
-
-  recolor(count: number, tint: THREE.Color): void {
-    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(i, tint));
-    this.body.flush();
-  }
-
-  /**
-   * The canvas shade of one shopfront. Not overlay-aware, and deliberately: the
-   * zone overlay states zoning and only the bodies carry it, which is the rule
-   * the roofs, caps and stacks already follow.
-   */
-  private frontColor(slot: number, out: THREE.Color): THREE.Color {
-    return out.setRGB(1, 1, 1).multiplyScalar(shade(slot) * tintJitter(slot));
-  }
-
-  /** How many shops still trade. Everything past this is drawn shuttered. */
-  setStanding(n: number): void {
-    this.standing = n;
-  }
-
-  write(index: number, at: Placement, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
-    const span = at.plots > 1 ? MERGED_SPAN / SHOP_W : 1;
-    const sx = widthJitter(index) * (at.alongX ? span : 1);
-    const sz = depthJitter(index) * (at.alongX ? 1 : span);
-    dummy.rotation.set(0, 0, 0);
-    dummy.position.set(at.x, (SHOP_H / 2) * scale, at.z);
-    dummy.scale.set(sx, scale, sz);
-    dummy.updateMatrix();
-    this.body.setMatrixAt(index, dummy.matrix);
-    this.body.setColorAt(index, this.bodyColor(index, tint));
-
-    dummy.scale.set(sx * scale, scale, sz * scale);
-    dummy.position.y = (SHOP_H - 0.42) * scale;
-    dummy.updateMatrix();
-    this.fascia.setMatrixAt(index, dummy.matrix);
-
-    dummy.position.y = (SHOP_H + 0.13) * scale;
-    dummy.updateMatrix();
-    this.cap.setMatrixAt(index, dummy.matrix);
-
-    // The dressing. A canopy is a skirt that overhangs the whole footprint at
-    // street level; a fin is a board standing on the roof, turned onto the long
-    // axis so a merged shop wears one long sign rather than two short ones.
-    const long = SHOP_W * (at.alongX ? sx : sz);
-    if (shopfront(index) === SHOPFRONT.canopy) {
-      const reach = 1 + variety(index, 0x6f);
+  // 3. A stack. Square and off to a corner for housing and industry — a stack on
+  //    the ridge reads as a lift shaft, a stack at the edge reads as a chimney —
+  //    and for commerce a thin board turned onto the long axis instead, so a
+  //    merged shop wears one long sign rather than two short ones.
+  const nudge = variety(slot, 0xc1) < 0.5 ? -1 : 1;
+  if (!ruin && style.stack > 0) {
+    const tall = style.stack * height;
+    if (kind === 'shop') {
+      const board = (alongX ? footW : footD) * (0.5 + variety(slot, 0x7b) * 0.35);
+      dummy.position.set(x, (height + rise + tall / 2) * scale, z);
       dummy.scale.set(
-        (SHOP_W * sx + reach) * scale,
-        0.22 * scale,
-        (SHOP_W * sz + reach) * scale,
+        (alongX ? board : 0.18) * scale,
+        tall * scale,
+        (alongX ? 0.18 : board) * scale,
       );
-      dummy.position.y = SHOP_H * 0.46 * scale;
     } else {
-      const rise = 0.7 + variety(index, 0x6f) * 0.7;
-      const board = long * (0.5 + variety(index, 0x7b) * 0.35);
-      dummy.scale.set(
-        (at.alongX ? board : 0.18) * scale,
-        rise * scale,
-        (at.alongX ? 0.18 : board) * scale,
-      );
-      dummy.position.y = (SHOP_H + 0.26 + rise / 2) * scale;
+      dummy.position.set(x + nudge * footW * 0.32, (height + tall / 2) * scale, z - footD * 0.3);
+      dummy.scale.set(0.42 * scale, tall * scale, 0.42 * scale);
     }
-    dummy.updateMatrix();
-    this.front.setMatrixAt(index, dummy.matrix);
-    this.front.setColorAt(index, this.frontColor(index, tint));
+    putPart(bank, PART.stack, base + PS.stack, partAt, dummy, null, place);
+  } else if (place) partAt[base + PS.stack] = -1;
+
+  // 4. A setback: a stepped upper block, narrower than the body it stands on.
+  if (!ruin && style.setback > 0) {
+    const step = style.setback * height;
+    dummy.position.set(x, (height + rise + step / 2) * scale, z);
+    dummy.scale.set(footW * 0.72 * scale, step * scale, footD * 0.72 * scale);
+    putPart(bank, PART.setback, base + PS.setback, partAt, dummy, partColor(slot, tint), place);
+  } else if (place) partAt[base + PS.setback] = -1;
+
+  // 5. Plant: equipment on the far end of the roof from the stack, so a merged
+  //    building reads as one long thing with kit down its length rather than as
+  //    two shorter ones touching.
+  if (!ruin && style.plant > 0) {
+    const wide = style.plant * footW * 0.34;
+    const tall = wide * (0.5 + variety(slot, 0xa3) * 0.9);
+    dummy.position.set(
+      x - nudge * footW * 0.28,
+      (height + rise + tall / 2) * scale,
+      z + footD * 0.24,
+    );
+    dummy.scale.set(wide * scale, tall * scale, wide * scale);
+    putPart(bank, PART.plant, base + PS.plant, partAt, dummy, null, place);
+  } else if (place) partAt[base + PS.plant] = -1;
+
+  // 6. Lit floor bands. Banded *below* the roofline rather than laid on top:
+  //    from an overhead camera a lit roof turns every building into a solid
+  //    orange square and swamps the district, where a band glows from street
+  //    level and still reads as a dark roof from above.
+  for (let b = 0; b < BANDS_MAX; b++) {
+    if (!ruin && b < style.bands) {
+      const up = (b + 1) / (style.bands + 1);
+      dummy.position.set(x, height * up * scale, z);
+      dummy.scale.set((footW + 0.08) * scale, 0.3 * scale, (footD + 0.08) * scale);
+      putPart(bank, PART.band, base + PS.band + b, partAt, dummy, null, place);
+    } else if (place) partAt[base + PS.band + b] = -1;
   }
 
-  setCount(n: number): void {
-    this.body.count = n;
-    // The lit signs stop at the last trading shop. A shuttered high street with
-    // its fascias still glowing would read as a rendering bug rather than as a
-    // city in trouble.
-    this.fascia.count = Math.min(n, this.standing);
-    this.cap.count = n;
-    this.front.count = n;
-  }
-
-  flush(): void {
-    this.body.flush();
-    this.fascia.flush();
-    this.cap.flush();
-    this.front.flush();
-  }
+  // 7. The warning light the tall levels carry, which is what sells their scale.
+  if (!ruin && shapeOf(kind, level).beacon) {
+    dummy.position.set(x, (height + rise + 0.35) * scale, z);
+    dummy.scale.setScalar(0.34 * scale);
+    putPart(bank, PART.beacon, base + PS.beacon, partAt, dummy, null, place);
+  } else if (place) partAt[base + PS.beacon] = -1;
 }
 
-const INDUSTRY_W = 3.5;
-const INDUSTRY_H = 1.3;
-const STACK_H = 1.9;
-
 /**
- * Industry is the anti-tower: wide, low and flat, with one stack.
+ * Top of whatever is standing on a plot, in world units.
  *
- * Height is what the housing tiers use to say "bigger", so industry cannot
- * compete on it without reading as a stunted apartment block. It competes on
- * footprint instead — wider than anything else on the map and barely half a
- * shop tall — and the stack is the one vertical, which is what makes the type
- * legible at the zoom the player actually plays at.
+ * Exported so the fire layer can put a flame on a roof without a second copy of
+ * the height rules — including the per-building jitter and the style's own
+ * proportions, which is the whole reason this cannot simply be a level's
+ * height: a flame at the nominal height floats above a short block and sinks
+ * into a tall one.
  */
-class IndustryMeshes {
-  private readonly body: GrowableInstancedMesh;
-  private readonly roof: GrowableInstancedMesh;
-  private readonly stack: GrowableInstancedMesh;
-  /** Roof plant: a vent, a hopper or a low housing. One instance per works. */
-  private readonly vent: GrowableInstancedMesh;
-  private overlay: number | null = null;
-
-  constructor(scene: THREE.Scene, capacity: number) {
-    this.body = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(INDUSTRY_W, INDUSTRY_H, INDUSTRY_W * 0.86),
-      new THREE.MeshLambertMaterial({ color: PALETTE.industry }),
-      capacity,
-      { castShadow: true, receiveShadow: true },
-    );
-    this.roof = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(INDUSTRY_W + 0.12, 0.2, INDUSTRY_W * 0.86 + 0.12),
-      new THREE.MeshLambertMaterial({ color: PALETTE.industryRoof }),
-      capacity,
-      { castShadow: true },
-    );
-    this.stack = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(0.42, STACK_H, 0.42),
-      new THREE.MeshLambertMaterial({ color: PALETTE.stack }),
-      capacity,
-      { castShadow: true },
-    );
-    // The second and last mesh the variety budget buys: a unit box on the roof,
-    // scaled per works into anything from a low housing to a tall vent. Shared
-    // by every level, exactly as the shopfront and the roof bank are.
-    this.vent = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshLambertMaterial({ color: PALETTE.vent }),
-      capacity,
-      { castShadow: true, name: 'industry:vent' },
-    );
-  }
-
-  get pickable(): GrowableInstancedMesh {
-    return this.body;
-  }
-
-  ensure(capacity: number): void {
-    this.body.ensure(capacity);
-    this.roof.ensure(capacity);
-    this.stack.ensure(capacity);
-    this.vent.ensure(capacity);
-  }
-
-  setOverlay(hex: number | null): void {
-    this.overlay = hex;
-  }
-
-  /**
-   * Per-works tint. The same jitter the homes and shops have had all along —
-   * industry was the one type still drawn as one flat colour, which is what
-   * made a run of works read as a single slab from the play camera.
-   */
-  private bodyColor(slot: number, out: THREE.Color): THREE.Color {
-    const base =
-      this.overlay === null ? out.setRGB(1, 1, 1) : against(this.overlay, PALETTE.industry, out);
-    return base.multiplyScalar(shade(slot) * tintJitter(slot));
-  }
-
-  recolor(count: number, tint: THREE.Color): void {
-    for (let i = 0; i < count; i++) this.body.setColorAt(i, this.bodyColor(i, tint));
-    this.body.flush();
-  }
-
-  write(index: number, at: Placement, scale: number, dummy: THREE.Object3D, tint: THREE.Color): void {
-    const x = at.x;
-    const z = at.z;
-    const span = at.plots > 1 ? MERGED_SPAN / INDUSTRY_W : 1;
-    // The same +-12% footprint jitter every other type has. A yard is not a
-    // stamped rectangle, and the merged span multiplies on top of it.
-    const sx = widthJitter(index) * (at.alongX ? span : 1);
-    const sz = depthJitter(index) * (at.alongX ? 1 : span);
-    dummy.rotation.set(0, 0, 0);
-    dummy.position.set(x, (INDUSTRY_H / 2) * scale, z);
-    dummy.scale.set(sx, scale, sz);
-    dummy.updateMatrix();
-    this.body.setMatrixAt(index, dummy.matrix);
-    this.body.setColorAt(index, this.bodyColor(index, tint));
-
-    dummy.scale.set(sx * scale, scale, sz * scale);
-    dummy.position.y = (INDUSTRY_H + 0.1) * scale;
-    dummy.updateMatrix();
-    this.roof.setMatrixAt(index, dummy.matrix);
-
-    // Off to a corner rather than centred: a stack on the ridge reads as a lift
-    // shaft, a stack at the edge reads as a chimney.
-    const nudge = hash01(index ^ 0x1f3a55c1) < 0.5 ? -1 : 1;
-    dummy.scale.setScalar(scale);
-    dummy.position.set(
-      x + nudge * INDUSTRY_W * 0.34 * sx,
-      (INDUSTRY_H + STACK_H / 2) * scale,
-      z - INDUSTRY_W * 0.28 * sz,
-    );
-    dummy.updateMatrix();
-    this.stack.setMatrixAt(index, dummy.matrix);
-
-    // Plant on the other end of the roof, so a merged works reads as one long
-    // shed with equipment down its length rather than as two sheds touching.
-    const tall = 0.4 + variety(index, 0x95) * 1.1;
-    const wide = 0.5 + variety(index, 0xa3) * 0.9;
-    dummy.scale.set(wide * scale, tall * scale, wide * scale);
-    dummy.position.set(
-      x - nudge * INDUSTRY_W * 0.3 * sx,
-      (INDUSTRY_H + 0.2 + tall / 2) * scale,
-      z + INDUSTRY_W * 0.22 * sz,
-    );
-    dummy.updateMatrix();
-    this.vent.setMatrixAt(index, dummy.matrix);
-  }
-
-  setCount(n: number): void {
-    this.body.count = n;
-    this.roof.count = n;
-    this.stack.count = n;
-    this.vent.count = n;
-  }
-
-  flush(): void {
-    this.body.flush();
-    this.roof.flush();
-    this.stack.flush();
-    this.vent.flush();
-  }
+export function roofline(kind: ZoneKind, slot: number, level: number): number {
+  // A ruin keeps the shell it had at level 0, so a fire on one still lands on a
+  // roof rather than in mid-air.
+  const shape = shapeOf(kind, level);
+  const style = styleOf(kind, slot);
+  const rise = roofRise(roofOf(kind, level, style));
+  return shape.height * style.height * heightJitter(slot) + rise / 2;
 }
 
 /**
@@ -946,25 +1234,6 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
 }
 
 /**
- * Top of whatever is standing on a plot, in world units.
- *
- * Exported so the fire layer can put a flame on a roof without a second copy
- * of the height rules — including the per-building jitter, which is the whole
- * reason this cannot simply be `tier.height`: a flame at the nominal height
- * floats above a short block and sinks into a tall one.
- */
-export function roofline(kind: ZoneKind, slot: number, level: number): number {
-  if (kind === 'shop') return SHOP_H + 0.13;
-  if (kind === 'industry') return INDUSTRY_H + 0.1;
-  // A ruin keeps the shell it had at level 0, so a fire on one still lands on
-  // a roof rather than in mid-air.
-  const style = HOME_STYLES[Math.max(0, level)] ?? HOME_STYLES[0];
-  if (!style) return 0;
-  const rise = roofVariant(slot, level) === ROOF.pitched ? 1.15 : 0.5;
-  return style.height * heightJitter(slot) + rise / 2;
-}
-
-/**
  * A building the player has clicked on.
  *
  * The ordinal and nothing else — the same number a fire stores, and for the
@@ -1015,28 +1284,34 @@ class Outline {
 }
 
 /**
+ * The instanced meshes the three zone ladders are allowed to cost, all told.
+ *
+ * Fifteen bodies — one per (zone, level) — and nine shared detail parts. The
+ * alternative the styles were designed against is 45 meshes: five levels by
+ * three styles by three zones, each a draw call for what is fundamentally the
+ * same box. Asserted in test/skyline.test.ts, so a later change cannot quietly
+ * double the draw calls.
+ *
+ * Civic buildings are counted separately and are not part of this: they stand on
+ * 2x2 and 3x3 sites, have no level ladder, and are told apart by silhouette
+ * rather than by style. See `civicSet`.
+ */
+export const BUILDING_MESH_BUDGET = 24;
+
+/**
  * The building layer. It owns no game state: given counts, it reconciles the
  * scene toward them, and it can always rebuild itself from scratch.
  */
 export class Buildings {
-  private readonly levels: LevelMeshes[];
-  /** Three shapes, shared by every level. See `Roofs`. */
-  private readonly roofs: Roofs;
-  /**
-   * Which roof instance each slot's roof landed on.
-   *
-   * Roofs are packed per variant, so the index bears no relation to the slot —
-   * and the growth animation rewrites one slot at a time, long after the pack
-   * order was decided. Indexed by slot, grown with the city.
-   */
-  private roofSlot = new Int32Array(0);
-  private readonly shops: ShopMeshes;
-  private readonly industry: IndustryMeshes;
+  /** One layer per zone, each owning its five body meshes. */
+  private readonly zones: readonly ZoneLayer[];
+  /** Nine unit shapes, shared by every zone and every level. See `PartBank`. */
+  private readonly parts: PartBank;
   /**
    * One entry per service, in SERVICES order, each owning its own mesh set,
    * growth schedule and shown count. Civic sites are reserved up front and
    * indexed by a fixed interleave, so unlike every earlier version of this the
-   * three types never move and never need rewriting as a block.
+   * types never move and never need rewriting as a block.
    */
   private readonly civic: ReadonlyArray<{
     readonly service: Service;
@@ -1045,9 +1320,6 @@ export class Buildings {
     readonly site: (i: number) => Coord;
     shown: number;
   }>;
-  private readonly homeGrowth: GrowthSchedule;
-  private readonly shopGrowth: GrowthSchedule;
-  private readonly industryGrowth: GrowthSchedule;
   private readonly dummy = new THREE.Object3D();
   private readonly tint = new THREE.Color();
   /**
@@ -1060,53 +1332,24 @@ export class Buildings {
   /** Reused across clicks: `intersectObjects` fills it rather than returning one. */
   private readonly hits: THREE.Intersection[] = [];
 
-  private shownHomes = 0;
-  private shownMergedHomes = -1;
-  private shownShops = 0;
-  private shownTrading = -1;
-  private shownMergedShops = -1;
-  private shownIndustry = 0;
-  private shownMergedIndustry = -1;
-  /**
-   * One reusable placement. `place` fills it rather than returning a fresh
-   * object, because `update` asks for one per in-flight building per frame.
-   */
-  private readonly at = createPlacement();
-  /**
-   * The cohort the scene is currently drawing, and where each level's run of
-   * slots begins.
-   *
-   * Held rather than re-read because `update` runs every frame and has no state
-   * to consult: an in-flight growth animation is identified by slot, and
-   * turning a slot back into a level and an instance needs exactly these.
-   */
-  private readonly shownHomeLevels: LevelCohort = new Array<number>(LEVELS).fill(0);
-  private readonly homeStart: number[] = new Array<number>(LEVELS).fill(0);
-  private shownRuins = 0;
-
   constructor(
     scene: THREE.Scene,
     private readonly layout: CityLayout,
   ) {
     const duration = prefersReducedMotion() ? GROW_SECONDS_REDUCED : GROW_SECONDS;
-    this.homeGrowth = new GrowthSchedule(duration);
-    this.shopGrowth = new GrowthSchedule(duration);
-    this.industryGrowth = new GrowthSchedule(duration);
-    this.levels = HOME_STYLES.map((style, level) => new LevelMeshes(scene, style, level, 64));
-    this.roofs = new Roofs(scene, 128);
-    this.shops = new ShopMeshes(scene, 32);
-    this.industry = new IndustryMeshes(scene, 24);
+    this.parts = new PartBank(scene, 128);
+    this.zones = [
+      new ZoneLayer(scene, 'home', ZONE.residential, layout, duration, 64),
+      new ZoneLayer(scene, 'shop', ZONE.commercial, layout, duration, 32),
+      new ZoneLayer(scene, 'industry', ZONE.industrial, layout, duration, 24),
+    ];
     this.outline = new Outline(scene);
-    // Shops and industry draw their whole zone from slot zero, so their run
-    // never moves. The housing levels each draw one cohort and move whenever it
-    // does — `writeHomes` re-registers them.
-    this.ranges.set(this.shops.pickable, 'shop', 0);
-    this.ranges.set(this.industry.pickable, 'industry', 0);
+    for (const zone of this.zones) zone.register(this.ranges);
     this.civic = SERVICES.map((service) => ({
       service,
       meshes: civicSet(scene, service, 8),
       growth: new GrowthSchedule(duration),
-      // The four 2x2 types read one interleaved list by their position in it;
+      // The five 2x2 types read one interleaved list by their position in it;
       // the university has a list of its own and does not touch the interleave.
       site:
         service.span === 3
@@ -1128,68 +1371,44 @@ export class Buildings {
       : state.universities;
   }
 
-  /** How many instances a level's mesh set draws: its cohort, plus the ruins. */
-  private levelCount(l: number): number {
-    return (this.shownHomeLevels[l] ?? 0) + (l === 0 ? this.shownRuins : 0);
-  }
-
   /** Brings the scene in line with the simulation. Cheap when nothing changed. */
   sync(state: Readonly<GameState>, now: number): void {
     this.layout.ensure(state.districts);
 
-    // One test for the whole skyline: a build, a promotion and an abandonment
-    // all move the cohort, and all three need the same rewrite. Cheap to ask —
-    // four integers — and it is asked once a frame rather than per building.
-    if (this.homesChanged(state)) {
-      if (state.homes > this.shownHomes) {
-        this.homeGrowth.stage(this.shownHomes, state.homes, now, 1.4, WAVE_BUDGET);
-      } else if (state.homes < this.shownHomes) {
-        this.homeGrowth.clear();
+    // One decision for the whole city, because the detail parts are one bank.
+    // A purchase appends to it and disturbs nothing already in it, so it can be
+    // written straight onto the end; anything that *reorders* a zone — a
+    // promotion, a merge, an abandonment — repacks the bank and therefore has
+    // to rewrite every zone, not only the one that moved.
+    let rebuild = false;
+    let appending = false;
+    for (const zone of this.zones) {
+      if (!zone.changed(state)) continue;
+      if (zone.appended(state) > 0) appending = true;
+      else rebuild = true;
+    }
+
+    if (rebuild) {
+      this.parts.begin();
+      for (const zone of this.zones) {
+        zone.stage(state, now);
+        zone.adopt(state);
+        zone.writeAll(this.parts, this.dummy, this.tint, now);
+        zone.register(this.ranges);
       }
-      this.shownHomes = state.homes;
-      this.shownMergedHomes = state.mergedR;
-      this.shownRuins = state.homes - cohortTotal(state.homeLevels);
-      for (let l = 0; l < LEVELS; l++) this.shownHomeLevels[l] = state.homeLevels[l] ?? 0;
-      cohortStart(this.shownHomeLevels, this.homeStart);
-      this.writeHomes(now);
+      this.parts.end();
+    } else if (appending) {
+      for (const zone of this.zones) {
+        const grew = zone.changed(state) ? zone.appended(state) : 0;
+        if (grew <= 0) continue;
+        const from = zone.shownCount;
+        zone.stage(state, now);
+        zone.adopt(state);
+        zone.writeRange(this.parts, this.dummy, this.tint, from, from + grew, now);
+        zone.register(this.ranges);
+      }
+      this.parts.end();
     }
-
-    // A shop closing changes no count the loop below would notice — the plot is
-    // still there and still has a shop on it — so the ruin count is part of
-    // what "changed" means for commerce.
-    // A merge is a rewrite as surely as a purchase is: it moves a shop onto a
-    // two-plot footprint and shifts every slot behind it down the list.
-    const tradingShops = state.shops - state.abandonedC;
-    const shopsMerged = state.mergedC !== this.shownMergedShops;
-    if (state.shops > this.shownShops && !shopsMerged) {
-      const from = this.shownShops;
-      this.shopGrowth.stage(from, state.shops, now, 1.4, WAVE_BUDGET);
-      this.shops.setStanding(tradingShops);
-      this.writeShops(from, state.shops, state.mergedC, now);
-    } else if (
-      state.shops !== this.shownShops ||
-      shopsMerged ||
-      tradingShops !== this.shownTrading
-    ) {
-      if (state.shops < this.shownShops) this.shopGrowth.clear();
-      this.shops.setStanding(tradingShops);
-      this.writeShops(0, state.shops, state.mergedC, now);
-    }
-    this.shownShops = state.shops;
-    this.shownMergedShops = state.mergedC;
-    this.shownTrading = tradingShops;
-
-    const worksMerged = state.mergedI !== this.shownMergedIndustry;
-    if (state.industry > this.shownIndustry && !worksMerged) {
-      const from = this.shownIndustry;
-      this.industryGrowth.stage(from, state.industry, now, 1.4, WAVE_BUDGET);
-      this.writeIndustry(from, state.industry, state.mergedI, now);
-    } else if (state.industry !== this.shownIndustry || worksMerged) {
-      if (state.industry < this.shownIndustry) this.industryGrowth.clear();
-      this.writeIndustry(0, state.industry, state.mergedI, now);
-    }
-    this.shownIndustry = state.industry;
-    this.shownMergedIndustry = state.mergedI;
 
     for (const set of this.civic) {
       const count = Buildings.count(state, set.service);
@@ -1202,94 +1421,6 @@ export class Buildings {
       }
       set.shown = count;
     }
-  }
-
-  /** Whether anything about the housing stock the scene is drawing has moved. */
-  private homesChanged(state: Readonly<GameState>): boolean {
-    if (state.homes !== this.shownHomes) return true;
-    if (state.mergedR !== this.shownMergedHomes) return true;
-    for (let l = 0; l < LEVELS; l++) {
-      if ((state.homeLevels[l] ?? 0) !== this.shownHomeLevels[l]) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Rewrites every home, level by level.
-   *
-   * Whole-skyline rather than incremental, because a promotion moves one
-   * building between two sets and shifts the instance index of every building
-   * above it — there is no incremental edit that is cheaper to get right. It
-   * runs only when the cohort actually moves, which is a handful of times a
-   * minute, and it is O(homes) with no allocation.
-   */
-  private writeHomes(now: number): void {
-    this.homeGrowth.ensure(this.shownHomes);
-    if (this.roofSlot.length < this.shownHomes) {
-      this.roofSlot = new Int32Array(Math.max(64, this.shownHomes * 2));
-    }
-    const standing = this.shownHomes - this.shownRuins;
-    this.roofs.begin();
-    for (let l = 0; l < LEVELS; l++) {
-      const meshes = this.levels[l];
-      if (!meshes) continue;
-      const count = this.levelCount(l);
-      const start = this.homeStart[l] ?? 0;
-      meshes.ensure(count);
-      for (let i = 0; i < count; i++) {
-        const slot = start + i;
-        // Slots past the standing stock are the ruins. They live in the level-0
-        // set because they hold a plot and have to be drawn on it, and -1 is
-        // what tells the write they hold no level.
-        this.roofSlot[slot] = meshes.write(
-          i,
-          slot,
-          slot < standing ? l : -1,
-          this.layout.place(ZONE.residential, slot, this.shownMergedHomes, this.at),
-          this.homeGrowth.scaleAt(slot, now),
-          this.dummy,
-          this.tint,
-          this.roofs,
-          -1,
-        );
-      }
-      meshes.setCount(count);
-      meshes.flush();
-      this.ranges.set(meshes.pickable, 'home', start);
-    }
-    this.roofs.end();
-  }
-
-  private writeShops(from: number, to: number, merged: number, now: number): void {
-    this.shops.ensure(to);
-    this.shopGrowth.ensure(to);
-    for (let i = from; i < to; i++) {
-      this.shops.write(
-        i,
-        this.layout.place(ZONE.commercial, i, merged, this.at),
-        this.shopGrowth.scaleAt(i, now),
-        this.dummy,
-        this.tint,
-      );
-    }
-    this.shops.setCount(to);
-    this.shops.flush();
-  }
-
-  private writeIndustry(from: number, to: number, merged: number, now: number): void {
-    this.industry.ensure(to);
-    this.industryGrowth.ensure(to);
-    for (let i = from; i < to; i++) {
-      this.industry.write(
-        i,
-        this.layout.place(ZONE.industrial, i, merged, this.at),
-        this.industryGrowth.scaleAt(i, now),
-        this.dummy,
-        this.tint,
-      );
-    }
-    this.industry.setCount(to);
-    this.industry.flush();
   }
 
   private writeCivic(
@@ -1313,33 +1444,32 @@ export class Buildings {
    * which list placed it — no per-plot lookup needed.
    */
   setZoneOverlay(on: boolean): void {
-    for (const level of this.levels) level.setOverlay(on ? PALETTE.zoneResidential : null);
-    this.shops.setOverlay(on ? PALETTE.zoneCommercial : null);
-    this.industry.setOverlay(on ? PALETTE.zoneIndustrial : null);
+    const hex: Record<ZoneKind, number> = {
+      home: PALETTE.zoneResidential,
+      shop: PALETTE.zoneCommercial,
+      industry: PALETTE.zoneIndustrial,
+    };
+    for (const zone of this.zones) {
+      zone.setOverlay(on ? hex[zone.kind] : null);
+      zone.recolor(this.tint);
+    }
     // A civic site is carved out of the zone it sits in, so under the plan it
     // reads as that zone — the overlay states zoning, not what stands there.
     for (const set of this.civic) {
       set.meshes.setOverlay(on ? PALETTE.zoneResidential : null);
+      set.meshes.recolor(set.shown, this.tint);
     }
-    const standing = this.shownHomes - this.shownRuins;
-    for (let l = 0; l < LEVELS; l++) {
-      this.levels[l]?.recolor(this.homeStart[l] ?? 0, this.levelCount(l), standing, this.tint);
-    }
-    this.shops.recolor(this.shownShops, this.tint);
-    this.industry.recolor(this.shownIndustry, this.tint);
-    for (const set of this.civic) set.meshes.recolor(set.shown, this.tint);
   }
 
   /**
    * Ramps every lit surface in the city with the day/night phase.
    *
-   * Called once a frame, and cheap enough to be: it touches five materials at
-   * most — one beacon per tall level, the shop fascia, the fire station's doors
-   * — and never an instance buffer.
+   * Called once a frame, and cheap enough to be: it touches four materials at
+   * most — the shared band and beacon, the fire station's doors, the school's
+   * clerestory — and never an instance buffer.
    */
   setNight(night: number): void {
-    for (const level of this.levels) level.setNight(night);
-    this.shops.setNight(night);
+    this.parts.setNight(night);
     for (const set of this.civic) set.meshes.setNight(night);
   }
 
@@ -1374,24 +1504,13 @@ export class Buildings {
       this.outline.hide();
       return;
     }
-    const at = this.layout.place(zoneOf(ref.kind), ref.slot, mergedOf(state, ref.kind), this.at);
+    const at = this.layout.place(zoneOf(ref.kind), ref.slot, mergedOf(state, ref.kind), SCRATCH_AT);
     const level = levelAt(levelsOf(state, ref.kind), ref.slot);
-    const wide = at.plots > 1;
-
-    let width = SHOP_W;
-    let depth = SHOP_W;
-    if (ref.kind === 'industry') {
-      width = INDUSTRY_W * widthJitter(ref.slot);
-      depth = INDUSTRY_W * depthJitter(ref.slot);
-    } else if (ref.kind === 'shop') {
-      width = SHOP_W * widthJitter(ref.slot);
-      depth = SHOP_W * depthJitter(ref.slot);
-    } else {
-      const style = HOME_STYLES[Math.max(0, level)] ?? HOME_STYLES[0];
-      width = (style?.width ?? 2) * widthJitter(ref.slot);
-      depth = (style?.width ?? 2) * depthJitter(ref.slot);
-    }
-    if (wide) {
+    const shape = shapeOf(ref.kind, level);
+    const style = styleOf(ref.kind, ref.slot);
+    let width = shape.width * style.width * widthJitter(ref.slot);
+    let depth = shape.width * shape.depth * style.width * depthJitter(ref.slot);
+    if (at.plots > 1) {
       if (at.alongX) width = MERGED_SPAN;
       else depth = MERGED_SPAN;
     }
@@ -1400,54 +1519,19 @@ export class Buildings {
 
   /** Advances in-flight growth animations. Returns true while any are running. */
   update(now: number): boolean {
-    // Keyed by *slot*, not by instance, so an animation in flight survives a
-    // promotion moving the building between two mesh sets. The level and
-    // instance are recovered from the cohort the scene is drawing.
-    const standing = this.shownHomes - this.shownRuins;
-    const homesMoving = this.homeGrowth.update(now, (slot, scale) => {
-      const found = levelAt(this.shownHomeLevels, slot);
-      const level = slot < standing ? Math.max(0, found) : -1;
-      const meshes = this.levels[Math.max(0, level)];
-      if (!meshes) return;
-      const index = slot - (this.homeStart[Math.max(0, level)] ?? 0);
-      meshes.write(
-        index,
-        slot,
-        level,
-        this.layout.place(ZONE.residential, slot, this.shownMergedHomes, this.at),
-        scale,
-        this.dummy,
-        this.tint,
-        this.roofs,
-        this.roofSlot[slot] ?? 0,
-      );
-    });
-    if (homesMoving) {
-      for (const level of this.levels) level.flush();
-      this.roofs.flush();
+    let moving = false;
+    for (const zone of this.zones) {
+      moving = zone.update(this.parts, this.dummy, this.tint, now) || moving;
     }
+    if (moving) this.parts.flush();
 
-    const shopsMoving = this.shopGrowth.update(now, (i, s) => {
-      const at = this.layout.place(ZONE.commercial, i, this.shownMergedShops, this.at);
-      this.shops.write(i, at, s, this.dummy, this.tint);
-    });
-    if (shopsMoving) this.shops.flush();
-
-    const industryMoving = this.industryGrowth.update(now, (i, s) => {
-      const at = this.layout.place(ZONE.industrial, i, this.shownMergedIndustry, this.at);
-      this.industry.write(i, at, s, this.dummy, this.tint);
-    });
-    if (industryMoving) this.industry.flush();
-
-    let civicMoving = false;
     for (const set of this.civic) {
-      const moving = set.growth.update(now, (i, s) => {
+      const civicMoving = set.growth.update(now, (i, s) => {
         set.meshes.write(i, set.site(i), s, this.dummy, this.tint);
       });
-      if (moving) set.meshes.flush();
-      civicMoving = civicMoving || moving;
+      if (civicMoving) set.meshes.flush();
+      moving = moving || civicMoving;
     }
-
-    return homesMoving || shopsMoving || industryMoving || civicMoving;
+    return moving;
   }
 }
