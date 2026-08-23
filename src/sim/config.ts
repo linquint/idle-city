@@ -416,30 +416,52 @@ export const ANNEX_BASE = 60_000;
 export const ANNEX_GROWTH = 3.4;
 
 /**
- * You must have built out this share of your land before you may annex more.
+ * You must have built out this share of your land before the city annexes more.
  *
- * Left at 0.7 through the change that took interior plots off the market, which
- * shrank a district from 90 sellable plots to 65 (58 for sale plus 7 civic
- * sites) — the gate went from 63 buildings to 46. Re-measured rather than
- * assumed, and deliberately not retuned:
+ * Left at 0.7 through the change that made annexation automatic, and measured
+ * rather than assumed. Demand-neutral build-out of one district, holding every
+ * home at one level — a player who never buys into a surcharge:
  *
- *   - Demand-neutral build-out of one district, per tier: 53.8% at detached
- *     housing, 72.3% at apartments, 83.1% at towers, 70.8% at arcologies.
- *   - Tier 0 now falls 16 points short rather than 1, because the residential
- *     zone lost 24 plots to frontage and commerce lost none: 19 homes house 76
- *     people, and 76 people are served by 4 shops. That puts a rezone firmly
- *     before the first annex, which is the ordering the game should teach.
- *   - The first annex lands at 1.25h disciplined and 1.61h greedy, against 3.8h
- *     and 1.8h before. It arrived earlier, but not because of this gate: at 1h
- *     an attentive player is at 94% developed with 63.7K banked, so what they
- *     are waiting on is ANNEX_BASE, not occupancy.
+ *   detached housing  78.6%   apartments  80.0%
+ *   towers            68.6%   arcologies  68.6%
  *
- * Raising it is the obvious response and the wrong one: 0.8 would put both
- * apartments (72.3%) and arcologies (70.8%) under the gate, so the tiers where
- * a player most wants more land would be the tiers that cannot reach it. The
- * pacing lever here is ANNEX_BASE. See tools/economy.calibrate.mjs.
+ * So the opening and the middle game clear the gate comfortably and the top of
+ * the ladder settles 1.4 points under it. That is the same shape the tiered
+ * build had (53.8 / 72.3 / 83.1 / 70.8) and it is deliberate: a city of towers
+ * is worker-rich, its residential demand runs negative, and filling the last of
+ * its housing means paying the surcharge to do it. Expansion past the middle
+ * game is a decision rather than a formality.
+ *
+ * Raising it is the obvious response and the wrong one — 0.8 would put three of
+ * the four levels under. Lowering it to 0.65 would clear all four and is the
+ * lever to reach for if the endgame ever wants to expand on its own; the reason
+ * it is not pulled here is that "the endgame costs something" is the intended
+ * shape, and ANNEX_BASE is the pacing lever. See tools/economy.calibrate.mjs.
  */
 export const ANNEX_MIN_OCCUPANCY = 0.7;
+
+/**
+ * How much more than the price the city wants in hand before it expands itself.
+ *
+ * The whole difference between the automatic pass and the button. Annexation
+ * spends the treasury, and a city that emptied it the instant it could afford
+ * to would leave a returning player unable to buy anything at all. Waiting for
+ * a quarter again on top means the automatic pass only fires out of surplus,
+ * and the button is there for a player who has looked at the number and wants
+ * the land now — which is what "manual override" is actually for.
+ */
+export const AUTO_ANNEX_RESERVE = 0.25;
+
+/**
+ * Districts a single `catchUp` call may annex, however long the absence.
+ *
+ * The same guard fire and abandonment already have, and the one that matters
+ * most here: a twelve-hour absence with a full treasury would otherwise chain
+ * -annex, and the player would come back to a city several times the size of
+ * the one they left with no memory of any of it happening. Two is enough to
+ * feel like the city got on with things and few enough to still recognise.
+ */
+export const CATCHUP_MAX_ANNEXES = 2;
 
 /** Starting treasury. */
 export const START_CASH = 40;

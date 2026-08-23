@@ -45,6 +45,7 @@ import {
   cohortTotal,
   coverage,
   developed,
+  population,
   homeCost,
   industryCost,
   parkCost,
@@ -364,17 +365,26 @@ for (const line of monotonic()) console.log(line.startsWith('  ') ? line : `  BR
  * surcharge.
  */
 function equilibrium(level) {
-  const homes = 0;
-  const levels = [0, 0, 0, 0];
-  levels[level] = homes;
-  const game = new Game({ ...createState(0), homeLevels: levels, cash: 1e12 });
-  for (let step = 0; step < 300; step++) {
+  // Held at `level` rather than started there: levelling is earned now, so the
+  // only way to ask "what does a district of towers settle at" is to keep
+  // putting the cohort back where the question wants it after every purchase.
+  const game = new Game({ ...createState(0), cash: 1e12 });
+  const pin = () => {
+    const s = game.state;
+    const standing = s.homes - s.abandonedR;
+    const levels = [0, 0, 0, 0];
+    levels[level] = standing;
+    Object.assign(s, { homeLevels: levels, occupancyR: 0.92 });
+  };
+  for (let step = 0; step < 400; step++) {
+    pin();
     // ~12 tau, so the signal is at its target before the next decision.
     for (let i = 0; i < 3000; i++) game.advance(0.1);
+    pin();
     const s = game.state;
     let bought = false;
     for (const service of SERVICES) {
-      if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
+      if (population(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
         game.buildService(service);
         bought = true;
         break;
@@ -386,10 +396,11 @@ function equilibrium(level) {
     else if (s.demandI >= 0 && canBuildIndustry(s)) bought = game.buildIndustry();
     if (!bought) break;
   }
+  pin();
   return game.state;
 }
 
-console.log('\ndemand-neutral build-out of one district, per starting level');
+console.log('\ndemand-neutral build-out of one district, per level held');
 console.log(`  (the annexation gate is ${(ANNEX_MIN_OCCUPANCY * 100).toFixed(0)}%)`);
 for (let level = 0; level < LEVEL_CAPACITY.length; level++) {
   const s = equilibrium(level);

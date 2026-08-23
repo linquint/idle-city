@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CATCHUP_MAX_ANNEXES,
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
+  MAX_DISTRICTS,
   OFFLINE_CAP_SECONDS,
   START_CASH,
   TICK_RATE,
@@ -204,11 +206,15 @@ describe('offline progress', () => {
 
   it('never spends past the land it owns', () => {
     const game = at({ cash: 1e12, autoDevelop: true });
-    game.catchUp(OFFLINE_CAP_SECONDS);
+    const report = game.catchUp(OFFLINE_CAP_SECONDS);
     expect(game.state.homes).toBeLessThanOrEqual(homeCapacity(game.state));
     expect(game.state.shops).toBeLessThanOrEqual(shopCapacity(game.state));
     expect(game.state.industry).toBeLessThanOrEqual(industryCapacity(game.state));
-    expect(game.state.districts).toBe(1);
+    // The city does take land on its own now, but only inside the guard: a
+    // twelve-hour absence with a treasury this size would otherwise chain-annex
+    // and hand back a city the player has never seen.
+    expect(report.districts).toBeLessThanOrEqual(CATCHUP_MAX_ANNEXES);
+    expect(game.state.districts).toBe(1 + report.districts);
   });
 
   it('steps a fixed size, so an hour away is an hour away however it is taken', () => {
@@ -217,12 +223,18 @@ describe('offline progress', () => {
     // seconds at a time and a one-minute absence stepped 2.5, so the same
     // elapsed time developed two different cities. Demand is a feedback loop
     // now, so that difference compounds rather than cancelling out.
-    // Served and staffed, so happiness holds and nothing abandons. The decay
-    // cap is per `catchUp` call by design — the same guard CATCHUP_MAX_LOSSES
-    // puts on fire — so a city that is decaying genuinely does come back
-    // different depending on how the absence is chopped up. That is the guard
-    // working; this test is about the integrators, so it takes it off the table.
-    const patch = (): Partial<GameState> => ({ ...served(), cash: 3_000, autoDevelop: true });
+    // Served and staffed at the city limit, so nothing abandons and nothing can
+    // be annexed. Both of those are capped *per catch-up call* by design — the
+    // same guard CATCHUP_MAX_LOSSES puts on fire — so a city that is decaying
+    // or expanding genuinely does come back different depending on how the
+    // absence is chopped up. That is the guard working; this test is about the
+    // integrators, so it takes both off the table.
+    const patch = (): Partial<GameState> => ({
+      ...served(),
+      districts: MAX_DISTRICTS,
+      cash: 3_000,
+      autoDevelop: true,
+    });
     const whole = at(patch());
     whole.catchUp(60 * CATCHUP_STEP_SECONDS);
 
@@ -261,8 +273,12 @@ describe('offline progress', () => {
 
     const trueEarned = game.state.earned - earnedBefore;
     const trueSpent = trueEarned - (game.state.cash - cashBefore);
-    expect(report.earned).toBeCloseTo(trueEarned, 6);
-    expect(report.spent).toBeCloseTo(trueSpent, 6);
+    // Relative rather than absolute: six hours of a levelling city runs the
+    // ledger into the billions, where a double has about a millionth to give
+    // and an absolute tolerance of 5e-7 is asking for more precision than the
+    // number type has.
+    expect(Math.abs(report.earned - trueEarned)).toBeLessThan(Math.abs(trueEarned) * 1e-12);
+    expect(Math.abs(report.spent - trueSpent)).toBeLessThan(Math.abs(trueSpent) * 1e-12);
   });
 
   it('will not build into a zone the city is already oversupplied in', () => {

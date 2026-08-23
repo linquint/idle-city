@@ -2,6 +2,7 @@ import {
   ANNEX_BASE,
   ANNEX_GROWTH,
   ANNEX_MIN_OCCUPANCY,
+  AUTO_ANNEX_RESERVE,
   BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
   CIVIC_RAMP_SECONDS,
@@ -345,6 +346,21 @@ export const plotsUsed = (s: GameState): number =>
  * rather than this.
  */
 export const developed = (s: GameState): number => plotsUsed(s) / plotCapacity(s);
+
+/** Buildings the city has written off, across every zone. */
+export const abandonedBuildings = (s: GameState): number =>
+  s.abandonedR + s.abandonedC + s.abandonedI;
+
+/**
+ * Share of the city's plots with something *working* on them.
+ *
+ * What annexation triggers on, and the distinction is the whole point: a ruin
+ * holds its plot but earns nothing and houses nobody, so counting it would let
+ * a city expand because it was full of the buildings it had given up on.
+ * Expanding because the city is full of ruins is exactly backwards.
+ */
+export const activeDeveloped = (s: GameState): number =>
+  Math.max(0, plotsUsed(s) - abandonedBuildings(s)) / plotCapacity(s);
 
 /**
  * Residents housed, cohort by cohort, less the share of housing sitting empty.
@@ -823,15 +839,33 @@ export const canBuildService = (s: GameState, service: Service): boolean =>
 
 export const canAnnex = (s: GameState): boolean =>
   s.districts < MAX_DISTRICTS &&
-  developed(s) >= ANNEX_MIN_OCCUPANCY &&
+  activeDeveloped(s) >= ANNEX_MIN_OCCUPANCY &&
   s.cash >= annexCost(s);
 
-/** Why the annex button is off, phrased for the HUD. */
+/**
+ * Whether the city will take the next district on its own this tick.
+ *
+ * Everything the button needs plus a reserve, so the automatic pass spends a
+ * surplus rather than the treasury. A player who wants the land before the
+ * surplus is there presses the button; that is the override.
+ */
+export const willAutoAnnex = (s: GameState): boolean =>
+  canAnnex(s) && s.cash >= annexCost(s) * (1 + AUTO_ANNEX_RESERVE);
+
+/**
+ * Why the city is not expanding, phrased for the HUD.
+ *
+ * Three answers now rather than two, because with annexation automatic "why has
+ * nothing happened" is a question the player asks without having clicked
+ * anything — and "you cannot afford it yet" is a real answer to it, where
+ * before it was implied by a disabled button next to a price.
+ */
 export function annexBlocker(s: GameState): string | null {
   if (s.districts >= MAX_DISTRICTS) return 'City limits reached';
-  if (developed(s) < ANNEX_MIN_OCCUPANCY) {
+  if (activeDeveloped(s) < ANNEX_MIN_OCCUPANCY) {
     return `Needs ${Math.round(ANNEX_MIN_OCCUPANCY * 100)}% developed`;
   }
+  if (s.cash < annexCost(s)) return 'Saving for the next district';
   return null;
 }
 

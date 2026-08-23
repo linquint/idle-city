@@ -1,6 +1,7 @@
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
   CATCHUP_MAX_ABANDONED,
+  CATCHUP_MAX_ANNEXES,
   CATCHUP_MAX_LOSSES,
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
@@ -59,6 +60,7 @@ import {
   shopCost,
   staffAfterBuild,
   staffStep,
+  willAutoAnnex,
   wouldBurnOut,
   ZONE_KINDS,
 } from './economy.ts';
@@ -178,6 +180,8 @@ export interface AwayReport {
    */
   abandoned: number;
   recovered: number;
+  /** Districts the city took on its own while nobody was watching. */
+  districts: number;
 }
 
 /** What one pass of auto-development put on the ground. */
@@ -215,6 +219,7 @@ export class Game {
   /** Lifetime decay tallies. `catchUp` differences them like the fire ones. */
   private abandoned = 0;
   private recovered = 0;
+  private annexed = 0;
   /**
    * Buildings this run of the simulation may still destroy.
    *
@@ -230,6 +235,8 @@ export class Game {
    * and CATCHUP_MAX_ABANDONED for the length of one catch-up call.
    */
   private abandonsLeft = Number.POSITIVE_INFINITY;
+  /** Districts this run may still take on its own. See `autoAnnex`. */
+  private annexesLeft = Number.POSITIVE_INFINITY;
   /** Reused by `promote`, which runs every tick and must not allocate. */
   private readonly scratch: number[] = new Array<number>(LEVELS).fill(0);
 
@@ -283,6 +290,10 @@ export class Game {
     // building was lost in rather than a tenth of a second later.
     this.resolveFires();
     this.igniteFires(dt);
+    // Annexation before auto-development, so a district that arrives this tick
+    // is land the same tick can start building on rather than land that waits a
+    // tenth of a second — the same reasoning fires already follow.
+    this.autoAnnex();
     if (s.autoDevelop) this.autoDevelop(8);
   }
 
@@ -732,13 +743,45 @@ export class Game {
     }
   }
 
-  /** The expansion axis: more land, more plots, a permanent civic bonus. */
+  /**
+   * The expansion axis: more land, more plots, a permanent civic bonus.
+   *
+   * The manual override. It asks only what `canAnnex` asks, so a player who has
+   * looked at the price and wants the land can take it before the automatic
+   * pass would — which waits for AUTO_ANNEX_RESERVE on top.
+   */
   annex(): boolean {
     const s = this.inner;
     if (!canAnnex(s)) return false;
     s.cash -= annexCost(s);
     s.districts++;
+    this.annexed++;
     return true;
+  }
+
+  /**
+   * Takes the next district when the city has earned it and can comfortably
+   * pay, without anyone pressing anything.
+   *
+   * Capped for the length of a catch-up call and unlimited while the player is
+   * watching, exactly like fire losses and abandonment: a district that arrives
+   * while you are looking at it is a thing that happened, and eight that
+   * arrived while you were asleep are a city you do not recognise.
+   *
+   * Looped rather than run once, because one purchase can unlock the next: the
+   * gate is a *share*, and annexing does not change how much is built, only
+   * what it is a share of. The cap is what bounds the loop.
+   */
+  private autoAnnex(): void {
+    while (this.annexesLeft > 0 && willAutoAnnex(this.inner)) {
+      const cost = annexCost(this.inner);
+      this.annexesLeft--;
+      if (!this.annex()) return;
+      // Recorded like any other outgoing the city makes on its own. `catchUp`
+      // differences `autoSpend` to work out what was earned, so cash that left
+      // the treasury unrecorded would read as income that never arrived.
+      this.autoSpend += cost;
+    }
   }
 
   /** Records when the game was last persisted, so time away can be measured. */
@@ -759,13 +802,17 @@ export class Game {
     this.firesLost = 0;
     this.abandoned = 0;
     this.recovered = 0;
+    this.annexed = 0;
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
+    this.annexesLeft = Number.POSITIVE_INFINITY;
   }
 
   /**
    * Spends surplus cash on whichever plot is cheapest, up to `budget` purchases.
-   * Deliberately never rezones or annexes — those are the player's calls.
+   * Deliberately never annexes — `autoAnnex` owns that, and owns it whether or
+   * not auto-development is switched on, because expansion is now the city's
+   * own business rather than an opt-in.
    *
    * Two floors keep it from playing badly on the player's behalf:
    *
@@ -877,6 +924,7 @@ export class Game {
       parks: this.inner.parks,
       services: civicBuildings(this.inner),
       spend: this.autoSpend,
+      districts: this.inner.districts,
       started: this.firesStarted,
       extinguished: this.firesExtinguished,
       lost: this.firesLost,
@@ -891,6 +939,7 @@ export class Game {
     // The same guard for decay. However long the absence, the city comes back
     // at most CATCHUP_MAX_ABANDONED plots darker than it was left.
     this.abandonsLeft = CATCHUP_MAX_ABANDONED;
+    this.annexesLeft = CATCHUP_MAX_ANNEXES;
 
     // Fixed steps, not a fixed step count: coarse steps let auto-development
     // buy against a demand curve that has already jumped to its asymptote.
@@ -902,6 +951,7 @@ export class Game {
     for (let i = 0; i < steps; i++) this.step(dt);
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
+    this.annexesLeft = Number.POSITIVE_INFINITY;
 
     const s = this.inner;
     return {
@@ -922,6 +972,7 @@ export class Game {
       firesLost: this.firesLost - before.lost,
       abandoned: this.abandoned - before.abandoned,
       recovered: this.recovered - before.recovered,
+      districts: s.districts - before.districts,
     };
   }
 }

@@ -10,6 +10,8 @@ import {
   SERVICES,
 } from '../sim/config';
 import {
+  abandonedBuildings,
+  activeDeveloped,
   annexBlocker,
   annexCost,
   bindingTerm,
@@ -20,7 +22,6 @@ import {
   canBuildService,
   canBuildShop,
   demandTargets,
-  developed,
   educationCoverage,
   homeBlocker,
   homeCapacity,
@@ -40,6 +41,7 @@ import {
   serviceReadings,
   shopCapacity,
   shopCost,
+  willAutoAnnex,
 } from '../sim/economy';
 import type { AwayReport, Game } from '../sim/game';
 import type { GameState } from '../sim/state';
@@ -387,19 +389,29 @@ export class Hud {
     n.park.disabled = !canBuildPark(s);
     n.park.title = parkBlocker(s) ?? 'Lay out a park';
 
-    const filled = developed(s);
+    // The bar shows what the annexation gate actually reads, which is the
+    // *working* share: a plot with a ruin on it is developed but not active,
+    // and a bar that counted it would sit above a gate that never opened.
+    const filled = activeDeveloped(s);
     n.occupancyFill.style.width = `${Math.min(100, filled * 100).toFixed(1)}%`;
     n.occupancy.classList.toggle('ready', filled >= ANNEX_MIN_OCCUPANCY);
+    const ruins = abandonedBuildings(s);
     n.occupancy.setAttribute(
       'aria-label',
-      `Land developed: ${Math.round(filled * 100)} percent`,
+      `Land developed and working: ${Math.round(filled * 100)} percent` +
+        (ruins > 0 ? `, with ${ruins} abandoned` : ''),
     );
 
+    // Annexation runs itself now, so the label's job changed: it says what the
+    // city is waiting for rather than offering a purchase. The button stays as
+    // the override — it asks only what `canAnnex` asks, where the automatic
+    // pass waits for a surplus on top.
     const annexWhy = annexBlocker(s);
     const capped = s.districts >= MAX_DISTRICTS;
-    n.annexLabel.textContent = annexWhy ?? 'Annex district';
+    n.annexLabel.textContent = annexWhy ?? (willAutoAnnex(s) ? 'Expanding…' : 'Annex now');
     n.annexCost.textContent = capped ? '—' : fmt(annexCost(s));
     n.annex.disabled = !canAnnex(s);
+    n.annex.title = annexWhy ?? 'Take the next district without waiting for a surplus';
 
     n.auto.textContent = `Auto-develop · ${s.autoDevelop ? 'on' : 'off'}`;
     n.auto.setAttribute('aria-pressed', String(s.autoDevelop));
@@ -420,6 +432,7 @@ export class Hud {
     if (report.industry > 0) rows.push(['Works built', fmtInt(report.industry)]);
     if (report.parks > 0) rows.push(['Parks laid out', fmtInt(report.parks)]);
     if (report.services > 0) rows.push(['Services opened', fmtInt(report.services)]);
+    if (report.districts > 0) rows.push(['Districts annexed', fmtInt(report.districts)]);
     if (report.spent > 1) rows.push(['Reinvested', fmt(report.spent)]);
     // Fires are reported even when none started, once any did: "0 lost" is the
     // half of the story that tells the player the fire service is working.
