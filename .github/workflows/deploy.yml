@@ -29,6 +29,21 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+
+      # A repository whose Pages source is still "Deploy from a branch" keeps
+      # running GitHub's legacy builder on every push to master, and that
+      # builder publishes the repository root — the unbuilt index.html, whose
+      # /src/main.ts script tag 404s. It races this workflow and, finishing a
+      # few seconds later, wins. Point Pages at Actions so this workflow is the
+      # only publisher. Already-correct repositories are unaffected.
+      - name: Publish from Actions rather than from the branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api -X PUT "repos/$GITHUB_REPOSITORY/pages" -f build_type=workflow; then
+            echo "::warning::Could not set the Pages source. Set Settings -> Pages -> Source to 'GitHub Actions' by hand, then re-run this workflow."
+          fi
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
