@@ -1,16 +1,18 @@
 import { fmt, fmtDuration, fmtInt } from '../core/format';
-import { ANNEX_MIN_OCCUPANCY, MAX_DISTRICTS, SERVICES } from '../sim/config';
+import { ANNEX_MIN_OCCUPANCY, HAPPINESS_MIN_BUILD, MAX_DISTRICTS, SERVICES } from '../sim/config';
 import {
   annexBlocker,
   annexCost,
+  bindingService,
   canAnnex,
   canBuildHome,
   canBuildIndustry,
   canBuildService,
   canBuildShop,
   canRezone,
+  coverage,
   demandTargets,
-  happiness,
+  homeBlocker,
   homeCapacity,
   homeCost,
   income,
@@ -22,6 +24,7 @@ import {
   residents,
   rezoneBlocker,
   rezoneCost,
+  serviceBlocker,
   serviceCost,
   serviceReadings,
   shopCapacity,
@@ -64,6 +67,10 @@ export class Hud {
     plots: el('plots'),
     districts: el('districts'),
     happiness: el('happiness'),
+    mood: el('mood'),
+    moodPct: el('mood-pct'),
+    moodWhy: el('mood-why'),
+    moodFill: el('mood-fill'),
     rci: el('rci'),
     demandRFill: el('demand-r-fill'),
     demandCFill: el('demand-c-fill'),
@@ -108,9 +115,11 @@ export class Hud {
     service,
     button: el<HTMLButtonElement>(`build-${service.key}`),
     cost: el(`build-${service.key}-cost`),
+    /** `built / allowed` on the button itself, so the gate is visible. */
+    allowance: el(`build-${service.key}-built`),
     row: el(`svc-${service.key}-built`).parentElement as HTMLElement,
     built: el(`svc-${service.key}-built`),
-    pct: el(`svc-${service.key}-pct`),
+    covers: el(`svc-${service.key}-covers`),
   }));
 
   private since = 0;
@@ -235,7 +244,7 @@ export class Hud {
         `commercial ${s.shops} of ${shops}, industrial ${s.industry} of ${industry}`,
     );
     n.districts.textContent = `${s.districts} / ${MAX_DISTRICTS}`;
-    n.happiness.textContent = pct(happiness(s));
+    n.happiness.textContent = pct(s.happiness);
 
     this.paintBar(n.demandRFill, s.demandR);
     this.paintBar(n.demandCFill, s.demandC);
@@ -249,23 +258,40 @@ export class Hud {
         `industrial ${pct(s.demandI)}. Negative is oversupplied.`,
     );
 
-    const readings = serviceReadings(s);
+    // The happiness panel. A bare percentage says nothing a player can act on,
+    // so the binding term is named beside it: "Health coverage 41%" is the whole
+    // reason this block exists rather than the number on its own.
+    const people = residents(s);
+    const worst = bindingService(s);
+    const why = `${worst.coverLabel} ${pct(coverage(s, worst))}`;
+    n.moodPct.textContent = pct(s.happiness);
+    n.moodWhy.textContent = why;
+    n.moodFill.style.width = `${Math.max(0, Math.min(100, s.happiness * 100)).toFixed(1)}%`;
+    n.mood.classList.toggle('short', s.happiness < HAPPINESS_MIN_BUILD);
+    n.mood.setAttribute('aria-label', `Happiness ${pct(s.happiness)}. Weakest: ${why}.`);
+
     const spoken: string[] = [];
-    for (const { service, built, needed, coverage } of readings) {
+    for (const { service, built, allowed, covered, coverage: reach } of serviceReadings(s)) {
       const row = this.serviceNodes.find((entry) => entry.service.key === service.key);
       if (!row) continue;
-      row.built.textContent = `${fmtInt(built)}/${fmtInt(needed)}`;
-      row.pct.textContent = pct(coverage);
-      row.row.classList.toggle('covered', coverage >= 1);
+      row.built.textContent = fmtInt(built);
+      row.covers.textContent = `covers ${fmtInt(covered)} of ${fmtInt(people)}`;
+      row.row.classList.toggle('covered', reach >= 1);
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
       row.cost.textContent = fmt(serviceCost(s, service));
       row.button.disabled = !canBuildService(s, service);
-      spoken.push(`${service.name} ${built} of ${needed}, ${pct(coverage)} covered`);
+      row.button.title = serviceBlocker(s, service) ?? service.buildLabel;
+      spoken.push(
+        `${service.name} ${built} of ${allowed} allowed, covering ${Math.round(covered)} of ${Math.round(people)} residents`,
+      );
     }
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
     const tier = tierOf(s);
     n.zoneName.textContent = tier.name;
-    n.homeLabel.textContent = tier.buildLabel;
+    // Same pattern as rezone and annex: when the button is dead for a reason
+    // worth stating, the label states it instead of the verb.
+    n.homeLabel.textContent = homeBlocker(s) ?? tier.buildLabel;
     n.homeCost.textContent = fmt(homeCost(s));
     n.shopCost.textContent = fmt(shopCost(s));
     n.industryCost.textContent = fmt(industryCost(s));

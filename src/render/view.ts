@@ -4,7 +4,7 @@ import { Buildings } from './buildings';
 import { CameraRig } from './cameraRig';
 import { Ground } from './ground';
 import { World } from './world';
-import { Zones, type ZoneMode } from './zones';
+import { Courtyards, Zones, type ZoneMode } from './zones';
 
 /**
  * The view layer, entire.
@@ -22,6 +22,7 @@ export class View {
   private readonly ground: Ground;
   private readonly buildings: Buildings;
   private readonly zones: Zones;
+  private readonly courtyards: Courtyards;
   private elapsed = 0;
   private shownDistricts = 0;
 
@@ -30,6 +31,7 @@ export class View {
     this.ground = new Ground(this.world.scene, layout);
     this.buildings = new Buildings(this.world.scene, layout);
     this.zones = new Zones(this.world.scene, layout);
+    this.courtyards = new Courtyards(this.world.scene, layout);
 
     const reducedMotion =
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -77,6 +79,7 @@ export class View {
     }
     this.buildings.sync(state, this.elapsed);
     this.zones.sync(state);
+    this.courtyards.sync(state);
   }
 
   /** Advances animations and draws one frame. */

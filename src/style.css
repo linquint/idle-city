@@ -215,13 +215,48 @@ canvas {
   font-variant-numeric: tabular-nums;
   color: var(--concrete);
 }
-.svc .pct {
-  width: 38px;
+.svc .covers {
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--dim);
 }
-.svc.covered .pct { color: var(--signal); }
+.svc.covered .covers { color: var(--signal); }
+
+/* Happiness: the percentage is the headline, the binding service is the point.
+   A single left-anchored bar, not a diverging one — this signal has no sign. */
+.mood {
+  padding: 2px 0 6px;
+}
+.mood-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 5px;
+  font-size: 11px;
+}
+.mood-head .num {
+  font-variant-numeric: tabular-nums;
+  color: var(--signal);
+}
+.mood-head .why {
+  flex: 1 1 auto;
+  text-align: right;
+  color: var(--dim);
+}
+.mood .bar::before { content: none; }
+.mood-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  background: var(--signal);
+  transition: width 0.25s ease;
+}
+/* Below the build gate the bar is the warning, so it changes colour with it. */
+.mood.short .mood-head .num,
+.mood.short .mood-head .why { color: var(--sodium); }
+.mood.short .mood-fill { background: var(--sodium); }
 
 /* ----------------------------------------------------------- controls */
 
@@ -343,8 +378,15 @@ button.civic {
 }
 button.civic:hover:not(:disabled) { background: rgba(127, 168, 255, 0.1); border-color: var(--civic); }
 button.civic .cost { color: var(--civic); font-size: 10px; }
+/* built / allowed, so the population gate is visible before it bites. */
+button.civic .built {
+  font-size: 10px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
 button.civic:disabled { border-color: #1c2739; }
-button.civic:disabled .cost { color: var(--off); }
+button.civic:disabled .cost,
+button.civic:disabled .built { color: var(--off); }
 
 button.rezone { border-color: rgba(99, 198, 168, 0.45); }
 button.rezone:hover:not(:disabled) { background: rgba(99, 198, 168, 0.1); border-color: var(--signal); }

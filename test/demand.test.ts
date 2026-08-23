@@ -136,7 +136,7 @@ describe('smoothing', () => {
    * on the same city.
    */
   it('gives catch-up and real time the same demand, within 1%', () => {
-    const patch = { homes: 24, shops: 6, industry: 3, cash: 0, schools: 1, clinics: 1, stations: 1 };
+    const patch = { homes: 24, shops: 6, industry: 3, cash: 0, hospitals: 1, police: 1, fire: 1 };
     const away = at(patch);
     const watched = play(at(patch), 3600);
     away.catchUp(3600);
@@ -150,7 +150,7 @@ describe('smoothing', () => {
 
 describe('the demand signals', () => {
   it('converge toward their targets', () => {
-    const game = at({ homes: 24, shops: 6, industry: 3, schools: 1, clinics: 1, stations: 1 });
+    const game = at({ homes: 24, shops: 6, industry: 3, hospitals: 1, police: 1, fire: 1 });
     const target = demandTargets(game.state);
 
     let gap = Infinity;
@@ -175,7 +175,7 @@ describe('the demand signals', () => {
     const shapes: Array<Partial<GameState>> = [
       { homes: 43, tier: 3 },
       { shops: 28, industry: 19 },
-      { homes: 40, shops: 28, industry: 19, tier: 3, schools: 1, clinics: 1, stations: 1 },
+      { homes: 40, shops: 28, industry: 19, tier: 3, hospitals: 1, police: 1, fire: 1 },
       { homes: 1, shops: 28, industry: 19, districts: 4 },
     ];
     for (const shape of shapes) {
@@ -207,7 +207,22 @@ describe('the cycle', () => {
    * loop is three unconnected numbers and the build order stops mattering.
    */
   const settled = (patch: Partial<GameState>): Game =>
-    play(at({ homes: 30, shops: 10, industry: 5, schools: 1, clinics: 1, stations: 1, cash: 1e9, ...patch }), 400);
+    play(
+      at({
+        // Three districts, because a district only sells 19 housing plots now
+        // and these cases have to have room left to build into.
+        districts: 3,
+        homes: 30,
+        shops: 10,
+        industry: 5,
+        hospitals: 1,
+        police: 1,
+        fire: 1,
+        cash: 1e9,
+        ...patch,
+      }),
+      400,
+    );
 
   const readings = (game: Game): [number, number, number] => [
     game.state.demandR,
@@ -229,7 +244,7 @@ describe('the cycle', () => {
    */
   it('eases down as well as up, rather than snapping to the target', () => {
     const game = play(
-      at({ homes: 20, shops: 10, industry: 5, schools: 1, clinics: 1, stations: 1, cash: 1e9 }),
+      at({ districts: 3, homes: 20, shops: 10, industry: 5, hospitals: 1, police: 1, fire: 1, cash: 1e9 }),
       400,
     );
     const before = game.state.demandR;

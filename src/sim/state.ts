@@ -1,6 +1,6 @@
 import { START_CASH } from './config.ts';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
 /**
  * The entire game, in a handful of fields.
@@ -18,10 +18,27 @@ export interface GameState {
   homes: number;
   shops: number;
   industry: number;
-  /** Civic buildings. They earn nothing; they gate income and demand. */
-  schools: number;
-  clinics: number;
-  stations: number;
+  /** Civic buildings, one 2x2 site each. They earn nothing; they gate income,
+   *  demand and — below HAPPINESS_MIN_BUILD — housing itself. */
+  hospitals: number;
+  police: number;
+  fire: number;
+  /**
+   * Share of each type's buildings that are actually staffed, in [0, 1].
+   *
+   * In the save because it is integrated, not derived: a hospital opened ten
+   * seconds ago and one opened last week are the same `hospitals: 4` but not the
+   * same coverage, and recomputing on load would hand a returning player either
+   * a free ramp or an instant one.
+   */
+  hospitalStaff: number;
+  policeStaff: number;
+  fireStaff: number;
+  /**
+   * Happiness, lagged behind the coverage it is chasing. Same reasoning as the
+   * demand signals: the lag is the mechanic, so it has to survive a reload.
+   */
+  happiness: number;
   /**
    * Demand per zone, in [-1, 1], negative meaning oversupplied.
    *
@@ -53,9 +70,15 @@ export function createState(now = Date.now()): GameState {
     homes: 0,
     shops: 0,
     industry: 0,
-    schools: 0,
-    clinics: 0,
-    stations: 0,
+    hospitals: 0,
+    police: 0,
+    fire: 0,
+    hospitalStaff: 0,
+    policeStaff: 0,
+    fireStaff: 0,
+    // An empty city has nobody to be unhappy: coverage is a share of residents,
+    // and the share of nobody is everybody. It lags down as the first homes fill.
+    happiness: 1,
     demandR: 0,
     demandC: 0,
     demandI: 0,

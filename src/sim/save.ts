@@ -1,23 +1,24 @@
-import { MAX_DISTRICTS, TIERS } from './config';
+import { MAX_DISTRICTS, SERVICES, TIERS } from './config';
 import {
   clampDemand,
+  happinessTarget,
   homeCapacity,
   industryCapacity,
-  residentialPlots,
+  serviceAllowed,
   shopCapacity,
 } from './economy';
 import { createState, SAVE_VERSION, type GameState } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v2';
+export const SAVE_KEY = 'idle-city/save/v3';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v2 miss falls back through
+ * new build has not agreed to lose their city — so a v3 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
-const LEGACY_SAVE_KEYS = ['idle-city/save/v1'] as const;
+const LEGACY_SAVE_KEYS = ['idle-city/save/v2', 'idle-city/save/v1'] as const;
 
 /** Storage can be absent (private mode, sandboxes) — the game must still run. */
 function storage(): Storage | null {
@@ -39,6 +40,10 @@ const count = (v: unknown): number => Math.max(0, Math.floor(num(v, 0)));
 
 /** Demand is a bounded signal; a save claiming otherwise would buy free plots. */
 const demand = (v: unknown): number => clampDemand(num(v, 0));
+
+/** Staffing and happiness are shares. A save claiming 9 gets 1. */
+const share = (v: unknown, fallback: number): number =>
+  Math.max(0, Math.min(1, num(v, fallback)));
 
 /**
  * Rebuilds a state from untrusted JSON. Anything missing, malformed or out of
@@ -62,9 +67,18 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // A v1 save has none of these; every one defaults to nothing built and no
     // demand, which is exactly the state a fresh city starts in.
     industry: count(r['industry']),
-    schools: count(r['schools']),
-    clinics: count(r['clinics']),
-    stations: count(r['stations']),
+    // v2 called them clinics, schools and stations and stood them on single
+    // residential plots. They are the same slot — the building the city buys to
+    // raise happiness — so the counts carry across by weight rather than being
+    // silently deleted, and the clamps below make whatever arrives legal.
+    hospitals: count(r['hospitals'] ?? r['clinics']),
+    police: count(r['police'] ?? r['schools']),
+    fire: count(r['fire'] ?? r['stations']),
+    hospitalStaff: share(r['hospitalStaff'], 0),
+    policeStaff: share(r['policeStaff'], 0),
+    fireStaff: share(r['fireStaff'], 0),
+    // Filled in below, once the counts it is computed from are legal.
+    happiness: 0,
     demandR: demand(r['demandR']),
     demandC: demand(r['demandC']),
     demandI: demand(r['demandI']),
@@ -75,24 +89,28 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     savedAt: num(r['savedAt'], now),
   };
 
-  // Civic buildings first, and against each other: they share the residential
-  // zone with housing, and `homeCapacity` subtracts them. Clamping homes before
-  // the civic counts were legal would leave a save with a house on a school.
-  let civicRoom = residentialPlots(state);
-  const fitCivic = (built: number): number => {
-    const kept = Math.min(built, civicRoom);
-    civicRoom -= kept;
-    return kept;
-  };
-  state.schools = fitCivic(state.schools);
-  state.clinics = fitCivic(state.clinics);
-  state.stations = fitCivic(state.stations);
-
-  // A shrunken district count (a balance change, or a doctored save) must never
-  // leave buildings pointing at plots that no longer exist.
+  // Buildings before civic counts: `serviceAllowed` is measured against the
+  // population, so homes have to be legal before it can be trusted. Civic
+  // buildings no longer take housing land, so unlike v2 the order is this way
+  // round — there is no zone left for the two to fight over.
   state.homes = Math.min(state.homes, homeCapacity(state));
   state.shops = Math.min(state.shops, shopCapacity(state));
   state.industry = Math.min(state.industry, industryCapacity(state));
+
+  // A doctored save with 400 hospitals gets the one its population is allowed,
+  // and a save carried over from a smaller district count never keeps a
+  // building whose site no longer exists. `serviceAllowed` folds both in.
+  for (const service of SERVICES) {
+    const allowed = serviceAllowed(state, service);
+    if (service.key === 'hospital') state.hospitals = Math.min(state.hospitals, allowed);
+    else if (service.key === 'police') state.police = Math.min(state.police, allowed);
+    else state.fire = Math.min(state.fire, allowed);
+  }
+
+  // Happiness defaults to the coverage the city actually has rather than to a
+  // fixed number: handing a returning player the fresh-city 1 would be ninety
+  // seconds of free housing every time they reloaded.
+  state.happiness = share(r['happiness'], happinessTarget(state));
   return state;
 }
 

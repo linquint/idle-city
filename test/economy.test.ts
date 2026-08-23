@@ -15,6 +15,7 @@ import {
   canBuildIndustry,
   canBuildShop,
   canRezone,
+  civicSiteCapacity,
   homeCapacity,
   homeCost,
   income,
@@ -28,6 +29,7 @@ import {
   shopCapacity,
   shopCost,
 } from '../src/sim/economy';
+import { PLOTS_PER_DISTRICT } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
@@ -76,20 +78,33 @@ describe('capacity', () => {
     expect(plotCapacity(state({ districts: 4 }))).toBe(one * 4);
   });
 
-  it('counts industrial land now that something builds on it', () => {
+  it('counts industrial land and civic sites, not just what is for sale', () => {
     const s = state();
-    expect(plotCapacity(s)).toBe(homeCapacity(s) + shopCapacity(s) + industryCapacity(s));
+    expect(plotCapacity(s)).toBe(
+      homeCapacity(s) + shopCapacity(s) + industryCapacity(s) + civicSiteCapacity(s),
+    );
     expect(industryCapacity(s)).toBeGreaterThan(0);
+    expect(civicSiteCapacity(s)).toBeGreaterThan(0);
+  });
+
+  it('is a share of the plots that front a street, not of the zoned land', () => {
+    // The distinction the renamed constants exist to keep straight: a district
+    // is zoned for 90 plots and sells 58 of them, because a building has to
+    // have a street to stand on and seven 2x2 quads are held for civic use.
+    const s = state();
+    expect(homeCapacity(s) + shopCapacity(s) + industryCapacity(s)).toBe(58);
+    expect(plotCapacity(s)).toBe(65);
+    expect(plotCapacity(s)).toBeLessThan(PLOTS_PER_DISTRICT);
   });
 
   it('counts every kind of building against the same total', () => {
-    const s = state({ homes: 3, shops: 2, industry: 4, schools: 1, clinics: 1 });
+    const s = state({ homes: 3, shops: 2, industry: 4, hospitals: 1, police: 1 });
     expect(plotsUsed(s)).toBe(11);
     expect(occupancy(s)).toBeCloseTo(11 / plotCapacity(s), 12);
   });
 
   it('refuses to build past the land you own', () => {
-    const full = state({ homes: homeCapacity(state()), cash: Infinity });
+    const full = state({ homes: homeCapacity(state()), cash: Infinity, happiness: 1 });
     expect(canBuildHome(full)).toBe(false);
     const shopsFull = state({ shops: shopCapacity(state()), cash: Infinity });
     expect(canBuildShop(shopsFull)).toBe(false);

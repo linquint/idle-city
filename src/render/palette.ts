@@ -19,12 +19,17 @@ export const PALETTE = {
   industry: 0x232d3d,
   industryRoof: 0x46566f,
   stack: 0x54637c,
-  // Civic buildings are told apart by their roof, not their mass — they stand
-  // on residential plots and should still read as part of the neighbourhood.
-  civic: 0x22314a,
-  civicSchool: 0x7fa8ff,
-  civicClinic: 0x63c6a8,
-  civicSafety: 0xf0a64b,
+  // Civic buildings span 2x2 plots, so unlike the rest of the city they can
+  // afford a silhouette each. Roof colour is the second signal, not the only one.
+  hospital: 0xd8dee8,
+  hospitalRoof: 0x63c6a8,
+  police: 0x1c2740,
+  policeRoof: 0x7fa8ff,
+  fire: 0x6d2f2c,
+  fireRoof: 0xe0574b,
+  // Zoned land nobody will ever build on: the interior of a deep block, and the
+  // civic sites still standing empty. Drawn, or the blocks read as holes.
+  courtyard: 0x3d6349,
   // Demand overlay (the Z key, second press). Green where a discount is live,
   // red where the zone is oversupplied, grey at the balance point.
   demandHigh: 0x5fd08a,
