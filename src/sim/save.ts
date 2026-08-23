@@ -1,5 +1,6 @@
-import { MAX_DISTRICTS, SERVICES, TIERS } from './config';
+import { MAX_ACTIVE_FIRES, MAX_DISTRICTS, SERVICES, TIERS } from './config';
 import {
+  burnableOf,
   clampDemand,
   happinessTarget,
   homeCapacity,
@@ -7,18 +8,28 @@ import {
   serviceAllowed,
   shopCapacity,
 } from './economy';
-import { createState, SAVE_VERSION, type GameState } from './state';
+import {
+  createState,
+  SAVE_VERSION,
+  type Fire,
+  type FireKind,
+  type GameState,
+} from './state';
 
-export const SAVE_KEY = 'idle-city/save/v3';
+export const SAVE_KEY = 'idle-city/save/v4';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v3 miss falls back through
+ * new build has not agreed to lose their city — so a v4 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
-const LEGACY_SAVE_KEYS = ['idle-city/save/v2', 'idle-city/save/v1'] as const;
+const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v3',
+  'idle-city/save/v2',
+  'idle-city/save/v1',
+] as const;
 
 /** Storage can be absent (private mode, sandboxes) — the game must still run. */
 function storage(): Storage | null {
@@ -44,6 +55,40 @@ const demand = (v: unknown): number => clampDemand(num(v, 0));
 /** Staffing and happiness are shares. A save claiming 9 gets 1. */
 const share = (v: unknown, fallback: number): number =>
   Math.max(0, Math.min(1, num(v, fallback)));
+
+const FIRE_KINDS: readonly FireKind[] = ['home', 'shop', 'industry'];
+
+/**
+ * Rebuilds the fire list from untrusted JSON.
+ *
+ * Three separate things a save could be lying about, and every one of them has
+ * a cheap answer: an entry that is not a fire at all is dropped, a fire on a
+ * building the city no longer owns is dropped — a v3 save owns none of them, a
+ * doctored one may claim home 900 of 19 — and a list claiming four hundred
+ * fires is cut to MAX_ACTIVE_FIRES. `startedAt` is clamped into the past
+ * because a fire stamped in the future would never age and so never go out.
+ */
+function migrateFires(raw: unknown, state: GameState): Fire[] {
+  if (!Array.isArray(raw)) return [];
+  const fires: Fire[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (fires.length >= MAX_ACTIVE_FIRES) break;
+    if (typeof entry !== 'object' || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    const kind = FIRE_KINDS.find((k) => k === e['kind']);
+    if (kind === undefined) continue;
+    const index = Math.floor(num(e['index'], -1));
+    if (index < 0 || index >= burnableOf(state, kind)) continue;
+    const key = `${kind}:${index}`;
+    // One building, one fire. Two entries on the same plot would double the
+    // happiness hit and take the income off twice.
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fires.push({ kind, index, startedAt: Math.min(state.elapsed, Math.max(0, num(e['startedAt'], 0))) });
+  }
+  return fires;
+}
 
 /**
  * Rebuilds a state from untrusted JSON. Anything missing, malformed or out of
@@ -82,6 +127,13 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     demandR: demand(r['demandR']),
     demandC: demand(r['demandC']),
     demandI: demand(r['demandI']),
+    // Filled in below, once the building counts they point at are legal.
+    fires: [],
+    // A v3 save has neither, and nothing but zero is a safe default: a negative
+    // cursor would index the hash stream backwards and a negative hazard would
+    // owe the city a fire it never has to pay.
+    fireCursor: Math.max(0, Math.floor(num(r['fireCursor'], 0))),
+    fireHazard: Math.max(0, num(r['fireHazard'], 0)),
     tier,
     districts,
     earned: Math.max(0, num(r['earned'], 0)),
@@ -107,9 +159,14 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     else state.fire = Math.min(state.fire, allowed);
   }
 
+  // After the building counts are legal, because a fire is only legal if the
+  // building it is burning still exists.
+  state.fires = migrateFires(r['fires'], state);
+
   // Happiness defaults to the coverage the city actually has rather than to a
   // fixed number: handing a returning player the fresh-city 1 would be ninety
-  // seconds of free housing every time they reloaded.
+  // seconds of free housing every time they reloaded. Computed after the fires
+  // land, so a city that was on fire when it was saved reopens unhappy.
   state.happiness = share(r['happiness'], happinessTarget(state));
   return state;
 }

@@ -36,6 +36,10 @@ export const PALETTE = {
   // because distance culling reshuffles which slot holds which car.
   car: 0x39465e,
   headlight: 0xffe6b0,
+  // Fire. Brighter than the sodium the city lights itself with, because a
+  // burning roof has to be the thing you look at first.
+  flame: 0xff7a2e,
+  flameGlow: 0xff4a1c,
   // Demand overlay (the Z key, second press). Green where a discount is live,
   // red where the zone is oversupplied, grey at the balance point.
   demandHigh: 0x5fd08a,

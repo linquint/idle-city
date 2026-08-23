@@ -2,6 +2,8 @@ import {
   ANNEX_BASE,
   ANNEX_GROWTH,
   ANNEX_MIN_OCCUPANCY,
+  BASE_IGNITION_PER_BUILDING_HOUR,
+  BURN_OUT_SECONDS,
   CIVIC_GROWTH,
   CIVIC_RAMP_SECONDS,
   DEMAND_SCALE,
@@ -9,6 +11,10 @@ import {
   DISTRICT_BONUS,
   EXPORT_BASE,
   EXPORT_PER_DISTRICT,
+  EXTINGUISH_MAX,
+  EXTINGUISH_MIN,
+  FIRE_SUPPRESSION,
+  FIRE_UNHAPPINESS,
   HAPPINESS_FLOOR,
   HAPPINESS_MIN_BUILD,
   HAPPINESS_TAU,
@@ -44,7 +50,7 @@ import {
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
 } from './layout.ts';
-import type { GameState } from './state.ts';
+import type { FireKind, GameState } from './state.ts';
 
 /** Pure reads over a state. No mutation lives in this file. */
 
@@ -172,9 +178,21 @@ export const serviceReadings = (s: GameState): readonly ServiceReading[] =>
     coverage: coverage(s, service),
   }));
 
-/** Weighted coverage, in [0, 1]. Where `s.happiness` is heading. */
-export const happinessTarget = (s: GameState): number =>
-  SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0);
+/**
+ * Weighted coverage less what is currently on fire, in [0, 1]. Where
+ * `s.happiness` is heading.
+ *
+ * The fire term is a flat subtraction rather than another weighted coverage
+ * because it is not a service level — it is an event, and it should hurt while
+ * it is happening and stop hurting the moment it is out.
+ */
+export const happinessTarget = (s: GameState): number => {
+  const covered = SERVICES.reduce(
+    (sum, service) => sum + service.weight * coverage(s, service),
+    0,
+  );
+  return Math.max(0, covered - FIRE_UNHAPPINESS * s.fires.length);
+};
 
 /**
  * The service holding happiness back hardest — the one whose shortfall costs
@@ -225,6 +243,78 @@ export const happinessStep = (dt: number): number => lagStep(dt, HAPPINESS_TAU);
  */
 export const staffAfterBuild = (current: number, built: number): number =>
   built <= 0 ? 0 : (current * built) / (built + 1);
+
+// ---------------------------------------------------------------------- fire
+
+/**
+ * Buildings a fire can start in.
+ *
+ * Civic buildings are excluded, and not for realism. Destroying one would have
+ * to unwind its staffing scalar — which is a per-*type* average, so there is no
+ * honest way to take one building back out of it — and a burning fire station
+ * is a joke that costs the save file a special case. The three earning types
+ * are the ones the player builds, loses and rebuilds.
+ */
+export const burnableBuildings = (s: GameState): number => s.homes + s.shops + s.industry;
+
+/** How many of one kind the city has. The denominator an ignition draws against. */
+export const burnableOf = (s: GameState, kind: FireKind): number =>
+  kind === 'home' ? s.homes : kind === 'shop' ? s.shops : s.industry;
+
+/**
+ * Share of residents the fire service reaches. The one input suppression reads.
+ *
+ * Walked rather than looked up so the fire service's position in SERVICES is
+ * not a second thing to keep in step; a table with no fire service in it at all
+ * would mean nothing to fail rather than a crash.
+ */
+export const fireCoverage = (s: GameState): number => {
+  for (const service of SERVICES) if (service.key === 'fire') return coverage(s, service);
+  return 1;
+};
+
+/**
+ * Expected ignitions per second, over the whole city.
+ *
+ * Per hour in the constant because that is the scale a player experiences it
+ * at; per second here because that is the scale the integrator runs at.
+ */
+export const ignitionRate = (s: GameState): number =>
+  (BASE_IGNITION_PER_BUILDING_HOUR * burnableBuildings(s) * (1 - FIRE_SUPPRESSION * fireCoverage(s))) /
+  3600;
+
+/**
+ * Seconds from ignition to the fire being out, at the city's current coverage.
+ *
+ * Read fresh every tick rather than stamped on the fire, so a station that
+ * opens while something is burning actually shortens the fire it was too late
+ * to prevent.
+ */
+export const extinguishSeconds = (s: GameState): number =>
+  EXTINGUISH_MAX + (EXTINGUISH_MIN - EXTINGUISH_MAX) * fireCoverage(s);
+
+/**
+ * Whether a fire started now would take the building with it.
+ *
+ * The threshold the whole mechanic turns on: the response has to arrive inside
+ * BURN_OUT_SECONDS or there is nothing left to save.
+ */
+export const wouldBurnOut = (s: GameState): boolean => extinguishSeconds(s) > BURN_OUT_SECONDS;
+
+/** When a fire resolves, one way or the other. */
+export const resolvesAt = (s: GameState): number =>
+  Math.min(extinguishSeconds(s), BURN_OUT_SECONDS);
+
+/** Fires burning in one kind of building right now. */
+export const burningOf = (s: GameState, kind: FireKind): number => {
+  let n = 0;
+  for (const fire of s.fires) if (fire.kind === kind) n++;
+  return n;
+};
+
+/** Whether this exact building is already alight. Ignition never doubles up. */
+export const isBurning = (s: GameState, kind: FireKind, index: number): boolean =>
+  s.fires.some((fire) => fire.kind === kind && fire.index === index);
 
 // -------------------------------------------------------------------- demand
 
@@ -309,11 +399,27 @@ export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** 
 
 // -------------------------------------------------------------------- income
 
-export const income = (s: GameState): number =>
-  residents(s) *
-  RENT *
-  (1 + SHOP_BONUS * s.shops + INDUSTRY_BONUS * s.industry + DISTRICT_BONUS * (s.districts - 1)) *
-  incomeMultiplier(s);
+/**
+ * Cash per second, with everything currently on fire earning nothing.
+ *
+ * A burning home houses nobody who pays rent and a burning shop trades with
+ * nobody, so both come out of the ledger for as long as they are alight — which
+ * is what makes a slow fire service cost money rather than just look bad. The
+ * subtraction is floored: a doctored save cannot burn more buildings than the
+ * city owns and turn income negative.
+ */
+export const income = (s: GameState): number => {
+  const tier = tierOf(s);
+  const people = Math.max(0, s.homes - burningOf(s, 'home')) * tier.capacity;
+  const shops = Math.max(0, s.shops - burningOf(s, 'shop'));
+  const industry = Math.max(0, s.industry - burningOf(s, 'industry'));
+  return (
+    people *
+    RENT *
+    (1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (s.districts - 1)) *
+    incomeMultiplier(s)
+  );
+};
 
 // ------------------------------------------------------------------ can-build
 

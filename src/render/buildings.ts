@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { hash01 } from '../core/rng';
 import { CELL, SERVICES, TIERS, type Service, type Tier } from '../sim/config';
 import { worldX, worldZ, type CityLayout, type Coord } from '../sim/layout';
-import type { GameState } from '../sim/state';
+import type { FireKind, GameState } from '../sim/state';
 import { Glow } from './glow';
 import { GrowableInstancedMesh } from './growable';
 import { GrowthSchedule } from './growth';
@@ -529,6 +529,20 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
     capacity,
     doors,
   );
+}
+
+/**
+ * Top of whatever is standing on a plot, in world units.
+ *
+ * Exported so the fire layer can put a flame on a roof without a second copy
+ * of the height rules — including the per-building jitter, which is the whole
+ * reason this cannot simply be `tier.height`: a flame at the nominal height
+ * floats above a short block and sinks into a tall one.
+ */
+export function roofline(kind: FireKind, index: number, tier: Tier): number {
+  if (kind === 'shop') return SHOP_H + 0.13;
+  if (kind === 'industry') return INDUSTRY_H + 0.1;
+  return tier.height * heightJitter(index) + (tier.pitched ? 0.55 : 0.25);
 }
 
 /**

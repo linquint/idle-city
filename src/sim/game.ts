@@ -1,6 +1,10 @@
+import { hash01, mixSeed } from '../core/rng.ts';
 import {
+  CATCHUP_MAX_LOSSES,
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
+  IGNITION_HAZARD_CAP,
+  MAX_ACTIVE_FIRES,
   OFFLINE_CAP_SECONDS,
   SERVICES,
   TICK_RATE,
@@ -8,6 +12,8 @@ import {
 } from './config.ts';
 import {
   annexCost,
+  burnableBuildings,
+  burnableOf,
   canAnnex,
   canBuildHome,
   canBuildIndustry,
@@ -21,9 +27,12 @@ import {
   happinessStep,
   happinessTarget,
   homeCost,
+  ignitionRate,
   income,
   industryCost,
+  isBurning,
   residents,
+  resolvesAt,
   rezoneCost,
   serviceCost,
   serviceCount,
@@ -31,8 +40,33 @@ import {
   shopCost,
   staffAfterBuild,
   staffStep,
+  wouldBurnOut,
 } from './economy.ts';
-import { createState, type GameState } from './state.ts';
+import { createState, type Fire, type FireKind, type GameState } from './state.ts';
+
+/**
+ * Salt for the fire stream.
+ *
+ * Fires draw off their own cursor rather than off the layout seed, so the two
+ * can never correlate — a city whose fires lined up with its street plan would
+ * burn the same plots in every district.
+ */
+const FIRE_STREAM = 0x1f5e3d;
+
+/**
+ * Waiting time, in expected fires, before the ignition after `cursor`.
+ *
+ * `-ln(U)` is the exponential waiting time of a Poisson process and has mean 1,
+ * so hazard measured in expected fires is spent exactly one fire at a time.
+ * Peeked rather than consumed: the cursor only advances when a fire actually
+ * starts, so the same threshold is waiting there on the next tick however the
+ * steps are sized. `1 - hash01(..)` lands in (0, 1], which keeps the log finite.
+ */
+const ignitionWait = (cursor: number): number =>
+  -Math.log(1 - hash01(mixSeed(FIRE_STREAM, cursor)));
+
+/** Backstop on the ignition loop. Well above what IGNITION_HAZARD_CAP can spend. */
+const IGNITION_GUARD = IGNITION_HAZARD_CAP * 4;
 
 export interface AwayReport {
   /** Seconds credited, already clamped to OFFLINE_CAP_SECONDS. */
@@ -50,6 +84,17 @@ export interface AwayReport {
   shops: number;
   industry: number;
   services: number;
+  /**
+   * What burned, and how it went.
+   *
+   * Reported rather than left to be noticed. A player who comes back to a city
+   * one building smaller and no explanation has been robbed; one who is told
+   * "three fires, two put out, one building lost" has been given the argument
+   * for a fire station.
+   */
+  firesStarted: number;
+  firesExtinguished: number;
+  firesLost: number;
 }
 
 /** What one pass of auto-development put on the ground. */
@@ -76,6 +121,22 @@ export class Game {
    * cannot reproduce the demand each purchase was actually priced against.
    */
   private autoSpend = 0;
+  /**
+   * Lifetime fire tallies. `catchUp` differences them the same way it does
+   * `autoSpend`, which keeps `step` free of any notion of who is watching.
+   */
+  private firesStarted = 0;
+  private firesExtinguished = 0;
+  private firesLost = 0;
+  /**
+   * Buildings this run of the simulation may still destroy.
+   *
+   * Infinite while the player is watching — a fire you saw burn down is a
+   * consequence, not a theft. `catchUp` narrows it to CATCHUP_MAX_LOSSES for
+   * the length of one call, which is the guard that stops a twelve-hour
+   * absence from silently demolishing a city.
+   */
+  private lossesLeft = Number.POSITIVE_INFINITY;
 
   constructor(state: GameState = createState()) {
     this.inner = state;
@@ -109,8 +170,137 @@ export class Game {
     this.integrateStaffing(dt);
     this.integrateHappiness(dt);
     this.integrateDemand(dt);
+    // Fires after the integrators and before auto-development: income above
+    // was charged against the fires that were burning at the top of the tick,
+    // and auto-development should get to rebuild inside the same tick a
+    // building was lost in rather than a tenth of a second later.
+    this.resolveFires();
+    this.igniteFires(dt);
     if (s.autoDevelop) this.autoDevelop(8);
   }
+
+  // ------------------------------------------------------------------ fire
+
+  /**
+   * Puts out — or loses — every fire that has run its course.
+   *
+   * The response time is read fresh each tick rather than stamped on the fire
+   * when it started, so a station opened while something is burning genuinely
+   * shortens the fire it was too late to prevent. Compacted in place: the list
+   * is six entries long at most and this runs ten times a second.
+   */
+  private resolveFires(): void {
+    const s = this.inner;
+    if (s.fires.length === 0) return;
+    const limit = resolvesAt(s);
+    const fatal = wouldBurnOut(s);
+
+    let write = 0;
+    for (let i = 0; i < s.fires.length; i++) {
+      const fire = s.fires[i] as Fire;
+      if (s.elapsed - fire.startedAt < limit) {
+        s.fires[write++] = fire;
+        continue;
+      }
+      if (fatal && this.lossesLeft > 0) {
+        this.lossesLeft--;
+        this.demolish(fire.kind);
+        this.firesLost++;
+      } else {
+        // Past the loss budget the fire still ends, it just ends well. The
+        // alternative — leaving it burning — would hand a returning player a
+        // city permanently on fire, which is worse than the thing being guarded
+        // against.
+        this.firesExtinguished++;
+      }
+    }
+    s.fires.length = write;
+    this.pruneFires();
+  }
+
+  /**
+   * Takes one building of a kind off the books.
+   *
+   * The count is the whole of what a building is, so this is the whole of what
+   * losing one means. One honest consequence: plots are the *front* of each
+   * zone's build order, so the plot that empties is the last one in the list
+   * rather than the one the flames were on. Recording which plot burned would
+   * mean putting a position in the save, which is the one thing this codebase
+   * will not do — the fire is over by the time the count moves, and a city one
+   * building smaller is the part the player is owed.
+   */
+  private demolish(kind: FireKind): void {
+    const s = this.inner;
+    if (kind === 'home') s.homes = Math.max(0, s.homes - 1);
+    else if (kind === 'shop') s.shops = Math.max(0, s.shops - 1);
+    else s.industry = Math.max(0, s.industry - 1);
+  }
+
+  /** A fire whose building no longer exists stops being a fire. */
+  private pruneFires(): void {
+    const s = this.inner;
+    let write = 0;
+    for (const fire of s.fires) {
+      if (fire.index < burnableOf(s, fire.kind)) s.fires[write++] = fire;
+    }
+    s.fires.length = write;
+  }
+
+  /**
+   * Accumulates ignition pressure and spends it.
+   *
+   * The Poisson process, in the one form that survives being run at two step
+   * sizes. A Bernoulli trial per tick does not: sixty trials at one second and
+   * one trial at sixty are different distributions, so catch-up would
+   * systematically disagree with watching and the away report would be a lie.
+   * Integrating `rate x dt` into a hazard and spending it against exponential
+   * waiting times gives the same answer at any step size — and because the
+   * threshold is a pure function of the cursor, it is still sitting there
+   * unspent on the next tick.
+   */
+  private igniteFires(dt: number): void {
+    const s = this.inner;
+    const rate = ignitionRate(s);
+    if (rate <= 0 || burnableBuildings(s) <= 0) return;
+    s.fireHazard = Math.min(IGNITION_HAZARD_CAP, s.fireHazard + rate * dt);
+
+    for (let guard = 0; guard < IGNITION_GUARD; guard++) {
+      const wait = ignitionWait(s.fireCursor);
+      if (s.fireHazard < wait) break;
+      s.fireHazard -= wait;
+      s.fireCursor++;
+      this.ignite();
+    }
+  }
+
+  /**
+   * Starts one fire, in a building drawn in proportion to how many there are.
+   *
+   * The draws are spent even when the fire cannot be placed — the list is full,
+   * or that building is already alight. Spending them is what keeps the hazard
+   * bounded: a city sitting at MAX_ACTIVE_FIRES for an hour would otherwise
+   * bank an hour of pressure and let it all go the moment a slot opened.
+   */
+  private ignite(): void {
+    const s = this.inner;
+    const kindRoll = hash01(mixSeed(FIRE_STREAM, s.fireCursor));
+    s.fireCursor++;
+    const slotRoll = hash01(mixSeed(FIRE_STREAM, s.fireCursor));
+    s.fireCursor++;
+    if (s.fires.length >= MAX_ACTIVE_FIRES) return;
+
+    const pick = kindRoll * burnableBuildings(s);
+    const kind: FireKind =
+      pick < s.homes ? 'home' : pick < s.homes + s.shops ? 'shop' : 'industry';
+    const of = burnableOf(s, kind);
+    if (of <= 0) return;
+    const index = Math.min(of - 1, Math.floor(slotRoll * of));
+    if (isBurning(s, kind, index)) return;
+
+    s.fires.push({ kind, index, startedAt: s.elapsed });
+    this.firesStarted++;
+  }
+
 
   /**
    * Fills the payroll of each civic type, exponentially toward fully staffed.
@@ -257,6 +447,10 @@ export class Game {
     this.inner = createState();
     this.accumulator = 0;
     this.autoSpend = 0;
+    this.firesStarted = 0;
+    this.firesExtinguished = 0;
+    this.firesLost = 0;
+    this.lossesLeft = Number.POSITIVE_INFINITY;
   }
 
   /**
@@ -355,7 +549,15 @@ export class Game {
       industry: this.inner.industry,
       services: civicBuildings(this.inner),
       spend: this.autoSpend,
+      started: this.firesStarted,
+      extinguished: this.firesExtinguished,
+      lost: this.firesLost,
     };
+
+    // The hard guard, for the length of this call and no longer. However many
+    // fires resolve badly across a twelve-hour absence, the city comes back at
+    // most one building smaller; the rest are put out instead and still counted.
+    this.lossesLeft = CATCHUP_MAX_LOSSES;
 
     // Fixed steps, not a fixed step count: coarse steps let auto-development
     // buy against a demand curve that has already jumped to its asymptote.
@@ -365,6 +567,7 @@ export class Game {
     );
     const dt = credited / steps;
     for (let i = 0; i < steps; i++) this.step(dt);
+    this.lossesLeft = Number.POSITIVE_INFINITY;
 
     const s = this.inner;
     return {
@@ -379,6 +582,9 @@ export class Game {
       shops: s.shops - before.shops,
       industry: s.industry - before.industry,
       services: civicBuildings(s) - before.services,
+      firesStarted: this.firesStarted - before.started,
+      firesExtinguished: this.firesExtinguished - before.extinguished,
+      firesLost: this.firesLost - before.lost,
     };
   }
 }

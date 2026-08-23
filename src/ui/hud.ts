@@ -331,7 +331,9 @@ export class Hud {
 
   /** The "while you were away" sheet. Skipped entirely for a trivial absence. */
   showAway(report: AwayReport): void {
-    if (report.seconds < 60 || report.earned < 1) return;
+    // A building lost is worth a sheet on its own. The earnings floor exists to
+    // skip a report with nothing in it; a fire is something in it.
+    if (report.seconds < 60 || (report.earned < 1 && report.firesLost === 0)) return;
     const n = this.nodes;
     n.welcomeAway.textContent = fmtDuration(report.seconds);
 
@@ -341,6 +343,13 @@ export class Hud {
     if (report.industry > 0) rows.push(['Works built', fmtInt(report.industry)]);
     if (report.services > 0) rows.push(['Services opened', fmtInt(report.services)]);
     if (report.spent > 1) rows.push(['Reinvested', fmt(report.spent)]);
+    // Fires are reported even when none started, once any did: "0 lost" is the
+    // half of the story that tells the player the fire service is working.
+    if (report.firesStarted > 0) {
+      rows.push(['Fires', fmtInt(report.firesStarted)]);
+      rows.push(['Put out', fmtInt(report.firesExtinguished)]);
+    }
+    if (report.firesLost > 0) rows.push(['Lost to fire', fmtInt(report.firesLost)]);
     if (report.forfeited > 60) rows.push(['Uncollected', fmtDuration(report.forfeited)]);
 
     n.welcomeRows.replaceChildren(

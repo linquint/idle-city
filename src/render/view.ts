@@ -4,6 +4,7 @@ import { Buildings } from './buildings';
 import { CameraRig } from './cameraRig';
 import { Cars } from './cars';
 import { createSkyReading, dayPhase, DUSK_PHASE, sampleSky } from './daylight';
+import { Fires } from './fires';
 import { Ground } from './ground';
 import { World } from './world';
 import { Courtyards, Zones, type ZoneMode } from './zones';
@@ -26,6 +27,7 @@ export class View {
   private readonly zones: Zones;
   private readonly courtyards: Courtyards;
   private readonly cars: Cars;
+  private readonly fires: Fires;
   private elapsed = 0;
   private shownDistricts = 0;
   /**
@@ -46,6 +48,7 @@ export class View {
     this.zones = new Zones(this.world.scene, layout);
     this.courtyards = new Courtyards(this.world.scene, layout);
     this.cars = new Cars(this.world.scene, layout, !reducedMotion);
+    this.fires = new Fires(this.world.scene, layout, !reducedMotion);
 
     this.rig = new CameraRig(this.world.camera, canvas, !reducedMotion);
     // A sun crossing the sky is motion, and a slow full-screen colour ramp is
@@ -105,6 +108,7 @@ export class View {
     this.zones.sync(state);
     this.courtyards.sync(state);
     this.cars.sync(state);
+    this.fires.sync(state);
   }
 
   /** Advances animations and draws one frame. */
@@ -121,6 +125,7 @@ export class View {
     // After `focusShadows`, so traffic is culled against the focus the rest of
     // the frame was drawn from rather than against last frame's.
     this.cars.update(dt, this.rig.target, this.sky.night);
+    this.fires.update(dt, this.elapsed, this.sky.night);
 
     this.world.render();
   }

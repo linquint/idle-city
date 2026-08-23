@@ -1,6 +1,24 @@
 import { START_CASH } from './config.ts';
 
-export const SAVE_VERSION = 3;
+/** What kind of building is burning. Civic sites do not catch fire — see `Game`. */
+export type FireKind = 'home' | 'shop' | 'industry';
+
+/**
+ * One building on fire.
+ *
+ * `index` is the building's *ordinal* — the i-th home ever built — never a
+ * coordinate. Where that plot is on the map is a pure function of the ordinal
+ * and the seed, exactly as it is for the building standing on it, so a fire
+ * survives a reload without the save ever learning what a position is.
+ */
+export interface Fire {
+  readonly kind: FireKind;
+  readonly index: number;
+  /** Value of `elapsed` when it started. Age is the only clock a fire needs. */
+  readonly startedAt: number;
+}
+
+export const SAVE_VERSION = 4;
 
 /**
  * The entire game, in a handful of fields.
@@ -50,6 +68,34 @@ export interface GameState {
   demandR: number;
   demandC: number;
   demandI: number;
+  /**
+   * Buildings currently burning, capped at MAX_ACTIVE_FIRES.
+   *
+   * Simulation state, not decoration: a burning building earns nothing, drags
+   * happiness while it burns, and may be gone when it stops. The renderer draws
+   * flames and sends a truck by reading this list; it contributes nothing to it.
+   */
+  fires: Fire[];
+  /**
+   * How many random draws the fire process has taken.
+   *
+   * The whole reason fires are reproducible. Every draw is `hash(cursor)` and
+   * every draw advances the cursor, so a save reopened is a save that carries
+   * on the same sequence — a fire that had no stored cursor would rearrange
+   * itself on every reload, and offline catch-up would invent a different city
+   * from the one watching would have produced.
+   */
+  fireCursor: number;
+  /**
+   * Ignition pressure accumulated toward the next draw, in expected fires.
+   *
+   * The integrator that makes the Poisson process step-size invariant. A
+   * Bernoulli trial per tick is not: 60 trials at 1s and one trial at 60s are
+   * different distributions, so a catch-up would systematically disagree with
+   * watching. Accumulating `rate x dt` and spending it against exponential
+   * thresholds gives the same answer at any step size the loop is run at.
+   */
+  fireHazard: number;
   /** Index into TIERS. */
   tier: number;
   /** Districts annexed. Always at least 1. */
@@ -82,6 +128,9 @@ export function createState(now = Date.now()): GameState {
     demandR: 0,
     demandC: 0,
     demandI: 0,
+    fires: [],
+    fireCursor: 0,
+    fireHazard: 0,
     tier: 0,
     districts: 1,
     earned: 0,

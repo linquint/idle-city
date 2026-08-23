@@ -432,3 +432,92 @@ export const HAPPINESS_FLOOR = 0.55;
  * time — shops and industry are both still buildable through it.
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
+
+// ---------------------------------------------------------------------- fire
+
+/**
+ * Chance a single building catches fire, per building per hour, before any
+ * suppression.
+ *
+ * Set against what a player actually sees rather than against anything real. A
+ * young district of 20 buildings gets one fire an hour — often enough that the
+ * fire station stops being an abstract coverage number, rare enough that it is
+ * an event rather than a chore. A built-out 49-district city of 2,842 buildings
+ * would reach 142 an hour uncovered, which is what MAX_ACTIVE_FIRES is for.
+ */
+export const BASE_IGNITION_PER_BUILDING_HOUR = 0.05;
+
+/**
+ * How much of the ignition rate full fire coverage takes away.
+ *
+ * Not 1. A city that had bought its way out of fires entirely would never see
+ * one again, and the fire station would go back to being a number — 6% of the
+ * base rate leaves a well-covered city the occasional fire, which at full
+ * coverage is put out in EXTINGUISH_MIN and never costs a building.
+ */
+export const FIRE_SUPPRESSION = 0.94;
+
+/**
+ * Fires burning at once, at most.
+ *
+ * Six is a cap on the *simulation*, not just on the renderer: it is what stops
+ * a twelve-hour absence from a large uncovered city returning a hundred
+ * simultaneous fires, and it bounds every loop that walks the list.
+ */
+export const MAX_ACTIVE_FIRES = 6;
+
+/**
+ * Seconds to put a fire out, at zero coverage and at full coverage.
+ *
+ * The response time is the whole of what fire coverage buys. Everything else —
+ * whether the building survives, how long it earns nothing, how long happiness
+ * carries the hit — falls out of this one number.
+ */
+export const EXTINGUISH_MAX = 90;
+export const EXTINGUISH_MIN = 20;
+
+/**
+ * How long a building survives burning.
+ *
+ * Sits between the two extinguish times on purpose, which is what turns
+ * coverage into a threshold the player can feel: response time is
+ * EXTINGUISH_MAX + (EXTINGUISH_MIN - EXTINGUISH_MAX) x coverage, so it drops
+ * under 75 seconds at 21.4% fire coverage. Below that every fire costs a
+ * building; above it, none do.
+ */
+export const BURN_OUT_SECONDS = 75;
+
+/**
+ * Happiness lost per fire currently burning.
+ *
+ * Six at once is 0.30 off the top, which a fully covered city (1.00) and even a
+ * park-less one (0.82, see SERVICES) both absorb without falling through
+ * HAPPINESS_MIN_BUILD. A fire should cost a city its momentum, not brick its
+ * housing — being unable to rebuild *because* things burned down is the exact
+ * spiral an idle game must not have.
+ */
+export const FIRE_UNHAPPINESS = 0.05;
+
+/**
+ * Buildings a single `catchUp` call may destroy, however long the absence.
+ *
+ * The hard guard. Measured on one uncovered district left for the full
+ * twelve-hour cap: 31 fires start and every one of them resolves past
+ * BURN_OUT_SECONDS, so without this the player comes back to a city 31
+ * buildings smaller — more than half of the 58 it owns — having watched none
+ * of it. One is a message; thirty-one is a bug report. The fires that would
+ * have been losses are put out instead, and `AwayReport` carries the count
+ * either way.
+ */
+export const CATCHUP_MAX_LOSSES = 1;
+
+/**
+ * Ceiling on accumulated ignition pressure, in expected fires.
+ *
+ * A backstop, not a tuning knob. Ignition integrates a hazard and spends it in
+ * a loop, so a doctored save carrying an absurd hazard is the one input that
+ * could spin. 64 is far above anything the rate can reach in a single 60-second
+ * catch-up step — the largest city manages about 2.4 — so it never binds in
+ * play.
+ */
+export const IGNITION_HAZARD_CAP = 64;

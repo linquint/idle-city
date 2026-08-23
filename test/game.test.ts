@@ -94,12 +94,21 @@ describe('the tick', () => {
 });
 
 describe('offline progress', () => {
+  /**
+   * The rate is only constant across the hour if nothing burns, and fires mean
+   * nothing is guaranteed not to. What is still exact is the direction: a fire
+   * takes a building off the ledger for as long as it is alight and never puts
+   * anything back, so an hour away credits an hour of income *less* whatever
+   * was on fire, and the two agree to the cent when the hour was quiet.
+   */
   it('credits time away', () => {
     const game = at({ homes: 40, shops: 2, happiness: 0 });
     const rate = income(game.state);
     const report = game.catchUp(3600);
     expect(report.seconds).toBe(3600);
-    expect(report.earned).toBeCloseTo(rate * 3600, 2);
+    expect(report.earned).toBeLessThanOrEqual(rate * 3600 + 1e-6);
+    if (report.firesStarted === 0) expect(report.earned).toBeCloseTo(rate * 3600, 2);
+    else expect(report.earned).toBeGreaterThan(rate * 3600 * 0.9);
   });
 
   it('caps a long absence and says how much was forfeited', () => {
@@ -109,11 +118,20 @@ describe('offline progress', () => {
     expect(report.forfeited).toBeCloseTo(OFFLINE_CAP_SECONDS * 2, 6);
   });
 
+  /**
+   * Auto-development is still the only thing that *builds* while you are away.
+   * Fire is now the only thing that unbuilds, so the counts are allowed to move
+   * — down, by exactly the number of buildings the away report says were lost,
+   * and by nothing else.
+   */
   it('leaves the city alone unless auto-development is on', () => {
     const game = at({ homes: 40, shops: 2, cash: 1e6 });
     const report = game.catchUp(3600);
-    expect(report.homes).toBe(0);
-    expect(report.shops).toBe(0);
+    expect(report.homes).toBeLessThanOrEqual(0);
+    expect(report.shops).toBeLessThanOrEqual(0);
+    expect(report.industry).toBeLessThanOrEqual(0);
+    expect(report.homes + report.shops + report.industry).toBe(-report.firesLost);
+    expect(report.services).toBe(0);
   });
 
   it('builds while you are away once auto-development is on', () => {
