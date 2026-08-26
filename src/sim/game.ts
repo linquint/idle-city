@@ -14,6 +14,7 @@ import {
   SERVICES,
   TAX_STEPS,
   TICK_RATE,
+  type Landmark,
   type Service,
 } from './config.ts';
 import {
@@ -51,6 +52,8 @@ import {
   occupancyStep,
   occupancyTarget,
   parkCost,
+  canBuildLandmark,
+  landmarkCost,
   promoteRate,
   recoverRate,
   abandonRate,
@@ -795,6 +798,21 @@ export class Game {
     if (!canBuildPark(s)) return false;
     s.cash -= parkCost(s);
     s.parks++;
+    return true;
+  }
+
+  /**
+   * A landmark takes one of the squares reserved for its size and pays nothing
+   * back directly. What it buys is the mood of the housing around it — see
+   * `landmarkCoverage`, which resolves "around it" against the layout rather
+   * than storing anything per building.
+   */
+  buildLandmark(landmark: Landmark): boolean {
+    const s = this.inner;
+    if (!canBuildLandmark(s, landmark)) return false;
+    s.cash -= landmarkCost(s, landmark);
+    if (landmark.key === 'museum') s.museums++;
+    else s.stadiums++;
     return true;
   }
 

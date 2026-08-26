@@ -1,6 +1,14 @@
 import { mixSeed } from '../core/rng.ts';
 import { generateDistrict, ZONE, type DistrictLayout, type Zone } from './citygen.ts';
-import { CELL, DISTRICT_SPAN, FRONTAGE_TARGET, SEED, TARGET_PLOTS } from './config.ts';
+import {
+  CELL,
+  DISTRICT_SPAN,
+  FRONTAGE_TARGET,
+  LANDMARKS,
+  SEED,
+  TARGET_PLOTS,
+  type Landmark,
+} from './config.ts';
 
 /**
  * How many types share the 2x2 civic sites: hospital, police, fire, school and
@@ -691,6 +699,149 @@ const cityBooks = new ParcelBooks();
 /** The parcel book for one zone, materialised out to `districts`. */
 export function parcelBook(zone: Zone, districts: number): ParcelBook {
   return cityBooks.of(zone, districts);
+}
+
+/**
+ * How much of the city's housing land the landmarks reach.
+ *
+ * The area-of-effect, precomputed. A landmark covers the housing plots inside
+ * its `reach`, and the share of the city's developed housing plots under at
+ * least one landmark is the scalar happiness reads — see LANDMARKS for why it
+ * is a share of land rather than a modifier on buildings.
+ *
+ * The trick that makes it cheap is the pair of arrays below. For each
+ * residential plot the city owns, `nearestMuseum[i]` is the *lowest site
+ * ordinal* whose museum would reach it, and `nearestStadium[i]` likewise — so
+ * plot i is covered exactly when `nearestMuseum[i] < museums built` or
+ * `nearestStadium[i] < stadiums built`. Landmarks are laid out in site order the
+ * same way homes and civic buildings are, so "the first n sites" is what "n
+ * landmarks" means, and the whole query becomes one walk over a Uint32Array
+ * with no geometry in it at all.
+ *
+ * That walk is still O(plots), so the answer is memoised against the counts it
+ * depends on: `happinessTarget` runs ten times a second and must not re-walk a
+ * thousand plots to do it. Measured on the largest city the map allows — 49
+ * districts, 1,176 housing plots, 98 landmark sites:
+ *
+ *   warm read       0.21 us, so 0.002 ms a second of simulation at TICK_RATE
+ *   cache miss      2.7 us, which is what one purchase costs
+ *   table rebuild   4.4 ms for all 49 districts at once, and 1.1 ms in total
+ *                   when the city is annexed one district at a time
+ *
+ * The district plans the tables are built over cost about 290 ms for 49, and
+ * that is not this class's bill: `districtPlanAt` memoises module-wide and the
+ * renderer's `CityLayout` materialises the same plans on the same frame.
+ *
+ * Module-level for the same reason `cityBooks` is — `economy.ts` has no
+ * `CityLayout` of its own — and district order is fixed, so two of these at the
+ * same district count are equal.
+ */
+class LandmarkReach {
+  private materialised = 0;
+  /** Residential plots, in the same order `CityLayout.homeCell` hands them out. */
+  private readonly plots: Coord[] = [];
+  /** Lower-left plot of each landmark site, in site order. */
+  private readonly museums: Coord[] = [];
+  private readonly stadiums: Coord[] = [];
+  private nearestMuseum: Uint32Array<ArrayBufferLike> = new Uint32Array(0);
+  private nearestStadium: Uint32Array<ArrayBufferLike> = new Uint32Array(0);
+  private stamp = '';
+  private cached = 0;
+
+  /**
+   * Materialises out to `districts`, rebuilding the nearest-site tables.
+   *
+   * Rebuilt whole rather than extended, because annexing a district puts new
+   * housing inside the reach of landmarks that were already standing — the
+   * tables are not append-only even though the lists they index are.
+   */
+  private ensure(districts: number): void {
+    if (districts <= this.materialised) return;
+    for (let i = this.materialised; i < districts; i++) {
+      const { residential, landmarksSmall, landmarksLarge } = placeDistrict(i);
+      this.plots.push(...residential);
+      this.museums.push(...landmarksSmall);
+      this.stadiums.push(...landmarksLarge);
+    }
+    this.materialised = districts;
+    this.nearestMuseum = LandmarkReach.nearest(this.plots, this.museums, 2, reachOf('museum'));
+    this.nearestStadium = LandmarkReach.nearest(this.plots, this.stadiums, 3, reachOf('stadium'));
+    this.stamp = '';
+  }
+
+  /**
+   * For each plot, the lowest site ordinal that reaches it, or `NONE`.
+   *
+   * A site is `span` plots on a side and is indexed by its lower-left plot, so
+   * its centre sits half a span along each axis from there. Distances are
+   * compared squared: a square root per plot per site is the only expensive
+   * thing in here and it changes no answer.
+   */
+  private static nearest(
+    plots: readonly Coord[],
+    sites: readonly Coord[],
+    span: number,
+    reach: number,
+  ): Uint32Array<ArrayBufferLike> {
+    const out = new Uint32Array(plots.length);
+    out.fill(NO_LANDMARK);
+    const limit = reach * reach;
+    const offset = ((span - 1) / 2) * CELL;
+    for (let k = sites.length - 1; k >= 0; k--) {
+      const site = sites[k] as Coord;
+      const sx = worldX(site.x) + offset;
+      const sz = worldZ(site.z) + offset;
+      for (let i = 0; i < plots.length; i++) {
+        const plot = plots[i] as Coord;
+        const dx = worldX(plot.x) - sx;
+        const dz = worldZ(plot.z) - sz;
+        // Walking sites from the back means the lowest ordinal wins by
+        // overwriting, with no comparison per plot.
+        if (dx * dx + dz * dz <= limit) out[i] = k;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Housing plots inside reach of the first `museums` and `stadiums` landmarks,
+   * out of the first `plots` the city has developed.
+   */
+  covered(museums: number, stadiums: number, plots: number, districts: number): number {
+    this.ensure(districts);
+    const capped = Math.max(0, Math.min(plots, this.plots.length));
+    const stamp = `${districts}:${museums}:${stadiums}:${capped}`;
+    if (stamp === this.stamp) return this.cached;
+    let n = 0;
+    for (let i = 0; i < capped; i++) {
+      if ((this.nearestMuseum[i] ?? NO_LANDMARK) < museums) n++;
+      else if ((this.nearestStadium[i] ?? NO_LANDMARK) < stadiums) n++;
+    }
+    this.stamp = stamp;
+    this.cached = n;
+    return n;
+  }
+}
+
+/** No landmark site reaches this plot. Larger than any site count can be. */
+const NO_LANDMARK = 0xffffffff;
+
+const reachOf = (key: Landmark['key']): number =>
+  LANDMARKS.find((landmark) => landmark.key === key)?.reach ?? 0;
+
+const cityReach = new LandmarkReach();
+
+/**
+ * Housing plots under at least one landmark. A pure function of four counts and
+ * the seed, which is what `landmarkCoverage` needs it to be.
+ */
+export function landmarkPlotsCovered(
+  museums: number,
+  stadiums: number,
+  plots: number,
+  districts: number,
+): number {
+  return cityReach.covered(museums, stadiums, plots, districts);
 }
 
 interface DistrictPlots {

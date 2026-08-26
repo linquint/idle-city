@@ -1083,6 +1083,97 @@ export const HAPPINESS_FLOOR = 0.55;
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
 
+// -------------------------------------------------------------- landmarks
+
+export interface Landmark {
+  /** Matches the GameState counter and the coverage key. */
+  readonly key: 'museum' | 'stadium';
+  readonly name: string;
+  readonly buildLabel: string;
+  readonly base: number;
+  readonly growth: number;
+  /** Plots per side of the site it stands on. One of each per district. */
+  readonly span: 2 | 3;
+  /**
+   * How far its influence reaches from its own centre, in world units.
+   *
+   * The one number that decides what a landmark is worth, and it is measured
+   * rather than chosen — see LANDMARK_MOOD for the curve it was read off.
+   */
+  readonly reach: number;
+}
+
+/**
+ * The city's special buildings: one to a district of each size, on the squares
+ * FRONTAGE_TARGET holds back for them.
+ *
+ * Landmarks are the game's first area-of-effect, and the shape of that effect is
+ * the whole design. Per-building happiness does not exist here and must not be
+ * introduced: levels are cohorts, so a per-instance modifier would mean
+ * per-instance state, a save that grows with the city, and the end of "positions
+ * derive from counts". What a landmark does instead is cover *land* — the
+ * housing plots inside `reach` of it — and the share of the city's housing
+ * under at least one landmark is a single scalar. See `landmarkCoverage`.
+ *
+ * Two sizes so the choice is a real one. A museum is cheap, fits the 2x2 square
+ * every district already claims, and covers its own neighbourhood; a stadium
+ * costs three times as much, needs the 3x3, and reaches half again as far.
+ * Neither earns anything: what they buy is mood, which is the one thing a city
+ * short of civic land cannot buy any other way.
+ *
+ * The two reaches were swept together rather than picked, against the share of
+ * housing land each covers with one landmark on every site it has:
+ *
+ *   districts        1      4     10     25     49
+ *   museums only   46%    33%    49%    49%    47%
+ *   stadiums only  63%    83%    80%    85%    86%
+ *   both           63%    92%    88%    91%    92%
+ *
+ * so a museum is worth about half a district and a stadium most of one, and
+ * neither type alone gets the city past the mid-eighties — the last stretch
+ * needs both, which is what keeps the cheap one worth buying after the dear one
+ * exists. Against 3x the price the stadium is 1.8x the coverage, so museums are
+ * the better value and stadiums are what finishes the job.
+ *
+ * The one-district city is the exception and is left as it is: a stadium's 38
+ * contains a museum's 24 at that size, so the museum adds nothing until the
+ * city is two districts wide. Reaches large enough to avoid that would cover
+ * the whole map from one site.
+ *
+ * Coverage is smooth in the count rather than stepped — at ten districts, one
+ * stadium covers 15%, three 36%, five 54% and ten 80% — so every purchase moves
+ * the number and none of them is a cliff.
+ */
+export const LANDMARKS: readonly Landmark[] = [
+  { key: 'museum',  name: 'Museums',  buildLabel: 'Open museum',   base: 4_000,  growth: 1.6, span: 2, reach: 24 },
+  { key: 'stadium', name: 'Stadiums', buildLabel: 'Build stadium', base: 12_000, growth: 1.7, span: 3, reach: 38 },
+];
+
+/**
+ * What a fully landmarked city adds to its happiness.
+ *
+ * A *modifier* on earned coverage, exactly as the tax mood and
+ * FREE_TRANSPORT_MOOD are, and not a fifth weight. The four happiness weights
+ * were calibrated to sum to exactly 1 and go on doing so — adding a fifth would
+ * re-open that calibration to buy something a modifier states more honestly.
+ * What a landmark changes is how the city feels about the coverage it has, not
+ * how much that coverage is worth.
+ *
+ * 0.12 against the numbers it sits beside: free transport is worth 0.05, the
+ * punitive tax rate costs 0.14, and a fire costs 0.05 while it burns. So a
+ * fully landmarked city can run one tax step harder than it otherwise could, or
+ * absorb two fires, and a neglected one is lifted clear of HAPPINESS_MIN_BUILD
+ * (0.35) without a single service. It is deliberately worth less than the
+ * cheapest service weight (recreation, 0.18): a landmark should not be a way to
+ * skip the hospital.
+ *
+ * Since coverage tops out at 1 and this is added on top, a city that has already
+ * earned 1.00 gains nothing — which is the right shape. Landmarks buy happiness
+ * *early*, standing in for services not yet built, and stop mattering once the
+ * city is properly served.
+ */
+export const LANDMARK_MOOD = 0.12;
+
 // ------------------------------------------------------------------ parks
 
 /**

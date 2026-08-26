@@ -1,6 +1,9 @@
 import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
   ANNEX_MIN_OCCUPANCY,
+  CELL,
+  LANDMARKS,
+  LANDMARK_MOOD,
   HAPPINESS_MIN_BUILD,
   PLOTS_PER_PARK,
   LEVEL_EDUCATION,
@@ -37,8 +40,12 @@ import {
   labourReach,
   homeCapacity,
   homeCost,
+  canBuildLandmark,
   income,
   industryCapacity,
+  landmarkBlocker,
+  landmarkCoverage,
+  landmarkReadings,
   industryCost,
   parkBlocker,
   parkCapacity,
@@ -94,7 +101,7 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 };
 
 /** The tabs the docked control is split into, in the order they are shown. */
-const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes'] as const;
+const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /** Plots one district sells of each zone. Turns a plot index into a district. */
@@ -213,7 +220,22 @@ export class Hud {
     transit: el('transit'),
     transitFares: el('transit-fares'),
     transitLabour: el('transit-labour'),
+    landmarkShare: el('landmark-share'),
+    landmarkMood: el('landmark-mood'),
   };
+
+  /**
+   * One row of controls and readouts per landmark type, keyed the same way the
+   * service rows are. Two types, two sizes, one shape.
+   */
+  private readonly landmarkNodes = LANDMARKS.map((landmark) => ({
+    landmark,
+    button: el<HTMLButtonElement>(`build-${landmark.key}`),
+    cost: el(`build-${landmark.key}-cost`),
+    allowance: el(`build-${landmark.key}-built`),
+    built: el(`svc-${landmark.key}-built`),
+    covers: el(`svc-${landmark.key}-covers`),
+  }));
 
   /**
    * The four tabs, and which panel each shows.
@@ -292,6 +314,11 @@ export class Hud {
     n.shop.addEventListener('click', () => this.act(() => this.game.buildShop()));
     n.industry.addEventListener('click', () => this.act(() => this.game.buildIndustry()));
     n.park.addEventListener('click', () => this.act(() => this.game.buildPark()));
+    for (const row of this.landmarkNodes) {
+      row.button.addEventListener('click', () =>
+        this.act(() => this.game.buildLandmark(row.landmark)),
+      );
+    }
     n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
 
     for (const { service, button } of this.serviceNodes) {
@@ -458,7 +485,8 @@ export class Hud {
     if (this.open === 'build') this.paintBuild(s);
     else if (this.open === 'treasury') this.paintTreasury(s);
     else if (this.open === 'demand') this.paintDemand(s);
-    else this.paintTaxes(s);
+    else if (this.open === 'taxes') this.paintTaxes(s);
+    else this.paintLandmarks(s);
 
     this.paintCard(s);
   }
@@ -611,6 +639,39 @@ export class Hud {
     n.freeEffect.textContent = `reach +${Math.round(FREE_TRANSPORT_REACH * 100)}%, mood +${Math.round(
       FREE_TRANSPORT_MOOD * 100,
     )}`;
+  }
+
+  /**
+   * The landmarks panel: what each type costs, and what the pair of them is
+   * currently worth.
+   *
+   * The covered share is the whole story here, so it gets a row of its own
+   * rather than being implied by two counts. A player who has bought six
+   * museums needs to know they are covering 30% of the city, not that they own
+   * six of something.
+   */
+  private paintLandmarks(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    for (const { landmark, built, allowed, cost } of landmarkReadings(s)) {
+      const row = this.landmarkNodes.find((entry) => entry.landmark.key === landmark.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(cost);
+      row.button.disabled = !canBuildLandmark(s, landmark);
+      row.button.title = landmarkBlocker(s, landmark) ?? landmark.buildLabel;
+      row.built.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      // Reach in *plots* rather than world units, because a plot is the unit
+      // the player buys in and a world unit is not a thing they can see.
+      row.covers.textContent = `${landmark.span}x${landmark.span} site, reaches ${Math.round(
+        landmark.reach / CELL,
+      )} plots`;
+    }
+    const share = landmarkCoverage(s);
+    n.landmarkShare.textContent = pct(share);
+    n.landmarkMood.textContent =
+      share <= 0
+        ? 'no effect on mood'
+        : `+${(LANDMARK_MOOD * share * 100).toFixed(1)} points of mood`;
   }
 
   private paintBuild(s: Readonly<GameState>): void {

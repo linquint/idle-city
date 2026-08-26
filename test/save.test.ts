@@ -16,6 +16,8 @@ import {
   happinessTarget,
   homeCapacity,
   industryCapacity,
+  landmarkCoverage,
+  landmarkSiteCapacity,
   parkCapacity,
   serviceAllowed,
   serviceCount,
@@ -721,6 +723,52 @@ describe('the v7 migration', () => {
     expect(state.homes).toBe(12);
     expect(state.homeLevels).toEqual(cohort(12, 3));
     expect(state.version).toBe(SAVE_VERSION);
+  });
+});
+
+describe('landmarks across a save', () => {
+  it('defaults to none for every save written before they existed', () => {
+    const back = migrate({ cash: 10, homes: 4, districts: 2 }, 1_000)!;
+    expect(back.museums).toBe(0);
+    expect(back.stadiums).toBe(0);
+    // And a city with none of them gets no mood for them, which is the only
+    // reading that does not hand a returning player something they never built.
+    expect(landmarkCoverage(back)).toBe(0);
+  });
+
+  it('carries what was built, and clamps it to the sites the city owns', () => {
+    const kept = migrate({ homes: 9, districts: 5, museums: 3, stadiums: 2 }, 0)!;
+    expect(kept.museums).toBe(3);
+    expect(kept.stadiums).toBe(2);
+
+    // One of each size a district, so a doctored save gets the land's answer.
+    const stuffed = migrate({ homes: 9, districts: 2, museums: 900, stadiums: 900 }, 0)!;
+    expect(stuffed.museums).toBe(landmarkSiteCapacity(stuffed, 'museum'));
+    expect(stuffed.stadiums).toBe(landmarkSiteCapacity(stuffed, 'stadium'));
+    expect(stuffed.museums).toBe(2);
+  });
+
+  it('survives a round trip with the rest of the city', () => {
+    const before = { ...createState(0), districts: 4, museums: 3, stadiums: 1 };
+    save(before, 5_000);
+    const back = load(5_000)!;
+    expect(back.museums).toBe(3);
+    expect(back.stadiums).toBe(1);
+  });
+
+  /**
+   * The property landmarks were designed around: the save carries two counts
+   * and nothing per building. A field per landmark instance would be a save
+   * that grows with the city and the end of "positions derive from counts".
+   */
+  it('stores two counts and nothing per building', () => {
+    const s = { ...createState(0), districts: 9, museums: 9, stadiums: 9 };
+    save(s, 0);
+    const raw = JSON.parse(localStorage.getItem(SAVE_KEY) as string) as Record<string, unknown>;
+    const landmarkKeys = Object.keys(raw).filter((k) => /museum|stadium|landmark/i.test(k));
+    expect(landmarkKeys.sort()).toEqual(['museums', 'stadiums']);
+    expect(typeof raw['museums']).toBe('number');
+    expect(typeof raw['stadiums']).toBe('number');
   });
 });
 

@@ -163,6 +163,19 @@ export interface GameState {
    */
   depots: number;
   /**
+   * Landmarks, on the squares FRONTAGE_TARGET reserves for them: one 2x2 and
+   * one 3x3 a district.
+   *
+   * Two counts and nothing else, which is the whole of the area-of-effect. A
+   * landmark lifts the mood of the housing around it, and "around it" is
+   * resolved against the *layout* rather than stored — the i-th museum stands on
+   * the i-th museum site, so which plots it reaches is a pure function of the
+   * count and the seed. Anything per-building here would mean per-instance
+   * state and a save that grows with the city. See `landmarkCoverage`.
+   */
+  museums: number;
+  stadiums: number;
+  /**
    * Share of each type's buildings that are actually staffed, in [0, 1].
    *
    * In the save because it is integrated, not derived: a hospital opened ten
@@ -275,6 +288,8 @@ export function createState(now = Date.now()): GameState {
     driftC: 0,
     driftI: 0,
     parks: 0,
+    museums: 0,
+    stadiums: 0,
     hospitals: 0,
     police: 0,
     fire: 0,

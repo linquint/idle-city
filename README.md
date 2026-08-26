@@ -84,6 +84,16 @@ inside a world you can actually draw. Commerce and industry climb the same
 rungs. Expansion is the second axis: annexing a district adds land, plots, and a
 permanent civic bonus.
 
+**Landmarks are an area of effect without per-building state.** A museum (2x2)
+or a stadium (3x3) covers the housing plots inside its reach, and the share of
+the city's housing land under at least one landmark is a single scalar that
+happiness adds as a modifier — the same way the tax rate and free transport do,
+so the four happiness weights still sum to exactly 1. The obvious
+implementation, a modifier per building, would mean per-instance state and a
+save that grows with the city; the covered share is a pure function of four
+counts and the seed. It is memoised against those counts, because
+`happinessTarget` runs ten times a second.
+
 **Style is a hash, not a field.** Each zone has three styles at every level — 45
 looks in all — and a style is a parameter set rather than a mesh: proportions, a
 colour band, how many lit window bands, and which of the shared unit-geometry

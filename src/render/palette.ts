@@ -49,6 +49,12 @@ export const PALETTE = {
   schoolRoof: 0x8d7f63,
   university: 0xd6c9a8,
   universityRoof: 0x9a7f4e,
+  // Landmarks. Pale stone against every civic blue and teal on the map, because
+  // a landmark's job is to be picked out from across the city — and a lit band
+  // at its base, so it still reads after dark when its neighbours have gone
+  // dark. The two sizes share a palette and differ in silhouette.
+  landmark: 0xe4dccb,
+  landmarkRoof: 0x9c6f4f,
   // Transport. The depot is a shed and an apron rather than a civic slab, and
   // the buses that leave it wear the same colour so the two read as one system.
   depot: 0x3d5a52,

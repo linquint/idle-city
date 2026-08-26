@@ -3,9 +3,11 @@ import { hash01, mixSeed } from '../core/rng';
 import {
   CELL,
   CIVIC_SERVICES,
+  LANDMARKS,
   LEVELS,
   SEED,
   SERVICES,
+  type Landmark,
   type Service,
 } from '../sim/config';
 import { ZONE, type Zone } from '../sim/citygen';
@@ -993,6 +995,58 @@ function writeParts(
 }
 
 /**
+ * A landmark's mesh set: a pale stone block with a lit band at its base and a
+ * mark on the roof that says which size it is.
+ *
+ * Reuses `CivicMeshes` rather than getting a class of its own, because a
+ * landmark is exactly what that class already draws — a building that straddles
+ * a reserved square, indexed by the square's lower-left plot. What it does not
+ * reuse is the palette: landmarks are the one thing on the map meant to be
+ * picked out from across the city, so they are pale stone where everything
+ * civic is blue, teal or warm grey.
+ *
+ * A museum is squat and wide with a shallow lantern; a stadium is a low drum
+ * with a tall rim, so the two are told apart by outline at the zoom the player
+ * actually plays at rather than by reading a colour.
+ */
+function landmarkSet(scene: THREE.Scene, landmark: Landmark, capacity: number): CivicMeshes {
+  const width = landmark.span * CELL - 1;
+  const lit = new Glow(PALETTE.sodium, 0.44);
+  if (landmark.span === 2) {
+    return new CivicMeshes(
+      scene,
+      { body: PALETTE.landmark, roof: PALETTE.landmarkRoof, height: 3.2 },
+      // A lantern set back from the parapet: small, bright, and above the roof
+      // line, which is what reads as a museum rather than as another 2x2 slab.
+      new THREE.BoxGeometry(width - 2.6, 1.5, width - 2.6),
+      lit.material,
+      new THREE.Vector3(0, 0.9, 0),
+      capacity,
+      lit,
+      width,
+      CELL / 2,
+    );
+  }
+  // A floodlight mast off one corner of a low bowl. The obvious shape — a tall
+  // rim around the whole thing — was tried and is worse from the play camera:
+  // the rim has to be wider than the roof to read as a rim, which means from
+  // overhead it covers the building completely and a stadium is a brown square.
+  // A mast leaves the pale bowl showing and is legible from any angle.
+  const mast = 7.5;
+  return new CivicMeshes(
+    scene,
+    { body: PALETTE.landmark, roof: PALETTE.landmarkRoof, height: 2.0 },
+    new THREE.BoxGeometry(0.7, mast, 0.7),
+    lit.material,
+    new THREE.Vector3(width / 2 - 0.9, mast / 2, width / 2 - 0.9),
+    capacity,
+    lit,
+    width,
+    CELL,
+  );
+}
+
+/**
  * Top of whatever is standing on a plot, in world units.
  *
  * Exported so the fire layer can put a flame on a roof without a second copy of
@@ -1292,9 +1346,11 @@ class Outline {
  * same box. Asserted in test/skyline.test.ts, so a later change cannot quietly
  * double the draw calls.
  *
- * Civic buildings are counted separately and are not part of this: they stand on
- * 2x2 and 3x3 sites, have no level ladder, and are told apart by silhouette
- * rather than by style. See `civicSet`.
+ * Civic buildings and landmarks are counted separately and are not part of this:
+ * they stand on 2x2 and 3x3 sites, have no level ladder, and are told apart by
+ * silhouette rather than by style. Eight types at three meshes each — six
+ * services and two landmark sizes — and the count grows with the *table* rather
+ * than with the city. See `civicSet` and `landmarkSet`.
  */
 export const BUILDING_MESH_BUDGET = 24;
 
@@ -1313,11 +1369,20 @@ export class Buildings {
    * indexed by a fixed interleave, so unlike every earlier version of this the
    * types never move and never need rewriting as a block.
    */
+  /**
+   * Every building that stands on a reserved square: the six services, and the
+   * two landmark sizes.
+   *
+   * One list rather than two, because from here they are the same thing — a
+   * count, a site list to index into, and a mesh set. What tells them apart is
+   * upstream: a service has a coverage and a staffing ramp, a landmark has a
+   * reach. Neither of those reaches the renderer.
+   */
   private readonly civic: ReadonlyArray<{
-    readonly service: Service;
     readonly meshes: CivicMeshes;
     readonly growth: GrowthSchedule;
     readonly site: (i: number) => Coord;
+    readonly count: (state: Readonly<GameState>) => number;
     shown: number;
   }>;
   private readonly dummy = new THREE.Object3D();
@@ -1345,24 +1410,39 @@ export class Buildings {
     ];
     this.outline = new Outline(scene);
     for (const zone of this.zones) zone.register(this.ranges);
-    this.civic = SERVICES.map((service) => ({
-      service,
-      meshes: civicSet(scene, service, 8),
-      growth: new GrowthSchedule(duration),
-      // The five 2x2 types read one interleaved list by their position in it;
-      // the university has a list of its own and does not touch the interleave.
-      site:
-        service.span === 3
-          ? (i: number) => this.layout.universitySiteCell(i)
-          : ((offset) => (i: number) => this.layout.civicSiteFor(offset, i))(
-              CIVIC_SERVICES.findIndex((entry) => entry.key === service.key),
-            ),
-      shown: 0,
-    }));
+    this.civic = [
+      ...SERVICES.map((service) => ({
+        meshes: civicSet(scene, service, 8),
+        growth: new GrowthSchedule(duration),
+        // The five 2x2 types read one interleaved list by their position in it;
+        // the university has a list of its own and does not touch the interleave.
+        site:
+          service.span === 3
+            ? (i: number) => this.layout.universitySiteCell(i)
+            : ((offset) => (i: number) => this.layout.civicSiteFor(offset, i))(
+                CIVIC_SERVICES.findIndex((entry) => entry.key === service.key),
+              ),
+        count: (state: Readonly<GameState>) => Buildings.serviceCount(state, service),
+        shown: 0,
+      })),
+      // Landmarks stand on squares of their own, one of each size a district, so
+      // the i-th landmark is the i-th district's and needs no interleave.
+      ...LANDMARKS.map((landmark) => ({
+        meshes: landmarkSet(scene, landmark, 8),
+        growth: new GrowthSchedule(duration),
+        site:
+          landmark.span === 3
+            ? (i: number) => this.layout.landmarkLargeSiteCell(i)
+            : (i: number) => this.layout.landmarkSmallSiteCell(i),
+        count: (state: Readonly<GameState>) =>
+          landmark.key === 'museum' ? state.museums : state.stadiums,
+        shown: 0,
+      })),
+    ];
   }
 
   /** How many of a service the state has, without a lookup table per caller. */
-  private static count(state: Readonly<GameState>, service: Service): number {
+  private static serviceCount(state: Readonly<GameState>, service: Service): number {
     return service.key === 'hospital' ? state.hospitals
       : service.key === 'police' ? state.police
       : service.key === 'fire' ? state.fire
@@ -1411,7 +1491,7 @@ export class Buildings {
     }
 
     for (const set of this.civic) {
-      const count = Buildings.count(state, set.service);
+      const count = set.count(state);
       if (count > set.shown) {
         set.growth.stage(set.shown, count, now, 1.4, WAVE_BUDGET);
         this.writeCivic(set, set.shown, count, now);

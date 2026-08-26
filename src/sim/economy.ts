@@ -31,6 +31,8 @@ import {
   INDUSTRY_GROWTH,
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
+  LANDMARKS,
+  LANDMARK_MOOD,
   LEVEL_EDUCATION,
   LEVEL_FOOTPRINT,
   LEVEL_HOUSING,
@@ -68,6 +70,7 @@ import {
   TRANSIT_LABOUR_DRAW,
   TRANSIT_WORKFORCE,
   WORKING_SHARE,
+  type Landmark,
   type Service,
 } from './config.ts';
 import { ZONE, type Zone } from './citygen.ts';
@@ -77,6 +80,9 @@ import {
   BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
+  LANDMARK_LARGE_SITES_PER_DISTRICT,
+  LANDMARK_SMALL_SITES_PER_DISTRICT,
+  landmarkPlotsCovered,
   parcelBook,
   UNIVERSITY_SITES_PER_DISTRICT,
 } from './layout.ts';
@@ -462,10 +468,17 @@ export const plotCapacity = (s: GameState): number =>
  *
  * Parks deliberately do not, on either side of the ratio. Courtyard land was
  * never for sale, so counting it would silently re-scale a gate that was
- * measured against the 65 sellable plots of a district — a tier that reached
- * 72.3% build-out would drop to 68.1% and fall under ANNEX_MIN_OCCUPANCY the
- * moment parks existed, gating a player out of annexing for not buying an
- * amenity. Development is what the city sells; a park is what it keeps.
+ * measured against the sellable plots of a district — a tier that reached 72.3%
+ * build-out would drop to 68.1% and fall under ANNEX_MIN_OCCUPANCY the moment
+ * parks existed, gating a player out of annexing for not buying an amenity.
+ * Development is what the city sells; a park is what it keeps.
+ *
+ * Landmarks are out for the same reason and it is worth stating, because unlike
+ * a park a landmark is bought rather than kept and a reader will expect it here.
+ * Adding their two squares a district to `plotCapacity` would drop every
+ * existing city's build-out by about 2% and move the annexation gate under
+ * players who have never opened the tab. They are an amenity that happens to be
+ * expensive, not land the city is selling.
  */
 export const plotsUsed = (s: GameState): number =>
   plotsOf(s, 'home') + plotsOf(s, 'shop') + plotsOf(s, 'industry') + civicBuildings(s);
@@ -731,6 +744,55 @@ export const recreationCoverage = (s: GameState): number => {
   return Math.min(1, (s.parks * PLOTS_PER_PARK) / plots);
 };
 
+/** How many of a landmark type the city has, through one key. */
+export const landmarkCount = (s: GameState, key: Landmark['key']): number =>
+  key === 'museum' ? s.museums : s.stadiums;
+
+/** Landmark sites the city owns of one type. One of each per district. */
+export const landmarkSiteCapacity = (s: GameState, key: Landmark['key']): number =>
+  s.districts *
+  (key === 'museum' ? LANDMARK_SMALL_SITES_PER_DISTRICT : LANDMARK_LARGE_SITES_PER_DISTRICT);
+
+/**
+ * Share of the city's housing land within reach of a landmark, in [0, 1].
+ *
+ * The game's first area-of-effect, and it is a *scalar* rather than a per-
+ * building modifier. That is the whole design decision — see LANDMARKS. A
+ * landmark covers the housing plots inside its reach; this is the share of the
+ * developed housing plots under at least one of them; happiness gains that
+ * share times LANDMARK_MOOD.
+ *
+ * Zero rather than one for a city with no housing, which is the opposite of
+ * every service coverage and is right for the same reason they are one: a
+ * service coverage is the share it *fails* and it fails nothing when nothing is
+ * built, where this is a bonus and an empty city has not earned it.
+ *
+ * The geometry lives in `landmarkPlotsCovered`, which memoises against the
+ * counts it depends on — this is read from `happinessTarget` ten times a second
+ * and must not walk a thousand plots to answer.
+ */
+export const landmarkCoverage = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 0;
+  return Math.min(1, landmarkPlotsCovered(s.museums, s.stadiums, plots, s.districts) / plots);
+};
+
+export interface LandmarkReading {
+  readonly landmark: Landmark;
+  readonly built: number;
+  readonly allowed: number;
+  readonly cost: number;
+}
+
+/** The whole landmarks block, in one read, for the HUD. */
+export const landmarkReadings = (s: GameState): readonly LandmarkReading[] =>
+  LANDMARKS.map((landmark) => ({
+    landmark,
+    built: landmarkCount(s, landmark.key),
+    allowed: landmarkSiteCapacity(s, landmark.key),
+    cost: landmarkCost(s, landmark),
+  }));
+
 /**
  * One line of the happiness panel: something the city can be short of, what it
  * is called when it is the binding one, and what it is worth.
@@ -779,7 +841,15 @@ export const happinessTarget = (s: GameState): number => {
   // than as a fifth weight. The four weights sum to exactly 1 and go on doing
   // so; what a tax rate changes is how the city feels about the coverage it has,
   // which is a different statement from how much that coverage is worth.
-  const policy = taxStep(s).mood + (s.freeTransport ? FREE_TRANSPORT_MOOD : 0);
+  //
+  // Landmarks are the third modifier and are here for exactly that reason. They
+  // are an area-of-effect over housing land, not a service the city is covered
+  // by, and adding them to the weighted sum would have re-opened a calibration
+  // that has held for three cycles. See LANDMARK_MOOD.
+  const policy =
+    taxStep(s).mood +
+    (s.freeTransport ? FREE_TRANSPORT_MOOD : 0) +
+    LANDMARK_MOOD * landmarkCoverage(s);
   return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
 
@@ -1074,6 +1144,16 @@ export const industryCost = (s: GameState): number =>
  */
 export const parkCost = (s: GameState): number => PARK_BASE * PARK_GROWTH ** s.parks;
 
+/**
+ * What the next landmark of a type costs.
+ *
+ * Compounded over the type's own count, like every other civic curve, and
+ * deliberately *not* demand-modified: a landmark is not a zone and there is no
+ * signal that says the city wants another one.
+ */
+export const landmarkCost = (s: GameState, landmark: Landmark): number =>
+  landmark.base * landmark.growth ** landmarkCount(s, landmark.key);
+
 /** Services are not demand-priced: nobody haggles over a hospital. */
 export const serviceCost = (s: GameState, service: Service): number =>
   service.base * service.growth ** serviceCount(s, service.key);
@@ -1126,6 +1206,17 @@ export const canBuildIndustry = (s: GameState): boolean =>
 
 export const canBuildPark = (s: GameState): boolean =>
   s.parks < parkCapacity(s) && s.cash >= parkCost(s);
+
+/**
+ * Whether the city may open another landmark of a type.
+ *
+ * Land and money, and no "one ahead of need" clamp of the kind `serviceAllowed`
+ * carries: a landmark covers land rather than people, so there is no need for it
+ * to run ahead of. The site list is the only bound it has.
+ */
+export const canBuildLandmark = (s: GameState, landmark: Landmark): boolean =>
+  landmarkCount(s, landmark.key) < landmarkSiteCapacity(s, landmark.key) &&
+  s.cash >= landmarkCost(s, landmark);
 
 export const canBuildService = (s: GameState, service: Service): boolean =>
   serviceCount(s, service.key) < serviceAllowed(s, service) && s.cash >= serviceCost(s, service);
@@ -1234,6 +1325,19 @@ export function promotionBlocker(
 }
 
 /** Why the park button is off. Land is the only gate a park has. */
+/**
+ * Why the city cannot open another landmark of a type, phrased for the HUD.
+ *
+ * Land only, the same as `serviceBlocker`: the price is on the button and the
+ * button is disabled, so "you cannot afford it" is already said twice. What is
+ * worth saying is the thing the player cannot fix with money.
+ */
+export function landmarkBlocker(s: GameState, landmark: Landmark): string | null {
+  return landmarkCount(s, landmark.key) >= landmarkSiteCapacity(s, landmark.key)
+    ? 'No sites left'
+    : null;
+}
+
 export function parkBlocker(s: GameState): string | null {
   return s.parks >= parkCapacity(s) ? 'No courtyards left' : null;
 }

@@ -18,6 +18,7 @@ import {
   mergeCapacity,
   mergedCohort,
   parkCapacity,
+  landmarkSiteCapacity,
   serviceAllowed,
   shopCapacity,
 } from './economy';
@@ -294,6 +295,11 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // A v3 save has no parks, which is exactly the state a city that never
     // built one is in. Clamped to the land below, like every other count.
     parks: count(r['parks']),
+    // Landmarks default to none, which is what every save written before they
+    // existed honestly says. Clamped against their site lists below, exactly as
+    // parks and civic buildings are.
+    museums: count(r['museums']),
+    stadiums: count(r['stadiums']),
     // v2 called them clinics, schools and stations and stood them on single
     // residential plots. They are the same slot — the building the city buys to
     // raise happiness — so the counts carry across by weight rather than being
@@ -355,6 +361,10 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // `count + merged` and `fitZone` is what bounds it. Write-offs and cohorts go
   // through the same call, because all four numbers constrain each other.
   state.parks = Math.min(state.parks, parkCapacity(state));
+  // One site of each size a district, so a save carried over from a larger city
+  // sheds the landmarks whose squares no longer exist.
+  state.museums = Math.min(state.museums, landmarkSiteCapacity(state, 'museum'));
+  state.stadiums = Math.min(state.stadiums, landmarkSiteCapacity(state, 'stadium'));
 
   const fitted = [
     fitZone(state.homes, state.abandonedR, r['homeLevels'], tier, state.mergedR, homeCapacity(state), mergeCapacity(state, 'home')),
