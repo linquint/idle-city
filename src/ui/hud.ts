@@ -20,6 +20,7 @@ import {
   MAX_DISTRICTS,
   SERVICES,
   CARGO_EXPORT_LIFT,
+  HIGHWAY_MIN_DISTRICTS,
   TERMINALS,
 } from '../sim/config';
 import {
@@ -34,13 +35,24 @@ import {
   canBuildIndustry,
   canBuildPark,
   canBuildService,
+  canBuildEstate,
+  canBuildHighway,
   canBuildShop,
   canBuildTerminal,
   cruiseIncome,
   demandTargets,
   educationCoverage,
+  estateBlocker,
+  estateCapacity,
+  estateCost,
+  estateJobs,
+  estatePlots,
+  estateSupply,
   exportMarket,
   fareIncome,
+  highwayAllowed,
+  highwayBlocker,
+  highwayCost,
   homeBlocker,
   labourReach,
   homeCapacity,
@@ -76,6 +88,7 @@ import {
   visitors,
   willAutoAnnex,
 } from '../sim/economy';
+import { ESTATE_CELLS } from '../sim/estates';
 import type { BuildingRef } from '../render/buildings';
 import type { AwayReport, Game } from '../sim/game';
 import {
@@ -110,7 +123,7 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 };
 
 /** The tabs the docked control is split into, in the order they are shown. */
-const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'port'] as const;
+const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'port', 'estates'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /** Plots one district sells of each zone. Turns a plot index into a district. */
@@ -237,6 +250,18 @@ export class Hud {
     portSpend: el('port-spend'),
     portExports: el('port-exports'),
     portLift: el('port-lift'),
+    highway: el<HTMLButtonElement>('build-highway'),
+    highwayLabel: el('build-highway-label'),
+    highwayCost: el('build-highway-cost'),
+    estate: el<HTMLButtonElement>('build-estate'),
+    estateLabel: el('build-estate-label'),
+    estateCost: el('build-estate-cost'),
+    estateBuilt: el('estate-built'),
+    estateRoom: el('estate-room'),
+    estatePlots: el('estate-plots'),
+    estateJobs: el('estate-jobs'),
+    estateLedger: el('estate-ledger'),
+    estateSupply: el('estate-supply'),
   };
 
   /**
@@ -350,6 +375,8 @@ export class Hud {
         this.act(() => this.game.buildTerminal(row.terminal)),
       );
     }
+    n.highway.addEventListener('click', () => this.act(() => this.game.buildHighway()));
+    n.estate.addEventListener('click', () => this.act(() => this.game.buildEstate()));
     n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
 
     for (const { service, button } of this.serviceNodes) {
@@ -518,7 +545,8 @@ export class Hud {
     else if (this.open === 'demand') this.paintDemand(s);
     else if (this.open === 'taxes') this.paintTaxes(s);
     else if (this.open === 'landmarks') this.paintLandmarks(s);
-    else this.paintPort(s);
+    else if (this.open === 'port') this.paintPort(s);
+    else this.paintEstates(s);
 
     this.paintCard(s);
   }
@@ -744,6 +772,50 @@ export class Hud {
       s.cargoTerminals <= 0
         ? 'no cargo berths'
         : `+${Math.round(CARGO_EXPORT_LIFT * s.cargoTerminals * 100)}% on the tap`;
+  }
+
+  /**
+   * The estates panel: the road, the parcels, and what the band is worth.
+   *
+   * The ledger row is the one that has to be there. An estate pays back through
+   * the income multiplier rather than by earning on its own, so "what did that
+   * buy me" is a share of the whole ledger and cannot be read off a price.
+   */
+  private paintEstates(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    const allowed = estateCapacity(s);
+
+    n.highway.disabled = !canBuildHighway(s);
+    n.highwayLabel.textContent = s.highway ? 'Highway open' : 'Build the highway';
+    n.highwayCost.textContent = s.highway ? '' : fmt(highwayCost());
+    n.highway.title = highwayBlocker(s) ?? 'Build the highway';
+    n.highway.setAttribute('aria-pressed', String(s.highway));
+
+    n.estate.disabled = !canBuildEstate(s);
+    n.estateLabel.textContent = estateBlocker(s) ?? 'Break ground on an estate';
+    n.estateCost.textContent = fmt(estateCost(s));
+
+    n.estateBuilt.textContent = `${fmtInt(s.estates)}/${fmtInt(allowed)}`;
+    // Three states, not two: a city can be big enough for the road and not have
+    // bought it, and "needs 18 districts" to a city with twenty-four is the
+    // panel telling a player something they can see is untrue.
+    n.estateRoom.textContent =
+      s.highway ? `${fmtInt(ESTATE_CELLS)} parcels in the band`
+      : highwayAllowed(s) ? 'needs the highway'
+      : `needs ${fmtInt(HIGHWAY_MIN_DISTRICTS)} districts`;
+
+    n.estatePlots.textContent = fmtInt(estatePlots(s));
+    n.estateJobs.textContent = `${fmt(estateJobs(s))} jobs`;
+
+    // What the band adds to the ledger, measured the way a player would ask it:
+    // the same city without it. Cheap — `income` is a handful of reads.
+    const without = income({ ...s, estates: 0 });
+    n.estateLedger.textContent =
+      s.estates <= 0 || without <= 0 ?
+        '+0%'
+      : `+${(((income(s) - without) / without) * 100).toFixed(0)}%`;
+    n.estateSupply.textContent =
+      s.estates <= 0 ? 'no goods yet' : `${fmt(estateSupply(s))} goods a second`;
   }
 
   private paintBuild(s: Readonly<GameState>): void {

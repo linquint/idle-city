@@ -90,6 +90,41 @@ interface Berth {
   to: number;
 }
 
+const probe: Berth = { v: 0, from: 0, shore: 0, to: 0 };
+const tip: Shore = { x: 0, z: 0 };
+
+/** Fills `berth` for the i-th port. False when the city does not own one. */
+function berthAt(i: number, districts: number, out: Berth): boolean {
+  const index = coastalDistrictAt(i, districts);
+  if (index < 0) return false;
+  const coord = districtCoord(index) as Coord;
+  const x = coord.x * DISTRICT_WIDTH;
+  const z = coord.z * DISTRICT_WIDTH;
+  out.v = WATERS.v(x, z);
+  out.from = WATERS.u(x, z) + DISTRICT_WIDTH / 2;
+  out.shore = WATERS.shore(out.v);
+  out.to = out.shore + QUAY_OUT;
+  return true;
+}
+
+/**
+ * How far from a point the built waterfront reaches, or 0 if there is none.
+ *
+ * Asked by the camera rig, which used to bound panning to the districts alone —
+ * so a quay was something you could see from a wide shot and could not go and
+ * stand over. The city owns more than its districts now.
+ */
+export function portReach(state: Readonly<GameState>, x: number, z: number): number {
+  let reach = 0;
+  const ports = Math.max(state.cruiseTerminals, state.cargoTerminals);
+  for (let i = 0; i < ports; i++) {
+    if (!berthAt(i, state.districts, probe)) continue;
+    WATERS.toWorld(probe.to, probe.v, tip);
+    reach = Math.max(reach, Math.hypot(tip.x - x, tip.z - z));
+  }
+  return reach;
+}
+
 /** The waterfront layer. Six meshes, none of which grows past the berths. */
 export class Port {
   private readonly deck: GrowableInstancedMesh;
@@ -199,7 +234,7 @@ export class Port {
       // clamps: the counts are held inside the berths by `Game` and by `migrate`,
       // and if one ever got past both, the renderer's answer has to be a port
       // that is missing rather than a quay drawn on last frame's matrix.
-      if (!this.locate(i, state.districts)) continue;
+      if (!berthAt(i, state.districts, this.berth)) continue;
       const b = this.berth;
       this.box((b.from + b.to) / 2, b.v, b.to - b.from, QUAY_WIDE, DECK_TOP - DECK_H / 2);
       this.deck.setMatrixAt(decks++, this.dummy.matrix);
@@ -262,21 +297,6 @@ export class Port {
     this.roofs.flush();
     this.masts.flush();
     this.lamps.flush();
-  }
-
-  /** Fills `berth` for the i-th port. False when the city does not own one. */
-  private locate(i: number, districts: number): boolean {
-    const index = coastalDistrictAt(i, districts);
-    if (index < 0) return false;
-    const coord = districtCoord(index) as Coord;
-    const x = coord.x * DISTRICT_WIDTH;
-    const z = coord.z * DISTRICT_WIDTH;
-    const b = this.berth;
-    b.v = WATERS.v(x, z);
-    b.from = WATERS.u(x, z) + DISTRICT_WIDTH / 2;
-    b.shore = WATERS.shore(b.v);
-    b.to = b.shore + QUAY_OUT;
-    return true;
   }
 
   /**

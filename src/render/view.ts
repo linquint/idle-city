@@ -7,8 +7,10 @@ import { CameraRig } from './cameraRig';
 import { Cars } from './cars';
 import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight';
 import { Fires } from './fires';
+import { Estates } from './estates';
 import { Ground } from './ground';
-import { Port } from './port';
+import { Highway, highwayReach } from './highway';
+import { Port, portReach } from './port';
 import { Ships } from './ships';
 import { Water } from './water';
 import { World } from './world';
@@ -36,8 +38,12 @@ export class View {
   private readonly fires: Fires;
   private readonly port: Port;
   private readonly ships: Ships;
+  private readonly highway: Highway;
+  private readonly estates: Estates;
   private elapsed = 0;
   private shownDistricts = 0;
+  /** What the camera was last leashed to. See `reachOf`. */
+  private shownReach = -1;
   /**
    * The building the player has clicked on, or null.
    *
@@ -76,6 +82,8 @@ export class View {
     this.fires = new Fires(this.world.scene, layout, !reducedMotion);
     this.port = new Port(this.world.scene);
     this.ships = new Ships(this.world.scene, !reducedMotion);
+    this.highway = new Highway(this.world.scene);
+    this.estates = new Estates(this.world.scene);
 
     this.rig = new CameraRig(this.world.camera, canvas, !reducedMotion);
     // A sun crossing the sky is motion, and a slow full-screen colour ramp is
@@ -100,6 +108,26 @@ export class View {
 
   get selection(): BuildingRef | null {
     return this.selected;
+  }
+
+  /**
+   * How far from the city's centre the player may pan.
+   *
+   * The districts used to be the whole answer, and they are not any more: a
+   * quay stands off the coast and an estate band sits behind the town, both
+   * beyond the furthest the districts can ever go. Before this, they were
+   * things you could see from a wide shot and could not go and stand over.
+   *
+   * Cheap enough to ask every sync — a handful of hypots over the berths — and
+   * `sync` re-frames only when the answer moves, so buying a terminal or the
+   * road lengthens the leash without the ceremony an annexation gets.
+   */
+  private reachOf(state: Readonly<GameState>, centre: { x: number; z: number }): number {
+    return Math.max(
+      cityRadius(state.districts),
+      portReach(state, centre.x, centre.z),
+      highwayReach(state, centre.x, centre.z),
+    );
   }
 
   /** Casts through a screen point and selects whatever building is under it. */
@@ -169,14 +197,17 @@ export class View {
     this.buildings.setNight(sky.night);
     this.port.setNight(sky.night);
 
-    if (state.districts !== this.shownDistricts) {
+    const centre = cityCentre(state.districts);
+    const reach = this.reachOf(state, centre);
+    if (state.districts !== this.shownDistricts || reach !== this.shownReach) {
       // The first sync is the city the player arrived with, however large it is.
       // Anything after that is land they just bought, and gets the ceremony.
       const annexed = this.shownDistricts > 0 && state.districts > this.shownDistricts;
       this.shownDistricts = state.districts;
+      this.shownReach = reach;
       const radius = cityRadius(state.districts);
       this.world.fit(radius);
-      this.rig.fit(radius, cityCentre(state.districts), annexed);
+      this.rig.fit(radius, centre, annexed, reach);
       this.ground.sync(state.districts, this.elapsed, annexed);
     }
     this.buildings.sync(state, this.elapsed);
@@ -190,6 +221,10 @@ export class View {
     this.zones.sync(state);
     this.courtyards.sync(state);
     this.parks.sync(state);
+    // Before the traffic: the lorries route along the highway, so the road has
+    // to be the road as of this sync rather than as of the last one.
+    this.highway.sync(state);
+    this.estates.sync(state);
     this.cars.sync(state);
     this.fires.sync(state);
     this.port.sync(state);

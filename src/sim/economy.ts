@@ -13,6 +13,10 @@ import {
   DEMAND_SCALE,
   DEMAND_TAU,
   DISTRICT_BONUS,
+  ESTATE_BASE,
+  ESTATE_GROWTH,
+  ESTATE_PLOTS,
+  ESTATE_YIELD,
   EXPORT_BASE,
   EXPORT_PER_DISTRICT,
   EXTINGUISH_MAX,
@@ -25,13 +29,17 @@ import {
   HAPPINESS_FLOOR,
   HAPPINESS_MIN_BUILD,
   HAPPINESS_TAU,
+  HIGHWAY_COST,
+  HIGHWAY_MIN_DISTRICTS,
   HOME_BASE,
   HOME_GROWTH,
+  INDUSTRIAL_OUTPUT,
   INDUSTRY_BASE,
   INDUSTRY_BONUS,
   INDUSTRY_GROWTH,
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
+  JOBS_PER_ESTATE_PLOT,
   LANDMARKS,
   LANDMARK_MOOD,
   LEVEL_EDUCATION,
@@ -79,6 +87,7 @@ import {
   type Terminal,
 } from './config.ts';
 import { ZONE, type Zone } from './citygen.ts';
+import { ESTATE_CELLS } from './estates.ts';
 import {
   BUILDABLE_COMMERCIAL_PER_DISTRICT,
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
@@ -847,6 +856,95 @@ export const terminalReadings = (s: GameState): readonly TerminalReading[] =>
     cost: terminalCost(s, terminal),
   }));
 
+// ------------------------------------------------------------------ estates
+
+/**
+ * Whether the city has reached the size at which it may build outside itself.
+ *
+ * A count rather than a share, because there is no land to measure — see
+ * HIGHWAY_MIN_DISTRICTS. Separate from `canBuildHighway` so the panel can say
+ * "not yet" and "not enough cash" as two different things.
+ */
+export const highwayAllowed = (s: GameState): boolean =>
+  s.districts >= HIGHWAY_MIN_DISTRICTS;
+
+export const highwayCost = (): number => HIGHWAY_COST;
+
+export const canBuildHighway = (s: GameState): boolean =>
+  !s.highway && highwayAllowed(s) && s.cash >= HIGHWAY_COST;
+
+/**
+ * Parcels the city may take in the band, which is nothing until the road is in.
+ *
+ * Two bounds, and each says something different. The road is the progression
+ * gate; the district count paces the band the way it paces the landmark sites,
+ * so a city that has just built the highway does not find thirty-eight parcels
+ * waiting; and ESTATE_CELLS is the ground itself — the band is a fixed strip
+ * with the water already taken out of it, so it is the one bound that cannot be
+ * bought past.
+ */
+export const estateCapacity = (s: GameState): number =>
+  s.highway ? Math.min(ESTATE_CELLS, s.districts) : 0;
+
+export const estateCost = (s: GameState): number => ESTATE_BASE * ESTATE_GROWTH ** s.estates;
+
+export const canBuildEstate = (s: GameState): boolean =>
+  s.estates < estateCapacity(s) && s.cash >= estateCost(s);
+
+/**
+ * Industrial land the city works outside its own streets, in plots, less the
+ * share standing empty.
+ *
+ * Shares `occupancyI` with the works inside the city rather than integrating an
+ * occupancy of its own. They are the same industry facing the same demand, and
+ * a second lagged signal would be a second thing to save, a second thing to
+ * migrate and a second thing that could disagree with the first for reasons
+ * nobody could see.
+ */
+export const estatePlots = (s: GameState): number => s.estates * ESTATE_PLOTS;
+
+export const estateActive = (s: GameState): number => estatePlots(s) * s.occupancyI;
+
+/**
+ * The mean level weight of an industrial plot inside the city.
+ *
+ * What an estate is built to, and the reason it is not simply worth
+ * ESTATE_YIELD forever: LEVEL_SCALE spans 1 to 600, so a flat weight would make
+ * the estates the whole economy at the bottom of the ladder and a rounding
+ * error at the top. An estate has no level of its own to climb — no education
+ * gate, no merge, no fourth cohort in the save — so it is built to whatever
+ * standard the city's own works are built to. They are the same firms.
+ *
+ * One rather than zero for a city with no industry at all, so the first estate
+ * is worth something to a city that has never zoned a works.
+ */
+export const industryScale = (s: GameState): number => {
+  const plots = cohortFootprint(s.industryLevels);
+  if (plots <= 0) return 1;
+  return Math.max(1, cohortScale(s.industryLevels) / plots);
+};
+
+/** What the estates are worth to the ledger, in level-0 industrial buildings. */
+export const estateEarning = (s: GameState): number =>
+  estateActive(s) * ESTATE_YIELD * industryScale(s);
+
+/** Goods the estates make. Per plot and level-flat, exactly as INDUSTRY_OUTPUT is. */
+export const estateSupply = (s: GameState): number =>
+  estateActive(s) * ESTATE_YIELD * INDUSTRIAL_OUTPUT;
+
+/** Hands the estates need. Fewer per plot than in the city — see JOBS_PER_ESTATE_PLOT. */
+export const estateJobs = (s: GameState): number => estateActive(s) * JOBS_PER_ESTATE_PLOT;
+
+export function highwayBlocker(s: GameState): string | null {
+  if (s.highway) return 'Built';
+  return highwayAllowed(s) ? null : `Needs ${HIGHWAY_MIN_DISTRICTS} districts`;
+}
+
+export function estateBlocker(s: GameState): string | null {
+  if (!s.highway) return 'No highway yet';
+  return s.estates >= estateCapacity(s) ? 'No parcels left' : null;
+}
+
 /**
  * One line of the happiness panel: something the city can be short of, what it
  * is called when it is the binding one, and what it is worth.
@@ -1065,7 +1163,13 @@ export const exportMarket = (s: GameState): number =>
   (1 + CARGO_EXPORT_LIFT * s.cargoTerminals);
 
 export const jobs = (s: GameState): number =>
-  openOf(s, 'shop', SHOP_JOBS) + openOf(s, 'industry', INDUSTRY_JOBS);
+  openOf(s, 'shop', SHOP_JOBS) +
+  openOf(s, 'industry', INDUSTRY_JOBS) +
+  // The estates employ people too, and they are the one employer the city has
+  // that stands on land it does not own — so they are added here rather than
+  // folded into the industrial cohort, which is what the plot totals and the
+  // annexation gate are counted from.
+  estateJobs(s);
 
 /**
  * The imbalance that counts as "saturated", at the city's current level mix.
@@ -1147,7 +1251,8 @@ export const demandTargets = (s: GameState): DemandTargets => {
     i: clampDemand(
       (openOf(s, 'shop', SHOP_SUPPLY) +
         exportMarket(s) -
-        openOf(s, 'industry', INDUSTRY_OUTPUT) +
+        openOf(s, 'industry', INDUSTRY_OUTPUT) -
+        estateSupply(s) +
         labourReach(s)) /
         scale,
     ),
@@ -1235,7 +1340,10 @@ export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** 
 export const income = (s: GameState): number => {
   const people = residents(s) * (1 - alight(s, 'home'));
   const shops = effectiveOf(s, 'shop') * (1 - alight(s, 'shop'));
-  const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry'));
+  // The estates are not in the cohort and cannot catch fire — they are outside
+  // the city and outside the fire model — so they are added after the burning
+  // share comes off rather than before it.
+  const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry')) + estateEarning(s);
   return (
     (people *
       RENT *

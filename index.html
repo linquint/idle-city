@@ -59,6 +59,8 @@
       aria-controls="panel-landmarks" aria-selected="false" tabindex="-1">Landmarks</button>
     <button class="tab" type="button" role="tab" id="tab-port"
       aria-controls="panel-port" aria-selected="false" tabindex="-1">Port</button>
+    <button class="tab" type="button" role="tab" id="tab-estates"
+      aria-controls="panel-estates" aria-selected="false" tabindex="-1">Estates</button>
   </div>
 
   <div class="panels">
@@ -273,6 +275,31 @@
       <div class="svc"><span class="k">Exports</span>
         <span class="built" id="port-exports">60</span>
         <span class="covers" id="port-lift">no cargo berths</span></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-estates" role="tabpanel" aria-labelledby="tab-estates" tabindex="0" hidden>
+    <p class="cap">Beyond the city</p>
+    <button class="ghost wide" id="build-highway" type="button">
+      <span id="build-highway-label">Build the highway</span>
+      <span class="cost" id="build-highway-cost">240K</span>
+    </button>
+    <button id="build-estate" type="button">
+      <span id="build-estate-label">Break ground on an estate</span>
+      <span class="price"><span class="cost" id="build-estate-cost">60K</span></span>
+    </button>
+
+    <p class="cap">The band</p>
+    <div class="services" id="estate-trade" role="img">
+      <div class="svc"><span class="k">Parcels</span>
+        <span class="built" id="estate-built">0/0</span>
+        <span class="covers" id="estate-room">needs 18 districts</span></div>
+      <div class="svc"><span class="k">Works</span>
+        <span class="built" id="estate-plots">0</span>
+        <span class="covers" id="estate-jobs">0 jobs</span></div>
+      <div class="svc"><span class="k">Ledger</span>
+        <span class="built" id="estate-ledger">+0%</span>
+        <span class="covers" id="estate-supply">no goods yet</span></div>
     </div>
   </div>
 

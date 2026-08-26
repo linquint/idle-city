@@ -27,6 +27,8 @@ import {
   canBuildIndustry,
   canBuildPark,
   canBuildService,
+  canBuildEstate,
+  canBuildHighway,
   canBuildShop,
   canBuildTerminal,
   canMergeParcel,
@@ -35,8 +37,10 @@ import {
   demandStep,
   demandTargets,
   educationCoverage,
+  estateCost,
   happinessStep,
   happinessTarget,
+  highwayCost,
   homeCost,
   ignitionRate,
   income,
@@ -833,6 +837,34 @@ export class Game {
     s.cash -= terminalCost(s, terminal);
     if (terminal.key === 'cruise') s.cruiseTerminals++;
     else s.cargoTerminals++;
+    return true;
+  }
+
+  /**
+   * The road out of town. Bought once, and what it buys is the right to build
+   * on land the city does not own — see HIGHWAY_MIN_DISTRICTS.
+   */
+  buildHighway(): boolean {
+    const s = this.inner;
+    if (!canBuildHighway(s)) return false;
+    s.cash -= highwayCost();
+    s.highway = true;
+    return true;
+  }
+
+  /**
+   * One parcel in the band beyond the city edge.
+   *
+   * Industry, and counted as industry everywhere it matters — jobs, goods and
+   * the income multiplier — but never as *land*, because the city does not own
+   * the ground it stands on. The in-district industrial plots are untouched by
+   * this and stay exactly where they are.
+   */
+  buildEstate(): boolean {
+    const s = this.inner;
+    if (!canBuildEstate(s)) return false;
+    s.cash -= estateCost(s);
+    s.estates++;
     return true;
   }
 

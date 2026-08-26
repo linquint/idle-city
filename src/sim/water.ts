@@ -125,8 +125,16 @@ const RIVER_HALF = 9;
 const RIVER_NEAR = CORE_CLEAR + RIVER_HALF + DRY_MARGIN;
 const RIVER_SWING = 130;
 
-/** How far inland the river starts. Six districts is past any city's edge. */
-const RIVER_SOURCE = -6 * TILE;
+/**
+ * How far inland the river starts.
+ *
+ * Far enough that its blunt source is never something anyone looks at. Six
+ * districts was past the city's own edge and no further, which put the end of
+ * the river exactly where the industrial estates were later laid — so the one
+ * place the player was given a reason to go and stand was the one place the
+ * river visibly stopped. Twenty districts is under the fog from anywhere.
+ */
+const RIVER_SOURCE = -20 * TILE;
 
 const LAKE_COUNT = 3;
 const LAKE_MIN_RADIUS = 26;
@@ -303,11 +311,17 @@ export class Waters {
   }
 
   private riverDepthAt(u: number, v: number): number {
-    if (u < RIVER_SOURCE) return -1;
+    // -Infinity rather than a small negative number, and the difference is not
+    // cosmetic: `depth` is the *maximum* over the three fields, so a sentinel
+    // meaning "no river here" is read as a distance to one. A -1 put the whole
+    // world one unit from water everywhere past the river's source, which made
+    // `dryAround` refuse every parcel out there — invisible while the districts
+    // were the only thing asking, since none of them reach that far.
+    if (u < RIVER_SOURCE) return -Infinity;
     // The river stops where it meets the sea rather than running under it: two
     // translucent surfaces over the same water would blend twice and read as a
     // stain at the river mouth.
-    if (u > this.shore(v)) return -1;
+    if (u > this.shore(v)) return -Infinity;
     return RIVER_HALF - Math.abs(v - this.riverCentre(u));
   }
 
@@ -393,12 +407,25 @@ export class Waters {
    * its centre out by half a tile in each direction.
    */
   dry(dx: number, dz: number): boolean {
-    const x0 = dx * TILE - TILE / 2;
-    const z0 = dz * TILE - TILE / 2;
-    for (let i = 0; i <= DISTRICT_SPAN; i++) {
-      const z = z0 + i * CELL;
-      for (let j = 0; j <= DISTRICT_SPAN; j++) {
-        if (this.depth(x0 + j * CELL, z) > -DRY_MARGIN) return false;
+    return this.dryAround(dx * TILE, dz * TILE, TILE / 2);
+  }
+
+  /**
+   * Whether a square of land centred on a world point is clear of water.
+   *
+   * The general form `dry` is one case of, because the districts are no longer
+   * the only thing that has to keep off the water — an industrial estate beyond
+   * the city edge asks the same question about a differently sized parcel. The
+   * lattice is stepped at CELL or finer whatever the square's size, which is
+   * what DRY_MARGIN's argument rests on.
+   */
+  dryAround(x: number, z: number, half: number): boolean {
+    const steps = Math.max(1, Math.ceil((half * 2) / CELL));
+    const step = (half * 2) / steps;
+    for (let i = 0; i <= steps; i++) {
+      const at = z - half + i * step;
+      for (let j = 0; j <= steps; j++) {
+        if (this.depth(x - half + j * step, at) > -DRY_MARGIN) return false;
       }
     }
     return true;

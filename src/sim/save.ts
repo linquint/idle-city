@@ -19,6 +19,7 @@ import {
   mergedCohort,
   parkCapacity,
   landmarkSiteCapacity,
+  estateCapacity,
   serviceAllowed,
   shopCapacity,
   terminalCapacity,
@@ -321,6 +322,8 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     stadiums: count(r['stadiums']),
     cruiseTerminals: count(r['cruiseTerminals']),
     cargoTerminals: count(r['cargoTerminals']),
+    highway: r['highway'] === true,
+    estates: count(r['estates']),
     // v2 called them clinics, schools and stations and stood them on single
     // residential plots. They are the same slot — the building the city buys to
     // raise happiness — so the counts carry across by weight rather than being
@@ -394,6 +397,12 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   const berths = terminalCapacity(state);
   state.cruiseTerminals = Math.min(state.cruiseTerminals, berths);
   state.cargoTerminals = Math.min(state.cargoTerminals, berths);
+  // Estates are bounded by the band, by the district count and by the road
+  // being there at all — and a save that claims the works without the highway
+  // gets neither, because a shed with no road to it is not an estate. The band
+  // is a fixed strip with the water already taken out of it, so this clamp can
+  // bite on a save the current build's seed left less room for.
+  state.estates = Math.min(state.estates, estateCapacity(state));
 
   const fitted = [
     fitZone(state.homes, state.abandonedR, r['homeLevels'], tier, state.mergedR, homeCapacity(state), mergeCapacity(state, 'home')),

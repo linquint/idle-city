@@ -187,6 +187,18 @@ export interface GameState {
   cruiseTerminals: number;
   cargoTerminals: number;
   /**
+   * The road out of town, and the works standing along it.
+   *
+   * A boolean and a count, and the boolean is the progression gate: the highway
+   * is bought once and the estates are what it is for. Their positions come out
+   * of the count and the seed exactly as everything else's do — see
+   * `estateCell` — and they are the first thing the city builds on land it does
+   * not own, which is why they are counted apart from every plot total in
+   * `economy.ts` rather than folded into one.
+   */
+  highway: boolean;
+  estates: number;
+  /**
    * Share of each type's buildings that are actually staffed, in [0, 1].
    *
    * In the save because it is integrated, not derived: a hospital opened ten
@@ -303,6 +315,8 @@ export function createState(now = Date.now()): GameState {
     stadiums: 0,
     cruiseTerminals: 0,
     cargoTerminals: 0,
+    highway: false,
+    estates: 0,
     hospitals: 0,
     police: 0,
     fire: 0,

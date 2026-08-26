@@ -14,6 +14,7 @@ import type { GameState } from '../sim/state';
 import { Glow } from './glow';
 import { ROAD_H, ROAD_W } from './ground';
 import { GrowableInstancedMesh } from './growable';
+import { bandLane, spurLane, type Lane } from './highway';
 import { PALETTE } from './palette';
 
 /**
@@ -109,6 +110,31 @@ const STOP_SECONDS = 1.6;
 /** Buses run slower than cars, which is most of what makes them read as buses. */
 const BUS_SPEED = 4.2;
 
+/**
+ * Lorries, out of the same pool again.
+ *
+ * A lorry is a car with a longer body and a route that is not in the city: it
+ * runs the highway between the estates and the town, and it shares the pool,
+ * the lane offsets, the culling and the headlights. One more instanced mesh,
+ * for the same reason the buses cost one — a third traffic layer for a dozen
+ * vehicles would be a third copy of all of that.
+ *
+ * They take the *back* of the pool where the buses take the front, so a fleet
+ * that shrinks with the population loses cars from the middle and keeps both
+ * services running. Nothing about a lorry reaches `GameState`: they are a
+ * readout of `estates` in the way a bus is a readout of `depots`.
+ */
+const TRUCK_LENGTH = 4.4;
+const TRUCK_HEIGHT = 1.15;
+const TRUCK_WIDTH = 1.05;
+
+/** Lorries on the road per estate, and the most the highway ever carries. */
+const TRUCKS_PER_ESTATE = 0.6;
+const MAX_TRUCKS = 16;
+
+/** Lorries run slower than cars and do not stop. */
+const TRUCK_SPEED = 5;
+
 /** One vehicle's whole state. Pooled and mutated; never allocated in a frame. */
 interface Car {
   /** The lane's constant coordinate: z for a car driving along x, x for one along z. */
@@ -129,6 +155,8 @@ interface Car {
   routed: boolean;
   /** True for a bus: a longer body, a slower run and a route that stops. */
   bus: boolean;
+  /** True for a lorry: a longer body again, and a route out of town. */
+  truck: boolean;
   /** Seconds left at the current stop. Only ever non-zero for a bus. */
   waiting: number;
   /** How far along the run the next stop is. */
@@ -186,6 +214,8 @@ export class Cars {
   private readonly bodies: GrowableInstancedMesh;
   /** The one extra mesh buses cost. Same pool, same lanes, a longer box. */
   private readonly coaches: GrowableInstancedMesh;
+  /** The one extra mesh lorries cost. Same pool, same lanes, a longer box. */
+  private readonly lorries: GrowableInstancedMesh;
   private readonly lamps: GrowableInstancedMesh;
   private readonly headlights = new Glow(PALETTE.headlight, 0);
   private readonly dummy = new THREE.Object3D();
@@ -197,6 +227,13 @@ export class Cars {
   private active = 0;
   /** How many of the pool are buses. They take the front of it. */
   private buses = 0;
+  /** How many are lorries. They take the back, so the two services never fight. */
+  private trucks = 0;
+  /** Reused by the truck router. A route must not allocate, per frame or otherwise. */
+  private readonly lane: Lane = { alongX: true, fixed: 0, from: 0, length: 0 };
+  /** What the highway looked like last sync. Lorries re-route when it moves. */
+  private highwayDistricts = -1;
+  private highwayEstates = -1;
 
   constructor(
     scene: THREE.Scene,
@@ -226,6 +263,13 @@ export class Cars {
       MAX_CARS,
       { castShadow: true, name: 'traffic:bus' },
     );
+    this.lorries = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(TRUCK_LENGTH, TRUCK_HEIGHT, TRUCK_WIDTH),
+      new THREE.MeshLambertMaterial({ color: PALETTE.industryRoof }),
+      MAX_CARS,
+      { castShadow: true, name: 'traffic:truck' },
+    );
     this.lamps.mesh.visible = false;
 
     for (let i = 0; i < MAX_CARS; i++) {
@@ -240,6 +284,7 @@ export class Cars {
         travelled: 0,
         routed: false,
         bus: false,
+        truck: false,
         waiting: 0,
         nextStop: STOP_SPACING,
       });
@@ -269,6 +314,18 @@ export class Cars {
     return Math.round(state.depots * state.depotStaff * BUSES_PER_DEPOT);
   }
 
+  /**
+   * How many lorries the estates put on the highway.
+   *
+   * Estates, not the road: a highway with nothing at the end of it carries no
+   * freight, and the first lorry arriving with the first parcel is most of what
+   * makes the purchase read as having done something.
+   */
+  private static freight(state: Readonly<GameState>): number {
+    if (!state.highway) return 0;
+    return Math.min(MAX_TRUCKS, Math.round(state.estates * TRUCKS_PER_ESTATE));
+  }
+
   /** Reads the counts. Nothing here is stored; it is all recomputed from state. */
   sync(state: Readonly<GameState>): void {
     if (state.districts !== this.districts) {
@@ -278,23 +335,83 @@ export class Cars {
       }
       this.districts = state.districts;
     }
-    this.active = Math.min(Cars.fleet(state), this.lines.length > 0 ? MAX_CARS : 0);
-    const wanted = Math.min(Cars.coaches(state), this.active);
-    // Buses take the front of the pool, so a fleet that shrinks loses cars
-    // before it loses buses — a route that stops running because the population
-    // dipped would be a service the city never cancelled.
-    if (wanted !== this.buses) {
+    const freight = Cars.freight(state);
+    // The fleet has to make room for the services rather than crowd them out:
+    // a city whose population would only justify eight cars still runs whatever
+    // buses and lorries it has paid for.
+    this.active = Math.min(
+      MAX_CARS,
+      this.lines.length > 0 ? Math.max(Cars.fleet(state), Cars.coaches(state) + freight) : 0,
+    );
+    const buses = Math.min(Cars.coaches(state), this.active);
+    const trucks = Math.min(freight, this.active - buses);
+    // Buses take the front of the pool and lorries the back, so a fleet that
+    // shrinks loses cars out of the middle — a route that stopped running
+    // because the population dipped would be a service the city never
+    // cancelled, and so would a freight run.
+    if (buses !== this.buses || trucks !== this.trucks) {
       for (let i = 0; i < MAX_CARS; i++) {
         const car = this.pool[i] as Car;
-        const bus = i < wanted;
-        if (car.bus === bus) continue;
+        const bus = i < buses;
+        const truck = i >= this.active - trucks && i < this.active && !bus;
+        if (car.bus === bus && car.truck === truck) continue;
         car.bus = bus;
+        car.truck = truck;
         // Re-routed rather than left mid-run: a car that became a bus would
-        // otherwise finish its run at the wrong speed and stop nowhere.
+        // otherwise finish its run at the wrong speed and stop nowhere, and one
+        // that became a lorry would finish it on the wrong road entirely.
         car.routed = false;
       }
-      this.buses = wanted;
+      this.buses = buses;
+      this.trucks = trucks;
     }
+    // The highway's own geometry moves — the spur follows the city's inland
+    // edge and the band road follows the estates — so a lorry routed against
+    // yesterday's road has to be sent round again.
+    if (state.districts !== this.highwayDistricts || state.estates !== this.highwayEstates) {
+      this.highwayDistricts = state.districts;
+      this.highwayEstates = state.estates;
+      for (let i = 0; i < MAX_CARS; i++) {
+        const car = this.pool[i] as Car;
+        if (car.truck) car.routed = false;
+      }
+    }
+  }
+
+  /**
+   * Puts a lorry on the highway: the spur out of town, or the band road.
+   *
+   * No sampling and no fallback, unlike the city router — there are exactly two
+   * runs and both are straight, so the right one can simply be chosen. The lane
+   * geometry comes from `highway.ts` rather than being worked out again here,
+   * for the reason the water's does: two opinions about where the road is would
+   * eventually be one lorry driving through a field.
+   */
+  private routeHighway(car: Car): void {
+    const lane =
+      this.random() < 0.4 ?
+        spurLane(this.districts, this.lane)
+      : bandLane(this.highwayEstates, this.lane);
+    const dir = this.random() < 0.5 ? 1 : -1;
+    car.alongX = lane.alongX;
+    car.dir = dir;
+    car.length = lane.length;
+    car.speed = TRUCK_SPEED;
+    car.waiting = 0;
+    car.nextStop = Infinity;
+    // The same right-hand lane offsets the streets use, so a lorry meeting a
+    // car at the edge of town is on the side of the road it should be.
+    if (lane.alongX) {
+      car.from = dir > 0 ? lane.from : lane.from + lane.length;
+      car.fixed = lane.fixed + dir * LANE;
+      car.heading = dir > 0 ? 0 : Math.PI;
+    } else {
+      car.from = dir > 0 ? lane.from : lane.from + lane.length;
+      car.fixed = lane.fixed - dir * LANE;
+      car.heading = dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+    }
+    car.travelled = this.moving ? 0 : this.random() * car.length;
+    car.routed = true;
   }
 
   /**
@@ -306,6 +423,10 @@ export class Cars {
    * still gets traffic somewhere rather than none at all.
    */
   private route(car: Car, focusX: number, focusZ: number): void {
+    if (car.truck) {
+      this.routeHighway(car);
+      return;
+    }
     let chosen = 0;
     for (let i = 0; i < ROUTE_TRIES; i++) {
       chosen = Math.floor(this.random() * this.lines.length);
@@ -365,6 +486,7 @@ export class Cars {
     if (this.lines.length === 0 || this.active === 0) {
       this.bodies.count = 0;
       this.coaches.count = 0;
+      this.lorries.count = 0;
       this.lamps.count = 0;
       return;
     }
@@ -378,6 +500,7 @@ export class Cars {
     const fz = focus.z;
     let drawn = 0;
     let coaches = 0;
+    let trucks = 0;
     let lights = 0;
 
     for (let i = 0; i < this.active; i++) {
@@ -406,18 +529,21 @@ export class Cars {
       const dz = z - fz;
       if (dx * dx + dz * dz > VIEW_RADIUS * VIEW_RADIUS) continue;
 
-      const length = car.bus ? BUS_LENGTH : CAR_LENGTH;
-      dummy.position.set(x, car.bus ? ROAD_H + BUS_HEIGHT / 2 : CAR_Y, z);
+      const length = car.bus ? BUS_LENGTH : car.truck ? TRUCK_LENGTH : CAR_LENGTH;
+      const height = car.bus ? BUS_HEIGHT : car.truck ? TRUCK_HEIGHT : CAR_HEIGHT;
+      dummy.position.set(x, ROAD_H + height / 2, z);
       dummy.rotation.set(0, car.heading, 0);
       dummy.updateMatrix();
       if (car.bus) this.coaches.setMatrixAt(coaches++, dummy.matrix);
+      else if (car.truck) this.lorries.setMatrixAt(trucks++, dummy.matrix);
       else this.bodies.setMatrixAt(drawn++, dummy.matrix);
 
       if (lit) {
         // The nose, in the direction of travel. Same rotation, so the quad
-        // faces the way the vehicle is going without a second trig call. Buses
-        // and cars share the lamp mesh — an instance index there answers to
-        // nothing but its own count.
+        // faces the way the vehicle is going without a second trig call. All
+        // three body types share the lamp mesh — an instance index there
+        // answers to nothing but its own count — and they share the height too,
+        // because a headlamp is at headlamp height whatever is behind it.
         dummy.position.set(
           car.alongX ? x + car.dir * (length / 2) : x,
           CAR_Y,
@@ -432,6 +558,8 @@ export class Cars {
     this.bodies.flush();
     this.coaches.count = coaches;
     this.coaches.flush();
+    this.lorries.count = trucks;
+    this.lorries.flush();
     if (lit) {
       this.lamps.count = lights;
       this.lamps.flush();

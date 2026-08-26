@@ -1387,6 +1387,137 @@ export const VISITOR_SPEND = 0.7;
  */
 export const CARGO_EXPORT_LIFT = 0.4;
 
+// ------------------------------------------------------------------ estates
+
+/**
+ * What one industrial estate is worth, in the industrial plots a district
+ * sells.
+ *
+ * An estate is one large parcel off a highway with a shed on it — nine plots
+ * across and nothing but the shed inside — so it stands in for nine of the
+ * small works the street grid sells. Counting it in *plots* rather than giving
+ * it a scale of its own is what lets every term the demand model already has
+ * take it without a special case: jobs, output and the income multiplier are
+ * all per industrial plot, at every level, by ZONE_SHARE's own design.
+ *
+ * The in-district industrial land is untouched by all of this and stays exactly
+ * where it is. An estate is where a city puts industry it has no room for, not
+ * a replacement for the works on Mill Street.
+ */
+export const ESTATE_PLOTS = 9;
+
+/**
+ * How much more each of those plots makes, and earns, than one inside the city.
+ *
+ * The reason to build out of town: room to lay a shed out properly. Output and
+ * the income multiplier take it; jobs do not — see JOBS_PER_ESTATE_PLOT.
+ *
+ * There is no happiness penalty to set against it, and that is a decision
+ * rather than an oversight: nothing in `happinessTarget` reads industry at all,
+ * so a penalty would have to be invented — and inventing one would be a balance
+ * change to the in-district industrial zone, which is not what this is.
+ *
+ * What it is worth, measured at tower housing where the labour market clears:
+ * a full band is +19% of the ledger at 14 districts and +10% at 49 — against
+ * the shop multiplier's 35 to 46%, so it is a major line and not the game. On
+ * the demand side it pushes industrial demand *down* by 0.28 and 0.52 of a
+ * point, which at MAX_DISTRICTS takes a signal that was pinned at its upper
+ * bound and puts it back in the middle of its range. That is the right
+ * direction: a band of works is supply, and a built-out city is short of it.
+ */
+export const ESTATE_YIELD = 1.4;
+
+/**
+ * Hands one estate plot needs, against JOBS_PER_INDUSTRIAL's 20 inside the city.
+ *
+ * The number that makes an estate a different thing from a works on Mill
+ * Street rather than a bigger one, and it is what a shed on open ground with a
+ * yard around it actually is: more output, fewer people. So the two kinds of
+ * industry buy different things — the works inside the city pull residents in
+ * through the jobs they make, and the estates bring goods and money.
+ *
+ * Measured, and the drift is what the number was set from. Jobs land on
+ * residential demand and a whole band of them lands hard. Taken at the rung
+ * where the labour market actually clears — tower housing, see WORKING_SHARE —
+ * and before `clampDemand`, because a built-out city sits on its bounds under
+ * this model already:
+ *
+ *              full band's raw R drift    at 14 districts    at 49
+ *   20 jobs    (JOBS_PER_INDUSTRIAL)              +0.44      +0.82
+ *    6 jobs                                       +0.13      +0.25
+ *
+ * At 20 the band pushed a signal already sitting at +0.73 straight through its
+ * bound, leaving the housing discount stuck there with nothing left to say. At
+ * 6 it is a lift a player can watch move, and the top of the range stays inside
+ * the bounds at every rung of the ladder.
+ * See tools/estates.calibrate.mjs; the industrial side of the same drift is in
+ * ESTATE_YIELD's own measurement.
+ */
+export const JOBS_PER_ESTATE_PLOT = 6;
+
+/**
+ * How many districts the city must own before it may build outside its limits.
+ *
+ * The progression gate, and a count rather than a share because there is no
+ * land to measure: an estate stands on ground the city does not own and never
+ * will. Fourteen puts the highway a little past the port, which opens on the
+ * tenth to sixteenth annexation depending on the seed — the two are separate
+ * features and neither gates the other, but they should not both arrive in the
+ * same afternoon.
+ *
+ * Worth stating plainly, because it is a property of the annexation gate rather
+ * than of this number: the calibrator's best policy reaches ten districts in
+ * *336* simulated hours and stalls there at 66.5% developed against a 70% gate.
+ * So both the port and the estates sit past its horizon, and so does most of
+ * the run up to MAX_DISTRICTS. That is a pacing question about
+ * ANNEX_MIN_OCCUPANCY and the cost curves, and moving this number would hide it
+ * rather than answer it.
+ */
+export const HIGHWAY_MIN_DISTRICTS = 14;
+
+/**
+ * What a parcel off the highway costs.
+ *
+ * Derived rather than picked, and the derivation is the whole ordering between
+ * the two kinds of industry: an estate opens at what the city's *last*
+ * in-district works would cost with every industrial plot it owns built on. So
+ * filling your own industrial land is always the cheaper move and the band is
+ * what you buy when there is none left — which is exactly the fiction, and it
+ * is why the in-district industrial zone did not have to be weakened to make
+ * room for this one.
+ *
+ * It is still the better deal at the margin once it opens, and it has to be or
+ * nobody would ever take it: a parcel is nine plots at ESTATE_YIELD, so it buys
+ * about 12.6 works' worth of output for the price of one, against an in-district
+ * curve that has already compounded 182 times. What the player is buying past
+ * that point is a fresh curve.
+ */
+const ESTATE_ANCHOR_WORKS = FRONTAGE_TARGET.industrial * HIGHWAY_MIN_DISTRICTS;
+export const ESTATE_BASE = INDUSTRY_BASE * INDUSTRY_GROWTH ** ESTATE_ANCHOR_WORKS;
+
+/**
+ * How hard a parcel compounds.
+ *
+ * Gentler than the landmarks or the port because the band holds far more of
+ * them: at 1.35 over the twenty-six parcels this build's seed leaves dry, the
+ * last one costs about 1,800 times the first — the same spread INDUSTRY_GROWTH
+ * covers in fifty-seven buildings. Steeper and the back half of the band would
+ * be content nobody reaches; flatter and the whole band is one purchase.
+ */
+export const ESTATE_GROWTH = 1.35;
+
+/**
+ * What the road out of town costs: exactly what the last district did.
+ *
+ * Derived against the annexation curve rather than against the parcels, because
+ * that is the decision it stands beside — a player at the gate is choosing
+ * between one more district of their own land and the road to somebody else's.
+ * Anchoring it to a parcel instead would have priced the enabler above the
+ * feature: an estate opens at what a fully built city's last works costs, which
+ * at fourteen districts is eleven times the price of the fourteenth.
+ */
+export const HIGHWAY_COST = ANNEX_BASE * ANNEX_GROWTH ** (HIGHWAY_MIN_DISTRICTS - 1);
+
 // -------------------------------------------------------------------- policy
 
 /**
