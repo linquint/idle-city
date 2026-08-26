@@ -62,6 +62,13 @@ export const PALETTE = {
   // dark. The two sizes share a palette and differ in silhouette.
   landmark: 0xe4dccb,
   landmarkRoof: 0x9c6f4f,
+  // The waterfront. A quay is a deck the colour of the kerbs the city already
+  // has, because it is the same thing: made ground with something standing on
+  // it. Hulls are darker than anything on land so a ship reads against the
+  // water, and a container stack is the one warm block on the coast.
+  quay: 0x8d939c,
+  hull: 0x2b3644,
+  container: 0xb4623f,
   // Transport. The depot is a shed and an apron rather than a civic slab, and
   // the buses that leave it wear the same colour so the two read as one system.
   depot: 0x3d5a52,

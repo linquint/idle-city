@@ -8,6 +8,8 @@ import { Cars } from './cars';
 import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight';
 import { Fires } from './fires';
 import { Ground } from './ground';
+import { Port } from './port';
+import { Ships } from './ships';
 import { Water } from './water';
 import { World } from './world';
 import { Courtyards, Parks, Zones, type ZoneMode } from './zones';
@@ -32,6 +34,8 @@ export class View {
   private readonly parks: Parks;
   private readonly cars: Cars;
   private readonly fires: Fires;
+  private readonly port: Port;
+  private readonly ships: Ships;
   private elapsed = 0;
   private shownDistricts = 0;
   /**
@@ -70,6 +74,8 @@ export class View {
     this.parks = new Parks(this.world.scene, layout);
     this.cars = new Cars(this.world.scene, layout, !reducedMotion);
     this.fires = new Fires(this.world.scene, layout, !reducedMotion);
+    this.port = new Port(this.world.scene);
+    this.ships = new Ships(this.world.scene, !reducedMotion);
 
     this.rig = new CameraRig(this.world.camera, canvas, !reducedMotion);
     // A sun crossing the sky is motion, and a slow full-screen colour ramp is
@@ -161,6 +167,7 @@ export class View {
     const sky = sampleSky(this.cycling ? dayPhase(state.elapsed) : RESTING_PHASE, this.sky);
     this.world.setSky(sky);
     this.buildings.setNight(sky.night);
+    this.port.setNight(sky.night);
 
     if (state.districts !== this.shownDistricts) {
       // The first sync is the city the player arrived with, however large it is.
@@ -185,6 +192,8 @@ export class View {
     this.parks.sync(state);
     this.cars.sync(state);
     this.fires.sync(state);
+    this.port.sync(state);
+    this.ships.sync(state);
   }
 
   /** Advances animations and draws one frame. */
@@ -201,6 +210,7 @@ export class View {
     // After `focusShadows`, so traffic is culled against the focus the rest of
     // the frame was drawn from rather than against last frame's.
     this.cars.update(dt, this.rig.target, this.sky.night);
+    this.ships.update(dt, this.rig.target);
     this.fires.update(dt, this.elapsed, this.sky.night);
 
     this.world.render();

@@ -19,6 +19,8 @@ import {
   LEVELS,
   MAX_DISTRICTS,
   SERVICES,
+  CARGO_EXPORT_LIFT,
+  TERMINALS,
 } from '../sim/config';
 import {
   abandonedBuildings,
@@ -33,8 +35,11 @@ import {
   canBuildPark,
   canBuildService,
   canBuildShop,
+  canBuildTerminal,
+  cruiseIncome,
   demandTargets,
   educationCoverage,
+  exportMarket,
   fareIncome,
   homeBlocker,
   labourReach,
@@ -66,6 +71,9 @@ import {
   serviceReadings,
   shopCapacity,
   shopCost,
+  terminalBlocker,
+  terminalReadings,
+  visitors,
   willAutoAnnex,
 } from '../sim/economy';
 import type { BuildingRef } from '../render/buildings';
@@ -75,6 +83,7 @@ import {
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   createPlacement,
+  portDistrict,
   type CityLayout,
 } from '../sim/layout';
 import type { GameState, ZoneKind } from '../sim/state';
@@ -101,7 +110,7 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 };
 
 /** The tabs the docked control is split into, in the order they are shown. */
-const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks'] as const;
+const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'port'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /** Plots one district sells of each zone. Turns a plot index into a district. */
@@ -222,6 +231,12 @@ export class Hud {
     transitLabour: el('transit-labour'),
     landmarkShare: el('landmark-share'),
     landmarkMood: el('landmark-mood'),
+    portBerths: el('port-berths'),
+    portWhere: el('port-where'),
+    portVisitors: el('port-visitors'),
+    portSpend: el('port-spend'),
+    portExports: el('port-exports'),
+    portLift: el('port-lift'),
   };
 
   /**
@@ -244,6 +259,17 @@ export class Hud {
    * arrow keys across the row: a tab strip built out of divs is a tab strip
    * nobody can reach without a mouse.
    */
+  /**
+   * One row of controls and readouts per terminal, keyed the same way the
+   * landmark rows are. Two kinds, one shape, and the same land gate on both.
+   */
+  private readonly terminalNodes = TERMINALS.map((terminal) => ({
+    terminal,
+    button: el<HTMLButtonElement>(`build-${terminal.key}`),
+    cost: el(`build-${terminal.key}-cost`),
+    allowance: el(`build-${terminal.key}-built`),
+  }));
+
   private readonly tabs = TAB_KEYS.map((key) => ({
     key,
     button: el<HTMLButtonElement>(`tab-${key}`),
@@ -317,6 +343,11 @@ export class Hud {
     for (const row of this.landmarkNodes) {
       row.button.addEventListener('click', () =>
         this.act(() => this.game.buildLandmark(row.landmark)),
+      );
+    }
+    for (const row of this.terminalNodes) {
+      row.button.addEventListener('click', () =>
+        this.act(() => this.game.buildTerminal(row.terminal)),
       );
     }
     n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
@@ -486,7 +517,8 @@ export class Hud {
     else if (this.open === 'treasury') this.paintTreasury(s);
     else if (this.open === 'demand') this.paintDemand(s);
     else if (this.open === 'taxes') this.paintTaxes(s);
-    else this.paintLandmarks(s);
+    else if (this.open === 'landmarks') this.paintLandmarks(s);
+    else this.paintPort(s);
 
     this.paintCard(s);
   }
@@ -672,6 +704,46 @@ export class Hud {
       share <= 0
         ? 'no effect on mood'
         : `+${(LANDMARK_MOOD * share * 100).toFixed(1)} points of mood`;
+  }
+
+  /**
+   * The port panel: what a berth costs, and what the two kinds are earning.
+   *
+   * Three readouts rather than two counts, because the two halves pay back in
+   * currencies a count cannot show. Visitors are people a second and tourism is
+   * cash a second, so both are worth saying; exports are the tap industrial
+   * demand is drawn against, and the lift is only legible next to it.
+   */
+  private paintPort(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    let berths = 0;
+    for (const { terminal, built, allowed, cost } of terminalReadings(s)) {
+      berths = allowed;
+      const row = this.terminalNodes.find((entry) => entry.terminal.key === terminal.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(cost);
+      row.button.disabled = !canBuildTerminal(s, terminal);
+      row.button.title = terminalBlocker(s, terminal) ?? terminal.buildLabel;
+    }
+
+    const first = portDistrict(s.districts);
+    n.portBerths.textContent = fmtInt(berths);
+    n.portWhere.textContent =
+      first < 0 ? 'no coast yet' : `first quay on district ${fmtInt(first + 1)}`;
+
+    const heads = visitors(s);
+    n.portVisitors.textContent = fmt(heads);
+    n.portSpend.textContent =
+      s.cruiseTerminals <= 0
+        ? 'no cruise berths'
+        : `${fmt(cruiseIncome(s))}/s in tourism`;
+
+    n.portExports.textContent = fmt(exportMarket(s));
+    n.portLift.textContent =
+      s.cargoTerminals <= 0
+        ? 'no cargo berths'
+        : `+${Math.round(CARGO_EXPORT_LIFT * s.cargoTerminals * 100)}% on the tap`;
   }
 
   private paintBuild(s: Readonly<GameState>): void {

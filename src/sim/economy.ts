@@ -5,6 +5,7 @@ import {
   AUTO_ANNEX_RESERVE,
   BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
+  CARGO_EXPORT_LIFT,
   CIVIC_RAMP_SECONDS,
   CIVIC_SERVICES,
   ABANDON_SECONDS,
@@ -67,11 +68,15 @@ import {
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
   TAX_STEPS,
+  TERMINALS,
   TRANSIT_LABOUR_DRAW,
   TRANSIT_WORKFORCE,
+  VISITOR_SPEND,
+  VISITORS_PER_RESIDENT,
   WORKING_SHARE,
   type Landmark,
   type Service,
+  type Terminal,
 } from './config.ts';
 import { ZONE, type Zone } from './citygen.ts';
 import {
@@ -82,6 +87,7 @@ import {
   CIVIC_SITES_PER_DISTRICT,
   LANDMARK_LARGE_SITES_PER_DISTRICT,
   LANDMARK_SMALL_SITES_PER_DISTRICT,
+  coastalDistricts,
   landmarkPlotsCovered,
   parcelBook,
   UNIVERSITY_SITES_PER_DISTRICT,
@@ -793,6 +799,54 @@ export const landmarkReadings = (s: GameState): readonly LandmarkReading[] =>
     cost: landmarkCost(s, landmark),
   }));
 
+// ---------------------------------------------------------------------- port
+
+/** How many terminals of one kind the city has, through one key. */
+export const terminalCount = (s: GameState, key: Terminal['key']): number =>
+  key === 'cruise' ? s.cruiseTerminals : s.cargoTerminals;
+
+/**
+ * Berths the city owns: one of each kind per coastal district.
+ *
+ * The land gate, and the only thing bounding a port. Zero until the city
+ * annexes a district with the sea against it, which is what "the port unlocks
+ * on a coastal district" means in counts — see `portDistrict`.
+ */
+export const terminalCapacity = (s: GameState): number => coastalDistricts(s.districts);
+
+/** Whether the city has reached water at all. What the panel is gated on. */
+export const hasCoast = (s: GameState): boolean => terminalCapacity(s) > 0;
+
+/**
+ * Visitors the cruise terminals are landing, per second.
+ *
+ * Happiness is a multiplier here rather than a floor, which is what makes this
+ * different from every other line in the ledger: `incomeMultiplier` bottoms out
+ * at HAPPINESS_FLOOR because people still pay rent in a city they dislike, and
+ * nobody at all sails to one for a holiday.
+ */
+export const visitors = (s: GameState): number =>
+  s.cruiseTerminals * residents(s) * VISITORS_PER_RESIDENT * Math.max(0, Math.min(1, s.happiness));
+
+/** What those visitors spend, per second, before tax. */
+export const cruiseIncome = (s: GameState): number => visitors(s) * VISITOR_SPEND;
+
+export interface TerminalReading {
+  readonly terminal: Terminal;
+  readonly built: number;
+  readonly allowed: number;
+  readonly cost: number;
+}
+
+/** The whole port block, in one read, for the HUD. */
+export const terminalReadings = (s: GameState): readonly TerminalReading[] =>
+  TERMINALS.map((terminal) => ({
+    terminal,
+    built: terminalCount(s, terminal.key),
+    allowed: terminalCapacity(s),
+    cost: terminalCost(s, terminal),
+  }));
+
 /**
  * One line of the happiness panel: something the city can be short of, what it
  * is called when it is the binding one, and what it is worth.
@@ -1004,7 +1058,11 @@ export const isBurning = (s: GameState, kind: ZoneKind, index: number): boolean 
  * cycle turning when every counter is still zero.
  */
 export const exportMarket = (s: GameState): number =>
-  EXPORT_BASE + EXPORT_PER_DISTRICT * (s.districts - 1);
+  (EXPORT_BASE + EXPORT_PER_DISTRICT * (s.districts - 1)) *
+  // The cargo berths lift the tap rather than opening a second one beside it,
+  // so there is still one number the outside world's appetite is made of and
+  // one place to look when industrial demand is wrong. See CARGO_EXPORT_LIFT.
+  (1 + CARGO_EXPORT_LIFT * s.cargoTerminals);
 
 export const jobs = (s: GameState): number =>
   openOf(s, 'shop', SHOP_JOBS) + openOf(s, 'industry', INDUSTRY_JOBS);
@@ -1154,6 +1212,9 @@ export const parkCost = (s: GameState): number => PARK_BASE * PARK_GROWTH ** s.p
 export const landmarkCost = (s: GameState, landmark: Landmark): number =>
   landmark.base * landmark.growth ** landmarkCount(s, landmark.key);
 
+export const terminalCost = (s: GameState, terminal: Terminal): number =>
+  terminal.base * terminal.growth ** terminalCount(s, terminal.key);
+
 /** Services are not demand-priced: nobody haggles over a hospital. */
 export const serviceCost = (s: GameState, service: Service): number =>
   service.base * service.growth ** serviceCount(s, service.key);
@@ -1185,7 +1246,11 @@ export const income = (s: GameState): number => {
       // district bonus, and it is taken from the people on the buses rather
       // than from the people in the houses. It *is* taxed, like everything else
       // the city takes in.
-      fareIncome(s)) *
+      fareIncome(s) +
+      // Tourism, outside the bracket for the same reason and carrying its own
+      // happiness term — see `visitors`, where the mood is a multiplier rather
+      // than the floor `incomeMultiplier` applies to rent.
+      cruiseIncome(s)) *
     // The tax rate multiplies the whole ledger, which is why the happiness it
     // costs is worth more than it looks: happiness multiplies this same line
     // through `incomeMultiplier`, so the two terms compound against each other.
@@ -1217,6 +1282,9 @@ export const canBuildPark = (s: GameState): boolean =>
 export const canBuildLandmark = (s: GameState, landmark: Landmark): boolean =>
   landmarkCount(s, landmark.key) < landmarkSiteCapacity(s, landmark.key) &&
   s.cash >= landmarkCost(s, landmark);
+
+export const canBuildTerminal = (s: GameState, terminal: Terminal): boolean =>
+  terminalCount(s, terminal.key) < terminalCapacity(s) && s.cash >= terminalCost(s, terminal);
 
 export const canBuildService = (s: GameState, service: Service): boolean =>
   serviceCount(s, service.key) < serviceAllowed(s, service) && s.cash >= serviceCost(s, service);
@@ -1336,6 +1404,11 @@ export function landmarkBlocker(s: GameState, landmark: Landmark): string | null
   return landmarkCount(s, landmark.key) >= landmarkSiteCapacity(s, landmark.key)
     ? 'No sites left'
     : null;
+}
+
+export function terminalBlocker(s: GameState, terminal: Terminal): string | null {
+  if (!hasCoast(s)) return 'No coast yet';
+  return terminalCount(s, terminal.key) >= terminalCapacity(s) ? 'No berths left' : null;
 }
 
 export function parkBlocker(s: GameState): string | null {

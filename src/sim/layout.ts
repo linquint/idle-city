@@ -578,26 +578,52 @@ export function districtCoord(index: number): Coord {
 }
 
 /**
- * The district the port stands on: the first coastal one the city annexed, or
- * -1 if it has not reached the water yet.
+ * Which districts have the sea against them, in the order they were annexed.
  *
- * Scanned once and remembered, because it cannot change: the spiral is fixed,
- * so the lowest coastal index is fixed too, and a city that has reached the
- * coast never un-reaches it. `income` asks this every tick and a rescan there
- * would be forty-nine map lookups a frame for an answer that was settled days
- * ago. Reset drops the count back to 1, and the bound below is what makes that
- * read as "no port" again rather than as a port on a district nobody owns.
+ * Appended and remembered, because it cannot change: the spiral is fixed, so
+ * which of its positions are coastal is fixed too, and a city that has reached
+ * the water never un-reaches it. `income` asks this every tick, and rescanning
+ * forty-nine coordinates a frame for an answer settled days ago would be the
+ * one place the simulation allocated per step.
+ *
+ * The bound on every read is what makes `reset` work: the count drops back to
+ * 1, and a berth on a district nobody owns has to read as no berth at all
+ * rather than as a port floating on land the city sold.
  */
-let portScanned = 0;
-let portIndex = -1;
+const coastalIndices: number[] = [];
+let coastalScanned = 0;
 
-export function portDistrict(districts: number): number {
-  while (portIndex < 0 && portScanned < districts) {
-    const coord = districtCoord(portScanned);
-    if (districtIsCoastal(coord.x, coord.z)) portIndex = portScanned;
-    portScanned++;
+function scanCoastal(districts: number): void {
+  while (coastalScanned < districts) {
+    const coord = districtCoord(coastalScanned);
+    if (districtIsCoastal(coord.x, coord.z)) coastalIndices.push(coastalScanned);
+    coastalScanned++;
   }
-  return portIndex >= 0 && portIndex < districts ? portIndex : -1;
+}
+
+/** How many coastal districts the city owns. The berths a port may take. */
+export function coastalDistricts(districts: number): number {
+  scanCoastal(districts);
+  let owned = 0;
+  while (owned < coastalIndices.length && (coastalIndices[owned] as number) < districts) owned++;
+  return owned;
+}
+
+/** The i-th coastal district the city annexed, or -1 if it does not own one. */
+export function coastalDistrictAt(i: number, districts: number): number {
+  scanCoastal(districts);
+  const index = coastalIndices[i];
+  return index !== undefined && index < districts ? index : -1;
+}
+
+/**
+ * The district the first port stands on, or -1 before the city reaches water.
+ *
+ * Named separately from `coastalDistrictAt(0, ...)` because it is the question
+ * everything outside the port asks: whether the coast has been reached at all.
+ */
+export function portDistrict(districts: number): number {
+  return coastalDistrictAt(0, districts);
 }
 
 /**

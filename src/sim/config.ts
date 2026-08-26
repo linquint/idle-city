@@ -1283,6 +1283,110 @@ export const TRANSIT_LABOUR_DRAW = 0.35;
 export const FREE_TRANSPORT_REACH = 0.33;
 export const FREE_TRANSPORT_MOOD = 0.05;
 
+// ---------------------------------------------------------------------- port
+
+/**
+ * One half of a port. Two of them, and they buy different things.
+ *
+ * The same shape as a SERVICE or a LANDMARK — a count, a site, an exponential
+ * cost — because it is the same kind of thing, and because a one-off flat price
+ * would be meaningless in an economy this exponential: by the time a city has
+ * reached the coast it is earning more in a second than any fixed number is
+ * worth. What bounds them instead is land: one berth of each per *coastal*
+ * district, and a full city owns a handful of those.
+ *
+ * Bases are set against LANDMARKS, which is the nearest thing already priced:
+ * a cruise terminal is between a museum and a stadium, a cargo terminal past
+ * both, and the growth is steeper than either because a waterfront runs out of
+ * berths long before a district runs out of squares.
+ */
+export interface Terminal {
+  readonly key: 'cruise' | 'cargo';
+  readonly name: string;
+  readonly buildLabel: string;
+  readonly base: number;
+  readonly growth: number;
+}
+
+export const TERMINALS: readonly Terminal[] = [
+  {
+    key: 'cruise',
+    name: 'Cruise',
+    buildLabel: 'Open cruise terminal',
+    base: 20_000,
+    growth: 1.8,
+  },
+  {
+    key: 'cargo',
+    name: 'Cargo',
+    buildLabel: 'Build cargo terminal',
+    base: 28_000,
+    growth: 1.8,
+  },
+];
+
+/**
+ * Visitors a cruise terminal lands, as a share of the city's own population.
+ *
+ * Tied to residents rather than to a flat rate, and for the reason FARE_PER_RIDER
+ * is: a constant would be the opening hour's whole economy and a mature city's
+ * rounding error. What a berth is worth has to grow with the place it serves,
+ * because the reason anybody sails there is the place.
+ *
+ * Scaled by happiness on top, which is the mechanic rather than the flavour: it
+ * is the only income line in the game that goes to *zero* in a miserable city
+ * rather than merely to HAPPINESS_FLOOR. Nobody's holiday is somewhere grim.
+ */
+export const VISITORS_PER_RESIDENT = 0.03;
+
+/**
+ * What a visitor spends per second, against RENT's 0.14 a resident.
+ *
+ * Five times what somebody who lives there pays, and still a small line,
+ * because there are far fewer of them. Set against the transit fares rather
+ * than against rent, because that is the family it belongs to: both are trade
+ * income and both sit outside the multipliers rent goes through, so both are a
+ * far smaller share of a built-out city's ledger than of a young one's.
+ *
+ * Measured (tools/water.calibrate.mjs) on a city built out to its own frontage,
+ * with a full transit network for comparison. One cruise berth is worth about
+ * what the whole fare line is, at every size and at every rung of the ladder:
+ *
+ *   12 districts, 1 berth    fares 0.34% of the ledger, cruise 0.35%
+ *   25 districts, 4 berths   fares 0.16%, cruise 0.17% each
+ *   49 districts, 6 berths   fares 0.08%, cruise 0.09% each
+ *
+ * So a finished waterfront is worth something over half a percent of a mature
+ * ledger, which is the same order as everything else the city can buy that is
+ * not a building. What makes it worth buying is not the size of the line.
+ */
+export const VISITOR_SPEND = 0.7;
+
+/**
+ * What one cargo terminal adds to the export tap, as a fraction of it.
+ *
+ * It lifts EXPORT_BASE and EXPORT_PER_DISTRICT rather than sitting beside them,
+ * so there is still exactly one number the outside world's appetite is made of
+ * and one place to look when industrial demand is wrong. A parallel term would
+ * be a second export market that nothing else in the model knew about.
+ *
+ * Worth stating plainly: this matters most to a young city and least to an old
+ * one. The export tap is measured in level-0 plots while `demandScale` grows
+ * with the level ladder, so what a berth moves the industrial target by falls
+ * away as the city climbs. Measured, before `clampDemand`:
+ *
+ *   12 districts   +0.29 on detached housing, +0.07 on apartments, +0.02 on towers
+ *   49 districts   +0.98, +0.24, +0.06 for the same three
+ *
+ * That is the right way round rather than a shortfall — a port is how a city's
+ * industry gets going, not how a finished one stays busy — and the land gate
+ * keeps the strong end honest: a city that has only just reached the water owns
+ * exactly one berth, so the +0.29 is a lift and not a pin. Against
+ * TRANSIT_LABOUR_DRAW's measured 0.14, one berth early is the larger of the two
+ * levers a player has on industrial demand.
+ */
+export const CARGO_EXPORT_LIFT = 0.4;
+
 // -------------------------------------------------------------------- policy
 
 /**

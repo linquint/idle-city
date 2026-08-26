@@ -176,6 +176,17 @@ export interface GameState {
   museums: number;
   stadiums: number;
   /**
+   * Terminals on the city's waterfront: one berth of each per coastal district.
+   *
+   * Two counts, in the same shape as the landmarks above and for the same
+   * reason — the i-th terminal stands at the i-th coastal district's quay, so
+   * where a port *is* falls out of the count and the seed. What they buy is not
+   * symmetrical: a cruise terminal earns, scaled by happiness, and a cargo
+   * terminal lifts the export tap that industrial demand is drawn against.
+   */
+  cruiseTerminals: number;
+  cargoTerminals: number;
+  /**
    * Share of each type's buildings that are actually staffed, in [0, 1].
    *
    * In the save because it is integrated, not derived: a hospital opened ten
@@ -290,6 +301,8 @@ export function createState(now = Date.now()): GameState {
     parks: 0,
     museums: 0,
     stadiums: 0,
+    cruiseTerminals: 0,
+    cargoTerminals: 0,
     hospitals: 0,
     police: 0,
     fire: 0,

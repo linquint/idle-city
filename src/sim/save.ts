@@ -21,6 +21,7 @@ import {
   landmarkSiteCapacity,
   serviceAllowed,
   shopCapacity,
+  terminalCapacity,
 } from './economy';
 import {
   cohortOf,
@@ -318,6 +319,8 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // parks and civic buildings are.
     museums: count(r['museums']),
     stadiums: count(r['stadiums']),
+    cruiseTerminals: count(r['cruiseTerminals']),
+    cargoTerminals: count(r['cargoTerminals']),
     // v2 called them clinics, schools and stations and stood them on single
     // residential plots. They are the same slot — the building the city buys to
     // raise happiness — so the counts carry across by weight rather than being
@@ -383,6 +386,14 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // sheds the landmarks whose squares no longer exist.
   state.museums = Math.min(state.museums, landmarkSiteCapacity(state, 'museum'));
   state.stadiums = Math.min(state.stadiums, landmarkSiteCapacity(state, 'stadium'));
+  // One berth of each kind per *coastal* district, which is the clamp v8's
+  // water actually needs: a v7 save has no terminals to lose, but a v8 one
+  // whose district count was trimmed above may have had berths on land it no
+  // longer owns — and how many coastal districts a count buys is a property of
+  // the seed, not of the save.
+  const berths = terminalCapacity(state);
+  state.cruiseTerminals = Math.min(state.cruiseTerminals, berths);
+  state.cargoTerminals = Math.min(state.cargoTerminals, berths);
 
   const fitted = [
     fitZone(state.homes, state.abandonedR, r['homeLevels'], tier, state.mergedR, homeCapacity(state), mergeCapacity(state, 'home')),

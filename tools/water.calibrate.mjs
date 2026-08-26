@@ -10,10 +10,27 @@
  *   - whether a path of annexable tiles runs from the origin to a coastal one
  *   - how far the sea is from a coastal district, which is what a port looks at
  *   - how many lakes survive rejection
+ *   - what a berth is worth: the share of the ledger one cruise terminal adds,
+ *     and the industrial demand one cargo terminal moves, across the level
+ *     ladder, which is what the two constants in the port block are set from
  *
  *   node tools/water.calibrate.mjs [seeds]
  */
-import { DISTRICT_SPAN, CELL, MAX_DISTRICTS } from '../src/sim/config.ts';
+import {
+  CARGO_EXPORT_LIFT,
+  CELL,
+  DISTRICT_SPAN,
+  LEVEL_NAMES,
+  MAX_DISTRICTS,
+  TERMINALS,
+} from '../src/sim/config.ts';
+import {
+  demandScale,
+  exportMarket,
+  income,
+  terminalCapacity,
+} from '../src/sim/economy.ts';
+import { createState } from '../src/sim/state.ts';
 import { Waters, WATER_TILE } from '../src/sim/water.ts';
 
 const SEEDS = Number(process.argv[2] ?? 2000);
@@ -163,3 +180,83 @@ row('ring positions lost of 49', blockedIn49);
 row('rings needed for 49', ringsFor49);
 row('first coastal district #', firstCoastal);
 row('sea from that tile (units)', coastGap);
+
+// --------------------------------------------------------------------- port
+
+/**
+ * A built-out coastal city with its housing all at one level.
+ *
+ * The level ladder is the variable and everything else is held still, because
+ * both port constants are read against city *size* and the ladder is the only
+ * thing in this game that moves size by a factor of 300. Commerce and industry
+ * are filled to their own frontage so the demand reading is about the berth
+ * rather than about an empty district.
+ */
+function coastalCity(level, districts) {
+  const s = createState(0);
+  s.districts = districts;
+  s.cash = 1e12;
+  s.happiness = 1;
+  const footprint = level >= 2 ? 2 : 1;
+  s.homes = Math.floor((24 * districts) / footprint);
+  s.mergedR = footprint === 2 ? s.homes : 0;
+  s.homeLevels = Array.from({ length: 5 }, (_, l) => (l === level ? s.homes : 0));
+  s.shops = 45 * districts;
+  s.shopLevels = Array.from({ length: 5 }, (_, l) => (l === 0 ? s.shops : 0));
+  s.industry = 13 * districts;
+  s.industryLevels = Array.from({ length: 5 }, (_, l) => (l === 0 ? s.industry : 0));
+  s.hospitals = 6 * districts;
+  s.police = districts;
+  s.fire = districts;
+  s.depots = districts;
+  s.depotStaff = 1;
+  s.parks = 4 * districts;
+  return s;
+}
+
+/** The district count at which this build's own seed first owns a berth. */
+const FIRST_COAST = (() => {
+  let n = 1;
+  while (n < MAX_DISTRICTS && terminalCapacity(coastalCity(0, n)) === 0) n++;
+  return n;
+})();
+
+console.log('\nwhat a berth is worth, with housing all at one level');
+console.log(
+  `  ${'districts'.padStart(9)} ${'berths'.padStart(6)} ${'housing'.padEnd(16)}` +
+    ` ${'income/s'.padStart(9)} ${'fares'.padStart(7)} ${'1 cruise'.padStart(8)}` +
+    ` ${'1 cargo, I demand'.padStart(17)}`,
+);
+for (const districts of [FIRST_COAST, 25, MAX_DISTRICTS]) {
+  for (let level = 0; level < 5; level++) {
+    const base = coastalCity(level, districts);
+    // Against the transit fares, which is the nearest line already calibrated:
+    // both are trade income and both sit outside the multipliers rent goes
+    // through, so both are a far smaller share of a built-out city's ledger
+    // than of a young one's. That is the family a berth belongs to.
+    const fares = (income(base) - income({ ...base, freeTransport: true })) / income(base);
+    const cruise = (income({ ...base, cruiseTerminals: 1 }) - income(base)) / income(base);
+    // Unclamped: what the lift is worth to the *target* before `clampDemand`
+    // takes it. A built-out city's industrial demand is often pinned already,
+    // and a pinned reading says nothing about the berth.
+    const move = (CARGO_EXPORT_LIFT * exportMarket(base)) / demandScale(base);
+    console.log(
+      `  ${String(districts).padStart(9)} ${String(terminalCapacity(base)).padStart(6)}` +
+        ` ${(LEVEL_NAMES[level] ?? '').padEnd(16)} ${f(income(base), 0).padStart(9)}` +
+        ` ${`${(fares * 100).toFixed(2)}%`.padStart(7)} ${`${(cruise * 100).toFixed(2)}%`.padStart(8)}` +
+        ` ${`+${move.toFixed(3)}`.padStart(17)}`,
+    );
+  }
+}
+
+console.log('');
+const berths = terminalCapacity(coastalCity(0, MAX_DISTRICTS));
+for (const terminal of TERMINALS) {
+  let total = 0;
+  for (let n = 0; n < berths; n++) total += terminal.base * terminal.growth ** n;
+  console.log(
+    `  ${terminal.key.padEnd(8)} first ${f(terminal.base, 0).padStart(9)}` +
+      `  last ${f(terminal.base * terminal.growth ** (berths - 1), 0).padStart(10)}` +
+      `  whole waterfront ${f(total, 0)}`,
+  );
+}

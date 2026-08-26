@@ -16,6 +16,7 @@ import {
   TICK_RATE,
   type Landmark,
   type Service,
+  type Terminal,
 } from './config.ts';
 import {
   annexCost,
@@ -27,6 +28,7 @@ import {
   canBuildPark,
   canBuildService,
   canBuildShop,
+  canBuildTerminal,
   canMergeParcel,
   civicBuildings,
   clampDemand,
@@ -69,6 +71,7 @@ import {
   shopCost,
   staffAfterBuild,
   staffStep,
+  terminalCost,
   willAutoAnnex,
   wouldBurnOut,
   ZONE_KINDS,
@@ -813,6 +816,23 @@ export class Game {
     s.cash -= landmarkCost(s, landmark);
     if (landmark.key === 'museum') s.museums++;
     else s.stadiums++;
+    return true;
+  }
+
+  /**
+   * A terminal takes one of the berths the city's coastal districts carry.
+   *
+   * The two halves pay back in different currencies and neither is rent: a
+   * cruise terminal lands visitors who spend, scaled by how much they enjoyed
+   * it, and a cargo terminal lifts the export tap industrial demand is drawn
+   * against. See TERMINALS.
+   */
+  buildTerminal(terminal: Terminal): boolean {
+    const s = this.inner;
+    if (!canBuildTerminal(s, terminal)) return false;
+    s.cash -= terminalCost(s, terminal);
+    if (terminal.key === 'cruise') s.cruiseTerminals++;
+    else s.cargoTerminals++;
     return true;
   }
 
