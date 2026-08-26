@@ -32,16 +32,17 @@ import {
   type LevelCohort,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v7';
+export const SAVE_KEY = 'idle-city/save/v8';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v7 miss falls back through
+ * new build has not agreed to lose their city — so a v8 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v7',
   'idle-city/save/v6',
   'idle-city/save/v5',
   'idle-city/save/v4',
@@ -240,6 +241,23 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
 
   const base = createState(now);
   const version = Math.max(0, Math.floor(num(r['version'], 0)));
+  /**
+   * Districts, clamped to the land the city is allowed to own.
+   *
+   * v8 put water on the map, and the honest thing to say about what that costs
+   * an older save is: nothing, and everything. Nothing, because the save has
+   * never held a district *coordinate* — it holds a count, and the count is
+   * still legal, so a v7 city that owned twelve districts still owns twelve.
+   * Everything, because the spiral those twelve are read off now skips the wet
+   * positions, so a returning player's city is laid out around a coast that was
+   * not there before and every building in it stands somewhere new.
+   *
+   * There is no migration that avoids that. Storing the old coordinates to keep
+   * the old shape is the one thing the save is arranged never to do, and the
+   * alternative — dropping the districts whose old coordinates are now water —
+   * would take land a player paid for. Keeping the count and redrawing the map
+   * is the reading that loses nothing but the view.
+   */
   const districts = Math.min(MAX_DISTRICTS, Math.max(1, Math.floor(num(r['districts'], 1))));
   // v4's one global tier. Dropped as a field, but not as information: it is
   // what every building in a v4 city stood at, so it seeds the cohorts below.

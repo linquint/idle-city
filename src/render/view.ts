@@ -8,6 +8,7 @@ import { Cars } from './cars';
 import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight';
 import { Fires } from './fires';
 import { Ground } from './ground';
+import { Water } from './water';
 import { World } from './world';
 import { Courtyards, Parks, Zones, type ZoneMode } from './zones';
 
@@ -59,6 +60,10 @@ export class View {
 
     this.world = new World(canvas);
     this.ground = new Ground(this.world.scene, layout);
+    // Before the buildings, and with nothing kept: the water is built once from
+    // the seed and never reconciled against anything, so the view holds no
+    // reference to it. It was there before the city was.
+    new Water(this.world.scene);
     this.buildings = new Buildings(this.world.scene, layout);
     this.zones = new Zones(this.world.scene, layout);
     this.courtyards = new Courtyards(this.world.scene, layout);

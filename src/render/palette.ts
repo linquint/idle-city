@@ -13,6 +13,13 @@ export const PALETTE = {
   grass: 0x7a9557,
   grassDeep: 0x638049,
   sand: 0xc3b489,
+  // Water. Two tones and no third: the deep one is what a flat translucent
+  // plane reads as from the play camera, and the pale one is a band along every
+  // shore, which is the only cue that says where the land stops without a
+  // reflection or an animated normal to say it. Both are lit by the same key
+  // and hemisphere the city is, so the sea goes through the day with it.
+  water: 0x2f6076,
+  shallow: 0x6ba8ad,
   concrete: 0xc9d1da,
   tile: 0x8b5c42,
   parapet: 0x2e3e55,

@@ -1,5 +1,6 @@
 import { mixSeed } from '../core/rng.ts';
 import { generateDistrict, ZONE, type DistrictLayout, type Zone } from './citygen.ts';
+import { WATERS } from './water.ts';
 import {
   CELL,
   DISTRICT_SPAN,
@@ -509,13 +510,94 @@ function ringCoords(r: number): Coord[] {
   return order;
 }
 
+/**
+ * Whether a district-space coordinate is land the city could annex.
+ *
+ * Memoised, and it has to be: `districtCoord` asks this of every position in
+ * every ring it walks, and the answer is 256 samples of the water field. Keyed
+ * on the coordinate for the same reason `plans` is — a tile's dryness is a
+ * property of where it is, not of when anyone looked at it.
+ */
+const dryness = new Map<string, boolean>();
+
+export function districtIsDry(dx: number, dz: number): boolean {
+  const key = `${dx},${dz}`;
+  let dry = dryness.get(key);
+  if (dry === undefined) {
+    dry = WATERS.dry(dx, dz);
+    dryness.set(key, dry);
+  }
+  return dry;
+}
+
+/** Whether a district-space coordinate is dry land with the sea against it. */
+const coastline = new Map<string, boolean>();
+
+export function districtIsCoastal(dx: number, dz: number): boolean {
+  const key = `${dx},${dz}`;
+  let coastal = coastline.get(key);
+  if (coastal === undefined) {
+    coastal = WATERS.coastal(dx, dz);
+    coastline.set(key, coastal);
+  }
+  return coastal;
+}
+
 const coordCache: Coord[] = [];
 let cachedRings = 0;
 
-/** District index -> district-space coordinate. Stable forever. */
+/**
+ * How far out the spiral will look for land before giving up.
+ *
+ * A backstop on a loop whose termination depends on the water field, not a
+ * budget: MAX_DISTRICTS districts are found inside five rings for every seed
+ * measured (tools/water.calibrate.mjs), and sixty-four is far enough out that
+ * reaching it means the field is broken rather than merely wet.
+ */
+const MAX_RINGS = 64;
+
+/**
+ * District index -> district-space coordinate. Stable forever.
+ *
+ * Water positions are skipped rather than annexed and left empty, which is what
+ * makes `districts: 12` still mean twelve districts of land. The sequence is
+ * still a pure function of the seed — the water field is — so this stays the
+ * one rule that survives a reload, and a coordinate never moves once the cache
+ * has reached it.
+ */
 export function districtCoord(index: number): Coord {
-  while (coordCache.length <= index) coordCache.push(...ringCoords(cachedRings++));
+  while (coordCache.length <= index) {
+    if (cachedRings > MAX_RINGS) {
+      throw new Error(`no dry district for index ${index} inside ${MAX_RINGS} rings`);
+    }
+    for (const coord of ringCoords(cachedRings++)) {
+      if (districtIsDry(coord.x, coord.z)) coordCache.push(coord);
+    }
+  }
   return coordCache[index] as Coord;
+}
+
+/**
+ * The district the port stands on: the first coastal one the city annexed, or
+ * -1 if it has not reached the water yet.
+ *
+ * Scanned once and remembered, because it cannot change: the spiral is fixed,
+ * so the lowest coastal index is fixed too, and a city that has reached the
+ * coast never un-reaches it. `income` asks this every tick and a rescan there
+ * would be forty-nine map lookups a frame for an answer that was settled days
+ * ago. Reset drops the count back to 1, and the bound below is what makes that
+ * read as "no port" again rather than as a port on a district nobody owns.
+ */
+let portScanned = 0;
+let portIndex = -1;
+
+export function portDistrict(districts: number): number {
+  while (portIndex < 0 && portScanned < districts) {
+    const coord = districtCoord(portScanned);
+    if (districtIsCoastal(coord.x, coord.z)) portIndex = portScanned;
+    portScanned++;
+  }
+  return portIndex >= 0 && portIndex < districts ? portIndex : -1;
 }
 
 /**

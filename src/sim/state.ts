@@ -55,7 +55,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
 
 /**
  * The entire game, in a handful of fields.
