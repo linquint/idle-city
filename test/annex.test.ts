@@ -19,7 +19,7 @@ import {
   willAutoAnnex,
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
-import { createState, type GameState } from '../src/sim/state';
+import { cohortOf, createState, type GameState } from '../src/sim/state';
 import { built } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
@@ -75,12 +75,15 @@ describe('the annexation trigger', () => {
    */
   it('will not expand a city that is full of ruins', () => {
     const homes = homeCapacity(createState(0));
-    // A district is 70 plots and 63 of them are housing, commerce and industry,
-    // so writing off the whole housing stock takes the working share to 46/70.
+    // A district is 89 developable plots — 82 for sale plus the seven civic and
+    // university sites — so writing off the whole housing stock takes the
+    // working share well under the gate whatever else is standing.
     const ruined = state({
       ...ready(),
       abandonedR: homes,
-      homeLevels: [0, 0, 0, 0],
+      abandonedI: industryCapacity(createState(0)),
+      homeLevels: cohortOf(),
+      industryLevels: cohortOf(),
     });
     expect(activeDeveloped(ruined)).toBeLessThan(ANNEX_MIN_OCCUPANCY);
     expect(canAnnex(ruined)).toBe(false);

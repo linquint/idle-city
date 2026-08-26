@@ -13,14 +13,31 @@ export const CELL = 4;
 /**
  * Plots per side of a district. A district is the unit of expansion.
  *
- * Widened from 12 to make room for a 3x3 university. At 12 the land budget has
- * no solution: a 3x3 reserved before the 2x2 civic pass leaves
- * 90 - 18 - 28 - 11 - 6x4 - 9 = 0 courtyard plots on the only tuple that is
- * reachable often enough to sample for, which deletes park land outright. 13
- * is the smallest span that fits the university, six civic sites and the four
- * courtyards parks stand on at the same time. See FRONTAGE_TARGET.
+ * Widened from 12 to 13 to make room for a 3x3 university, and from 13 to 15 to
+ * make room for landmarks and for the land the next few features will want.
+ *
+ * The 13 -> 15 step is not additive, and the measurement is the reason the span
+ * moved rather than the budget being re-cut. A district's land was fully spoken
+ * for at 13: over 400 on-target districts every one of the 100 plots was
+ * claimed — 63 for sale, 24 civic, 9 university, 4 courtyard — with 0.00 free
+ * 3x3 squares and 0.05 free 2x2s, and those 2x2s were the park courtyards. A
+ * landmark could not stand anywhere without taking land from something else.
+ *
+ * 15 rather than 14, because 14 does not solve it either: it holds 121 plots,
+ * and after a 3x3 and a 2x2 landmark site that leaves one spare plot. 15 holds
+ * 144 and leaves twelve. Measured over 3,000 seeds a side, the plot count is
+ * 121 at 62.1% (span 14) and 144 at 62.9% (span 15) — both stronger modes than
+ * the 100 at 47.7% that span 13 sampled for, so the rejection sampler got
+ * cheaper rather than dearer.
+ *
+ * What the step costs is commercial land, and that cost is structural rather
+ * than a choice: `zoneBlocks` lays shops along block rings and a ring is
+ * exactly the frontage, so the commercial count is invariant *per span* — 31 at
+ * 13, 38 at 14, 45 at 15, at 100% of seeds each. There is no seed at 15 that
+ * offers 31. See FRONTAGE_TARGET for the tuple that follows and for what it
+ * re-opened.
  */
-export const DISTRICT_SPAN = 13;
+export const DISTRICT_SPAN = 15;
 
 /**
  * Streets are not a fixed grid. Each axis is walked in seeded steps inside this
@@ -39,42 +56,66 @@ export const ROAD_GAP_MAX = 7;
  * strand plots or hand out plots that do not exist. Generation rejection-samples
  * until it hits this number exactly.
  *
- * Measured, not guessed, and re-measured for the wider district. Over 4000 raw
- * (pre-sampling) attempts at DISTRICT_SPAN 13 the count takes six values — 81,
- * 90, 99, 100, 110, 121 — with a mode of 100 at 47.3%, ahead of 110 at 38.6%.
- * 100 is therefore the cheapest target to sample for, exactly as 90 was at span
- * 12 (51.3%). Worst inner sampling over 4000 seeds is 15 attempts against a
- * MAX_ATTEMPTS of 64. See tools/citygen.calibrate.mjs.
+ * Measured, not guessed, and re-measured for every span this has moved through.
+ * The count is always a product of the two axes' non-road line counts, so it
+ * takes only a handful of values. Over 3,000 raw (pre-sampling) attempts:
+ *
+ *   span 13   81, 90, 99, 100, 110, 121      mode 100 at 47.7%
+ *   span 14   100, 110, 120, 121, 132, 144   mode 121 at 62.1%
+ *   span 15   110, 120, 121, 132, 144        mode 144 at 62.9%
+ *
+ * 144 is therefore the cheapest target to sample for at the span the district
+ * now spans, and a better mode than 100 ever was. See
+ * tools/citygen.calibrate.mjs.
  */
-export const TARGET_PLOTS = 100;
+export const TARGET_PLOTS = 144;
 
 /**
- * What one district must offer once frontage, civic land and the university are
- * taken out.
+ * What one district must offer once every reservation has taken its share.
  *
- * Every building fronts a street, so only the 84 road-adjacent plots of a
- * district's 100 are ever for sale, and the site passes claim quads out of
- * those before housing sees them. A university is reserved first (one 3x3),
- * then `civicSites` takes 2x2 quads out of what is left, then the three build
- * lists are what remains. The land adds up exactly:
+ * Every building fronts a street, so only the road-adjacent plots of a
+ * district's 144 are ever for sale, and the site passes claim squares out of
+ * those before housing sees them. Two 3x3s are reserved first — the university
+ * and the large landmark — then every 2x2 the district still has is claimed and
+ * reserved, then the three build lists are what remains. The land adds up
+ * exactly:
  *
- *   24 + 31 + 8 for sale + 6 x 4 civic + 1 x 9 university + 4 courtyard = 100
+ *   24 + 45 + 13 for sale
+ *    + 9 x 4  2x2 squares   (6 civic, 1 small landmark, 2 spare)
+ *    + 2 x 9  3x3 squares   (1 university, 1 large landmark)
+ *    + 4      courtyard parks
+ *    + 4      courtyard spare
+ *   = 144
  *
- * Measured by reserving one 3x3 and running the existing 2x2 pass over 20,000
- * street plans, then tallying the tuple that falls out:
+ * so a district carries twelve deliberately empty plots — two 2x2 squares and
+ * four courtyard plots — which is the land the next few features get to use
+ * without this budget being re-cut under them again.
  *
- *   - road-adjacent plots: 84 of 100, invariant;
- *   - commercial frontage: 31, invariant, because `zoneBlocks` lays shops along
- *     block rings and a ring is exactly the frontage;
- *   - residential and industrial split the rest variably, so the tuple below is
- *     reached by 3.28% of plans — about 1 in 30 attempts, and at
- *     FRONTAGE_MAX_ATTEMPTS the probability of exhausting them is 3.9e-8.
+ * Measured over 20,000 street plans under exactly this reservation order, and
+ * the tuple is the one the numbers picked rather than one they were fitted to:
  *
- * The industrial 8 is what the university costs. Nothing else in this tuple is
- * a cut: residential grew 19 -> 24 and commerce 28 -> 31 with the wider
- * district, so an existing save gains housing land rather than losing it. The
- * alternative at span 12 was a tuple with zero courtyards, which would have
- * deleted park land — see DISTRICT_SPAN.
+ *   - commercial frontage: 45, at 100% of seeds. Invariant per span, because
+ *     `zoneBlocks` lays shops along block rings and a ring is exactly the
+ *     frontage. It was 31 at span 13 and there is no seed at 15 that offers 31;
+ *   - residential and industrial split the rest variably, and the 2x2 count
+ *     with them. 24/45/13/9 is the most reachable tuple that holds residential
+ *     at 24, at 2.63% — about 1 in 38 attempts, against the 3.28% the span-13
+ *     tuple reached. At FRONTAGE_MAX_ATTEMPTS the chance of exhausting them is
+ *     1.2e-6 a district.
+ *
+ * Residential staying at exactly 24 is the load-bearing part and the reason
+ * this tuple was chosen over the four more-reachable ones above it. Coverage is
+ * denominated in housing plots (see `Service.plots`), so every PLOTS_PER_*
+ * constant was solved against 24 housing plots a district — moving it would
+ * re-open the whole of that calibration for nothing. The land grew around
+ * housing rather than under it.
+ *
+ * What the wider district *did* re-open is commerce and industry: 31 -> 45 and
+ * 8 -> 13 plots a district, so `shopCapacity` is up 45% and `industryCapacity`
+ * 62%. Everything priced or cleared against those was re-derived — SHOP_BASE,
+ * SHOP_GROWTH, INDUSTRY_BASE, INDUSTRY_GROWTH, SHOP_THROUGHPUT, SUPPLY_DRAW,
+ * INDUSTRIAL_OUTPUT and EXPORT_PER_DISTRICT — and each carries its own
+ * measurement.
  *
  * `homeCapacity` multiplies a per-district constant by the district count, so a
  * variable split would either strand land or sell plots that do not exist. The
@@ -84,12 +125,23 @@ export const TARGET_PLOTS = 100;
  */
 export const FRONTAGE_TARGET = {
   residential: 24,
-  commercial: 31,
-  industrial: 8,
-  /** 2x2 civic quads per district. 6 x 4 = 24 plots, mostly dead interior. */
+  commercial: 45,
+  industrial: 13,
+  /**
+   * 2x2 quads a district claims, all of them reserved before the build lists
+   * are drawn. Six go to civic, one to a small landmark, and the rest are spare
+   * — reserving the whole claim rather than only the squares something stands
+   * on is what keeps `homeCapacity` independent of build order.
+   */
+  squares: 9,
+  /** 2x2 civic sites per district. 6 x 4 = 24 plots, mostly dead interior. */
   civicSites: 6,
+  /** 2x2 landmark sites per district, taken from the same claim. */
+  landmarkSmallSites: 1,
   /** 3x3 university quads per district. Exactly one, reserved before the rest. */
   universitySites: 1,
+  /** 3x3 landmark quads per district. Reserved alongside the university. */
+  landmarkLargeSites: 1,
 } as const;
 
 /**
@@ -109,14 +161,15 @@ export const FRONTAGE_TARGET = {
  * climbs — so a young city is job-rich and pulls people in, and a mature one is
  * worker-rich and has to go and find them work. That arc is the design.
  *
- * A district built out at one level, measured through `demandTargets`:
+ * A district built out at one level, measured through `demandTargets` at the
+ * wider district's 24 / 45 / 13 frontage:
  *
  *   level              w/j    demand R      C      I
- *   detached housing  0.13       +1.00  -0.98  +0.37
- *   apartments        0.52       +0.16  -0.12  +0.09
- *   towers            2.31       -0.10  +0.10  +0.02
- *   arcologies        9.90       -0.16  +0.15   0.00
- *   megastructures   39.60       -0.17  +0.16   0.00
+ *   detached housing  0.09       +1.00  -0.89  +0.41
+ *   apartments        0.34       +0.34  -0.10  +0.10
+ *   towers            1.56       -0.06  +0.10  +0.02
+ *   arcologies        6.69       -0.15  +0.15  +0.01
+ *   megastructures   26.76       -0.17  +0.16   0.00
  *
  * The fifth rung adds a hundredth of a demand point to a signal already
  * settled, which is `demandScale` doing its job: it divides by `cityScale`, so
@@ -481,50 +534,58 @@ export const HOME_BASE = 8;
 export const HOME_GROWTH = 1.14;
 
 /**
- * Commerce opens at about what a house costs and compounds a little faster.
+ * Commerce opens a third above what a house costs and compounds at exactly the
+ * same rate.
  *
- * 9 against HOME_BASE's 8 is a 12.5% gap at the first of each; by the twentieth
- * a shop is 246 against a home's 110, which is 2.2x — "a bit faster", not a
- * different curve. It was 11.3x at the first and 43.7x at the twentieth, which
- * is what made commerce a thing you unlocked rather than a thing you chose.
+ * The matched growth is what the wider district cost this pair, and it is the
+ * repair rather than a simplification. A shop used to compound faster than a
+ * house — 1.18 against 1.14 — which was affordable over 31 commercial plots and
+ * is not over 45: measured, filling one district's commerce went from 8,409 to
+ * 85,784, or 67.6x what its housing costs. The exponent is what exploded, so
+ * the exponent is what was fixed, and the whole gap moved onto the base.
  *
- * The number to keep an eye on is not this pair but the *plot ratio* it
- * compounds over. A district sells 28 commercial plots against 19 residential —
- * 47% more — so the faster curve runs over 47% more buildings, and filling one
- * district's commerce still costs 5,098 against housing's 632, or 8.1x. That
- * ratio is inverted against ZONE_SHARE (R 0.48, C 0.31), which was solved on
- * *zoned* land; only 19 of a district's 43 zoned residential plots front a
- * street, while all 28 commercial ones do. Pricing has to be judged against the
- * frontage split, and the 8.1x is what says commerce is still the expensive
- * half of a district even at these numbers — it was 169x before.
+ * What that buys is a price *order* that never inverts. A shop is 1.375 houses
+ * at the first of each and at the forty-fifth, where before the ratio ran from
+ * 1.13 to 8x. Curves that cross are the failure mode here: 9 / 1.11 was
+ * measured first, and because it undercuts housing from the fifth building on,
+ * the discount-chasing policy bought fifteen shops, four homes and no hospital,
+ * then sat at 18% happiness for the rest of the day with eleven in the bank —
+ * a livelock, not a stall. See test/economy.test.ts, which asserts the order at
+ * every step.
  *
- * One thing this genuinely changes: the demand surcharge starts biting. It used
- * to be inert in the opening ten minutes (worst +0%, 2 shops open under a
- * discount-chasing player) and peaked at +31% across a whole day. Now that
- * player has 12 shops open inside ten minutes and is paying +20% for them, and
- * the run peak is +56% against PRICE_SURCHARGE_MAX's +60% ceiling. The
- * surcharge is what stops "buy shops, ignore everything else" now, and it is
- * doing that four points short of saturating — so the cap still bites and is
- * still not the binding constraint. Raising it would be a change to the model
- * rather than a repair.
+ * 11 rather than 9, and that is the one number set against a target rather than
+ * against the curve. SHOP_BONUS is the strongest income multiplier in the game,
+ * and the constant it is judged by is what ten shops cost per 1.0 of it: 1,433
+ * two cycles ago, 423 after the last rebalance. At base 9 the matched curve put
+ * it at 348 and the greedy livelock above followed; at 11 it is 425, which is
+ * the number that was aimed at.
+ *
+ * Filling one district's commerce now costs 28,496 against housing's 1,269, or
+ * 22.5x over 88% more plots. Commerce is the expensive half of a district by
+ * *count* rather than by curve, which is a bound the plot split can be read off
+ * rather than a coincidence of two exponents.
  */
-export const SHOP_BASE = 9;
-export const SHOP_GROWTH = 1.18;
+export const SHOP_BASE = 11;
+export const SHOP_GROWTH = 1.14;
 
 /**
- * Industry is priced between a shop and a rezone.
+ * Industry opens dear and compounds at the same rate as everything else.
  *
- * It used to compound more slowly than commerce as well; bringing SHOP_GROWTH
- * down to 1.18 has left 1.2 marginally the steeper of the two, which is fine
- * and is not worth a retune: a district holds 11 industrial plots against 28
- * commercial, so the steeper curve runs over less than half the buildings and
- * a full district's industry still costs a fraction of its commerce. Measured
- * over 24 hours after the commercial rebalance, every policy still builds
- * industry out — 9 under auto-develop, 59 disciplined, 65 greedy — so the
- * demand loop is still what gates the zone rather than the price.
+ * The same repair the commercial curve took, for the same reason: a district
+ * holds 13 industrial plots now against 8, and 240 / 1.2 filled them for 11,639
+ * against the 3,960 the old eight cost. 120 / 1.14 fills the thirteen for 3,851
+ * — the pacing the constants around it were measured against — and matching
+ * HOME_GROWTH means the price order across the three zones is fixed by the base
+ * alone: a house opens at 8, a shop at 11, a works at 120, and that ordering
+ * holds at every building rather than up to some crossover.
+ *
+ * Industry being the dearest thing to start is the whole of its identity here.
+ * Measured over 24 hours, every policy still builds it out — 37 under
+ * auto-develop, 65 greedy — so the demand loop is still what gates the zone
+ * rather than the price.
  */
-export const INDUSTRY_BASE = 240;
-export const INDUSTRY_GROWTH = 1.2;
+export const INDUSTRY_BASE = 120;
+export const INDUSTRY_GROWTH = 1.14;
 
 /**
  * Each industrial building adds this share of base income.
@@ -543,22 +604,27 @@ export const ANNEX_GROWTH = 3.4;
  *
  * Left at 0.7 through the change that made annexation automatic, and measured
  * rather than assumed. Demand-neutral build-out, holding every home at one
- * level — a player who never buys into a surcharge. Re-measured after coverage
- * became land-denominated, against the reading before it:
+ * level — a player who never buys into a surcharge. Re-measured through the
+ * land-denominated coverage, the fifth level and the wider district:
  *
- *                     before   after
- *   detached housing   69.6%   63.5%
- *   apartments         68.6%   69.3%
- *   towers             67.1%   67.1%
- *   arcologies         65.7%   65.7%
- *   megastructures        —    65.7%
+ *                    span 13   span 15
+ *   detached housing   69.6%     64.2%
+ *   apartments         68.6%     67.4%
+ *   towers             67.1%     69.3%
+ *   arcologies         65.7%     69.7%
+ *   megastructures        —      69.1%
  *
- * Every rung sat under the gate before the change and every rung still does, so
- * this is the shape rather than a regression: a demand-neutral player does not
- * annex, and the two levels the change touched moved 6 points down and 1 up.
- * The fifth rung lands exactly where the fourth does. Annexation in an actual
- * run is unmoved — auto-develop still reaches 4 districts in 24 hours and its
- * first annex moved 1.23h -> 1.25h.
+ * Every rung sat under the gate before and every rung still does, so this is the
+ * shape rather than a regression: a demand-neutral player does not annex. The
+ * top three rungs sit closer to it than they did, which is the wider district's
+ * extra commercial land counting on both sides of the ratio.
+ *
+ * Annexation in an actual run got slower, and it is worth stating plainly rather
+ * than tuned away: a district is 44% bigger, so filling one to the gate takes
+ * 62 buildings rather than 49. Auto-develop's first annex moved 1.25h -> 1.63h
+ * and the discount-chasing policy's 2.46h -> 4.91h, both against a run that
+ * still reaches 5 and 9 districts inside a day. ANNEX_BASE is the lever if that
+ * ever needs pulling back.
  *
  * It is deliberate: a city of towers is worker-rich, its residential demand
  * runs negative, and filling the last of its housing means paying the surcharge
@@ -721,14 +787,20 @@ export const INDUSTRY_JOBS = LEVEL_FOOTPRINT.map(
 /**
  * Shopping trips generated per resident, against trips one shop can serve.
  *
- * Calibrated so commerce clears exactly at the zoning budget: 43 plots x 14
- * residents x 0.5 trips = 301 trips, and 28 commercial plots x 11 = 308. The
- * point is that the land budget and the demand model agree about what a
- * finished district looks like — otherwise the annexation gate asks for plots
- * the demand model is surcharging.
+ * Calibrated so commerce clears at the *frontage* a district actually sells,
+ * which is what the wider district moved. The labour market clears at 25.5
+ * residents a housing plot (see WORKING_SHARE), so a district's 24 housing
+ * plots hold 612 residents and generate 306 trips — and its 45 commercial plots
+ * serve 45 x 7 = 315. It was 31 plots x 11 = 341 against the same 306.
+ *
+ * Throughput fell rather than spend rising because that is what the extra land
+ * means: a district with 45 shops in it has smaller shops, not richer
+ * residents. The point is that the land budget and the demand model agree about
+ * what a finished district looks like — otherwise the annexation gate asks for
+ * plots the demand model is surcharging.
  */
 export const SPEND_PER_RESIDENT = 0.5;
-export const SHOP_THROUGHPUT = 11;
+export const SHOP_THROUGHPUT = 7;
 
 /** Trips one shop serves at each level. Per plot, as SHOP_JOBS explains. */
 export const SHOP_TRIPS = LEVEL_FOOTPRINT.map((f) => SHOP_THROUGHPUT * f) as readonly number[];
@@ -736,8 +808,14 @@ export const SHOP_TRIPS = LEVEL_FOOTPRINT.map((f) => SHOP_THROUGHPUT * f) as rea
 /**
  * Goods one shop pulls from industry, against what one industrial plot makes.
  *
- * Same calibration: 28 shops x 4 plus a base export of 60 is 172, and 19
- * industrial plots x 9 is 171.
+ * Left alone across the wider district, and measured rather than assumed to be
+ * safe. Industry is structurally *under*supplied against the demand its shops
+ * and the export tap generate, which is what keeps industrial demand positive
+ * and industry worth building: at span 13 a district's supply covered 36% of
+ * its draw (8 plots x 9 against 31 shops x 4 plus 74 of export), and at span 15
+ * it covers 46% (13 x 9 against 45 x 4 plus 74). The ratio moved toward balance
+ * rather than away from it, so the term needed no retune — see
+ * tools/economy.calibrate.mjs, where industrial demand pins under no policy.
  */
 export const SUPPLY_DRAW = 4;
 export const INDUSTRIAL_OUTPUT = 9;

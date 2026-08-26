@@ -57,12 +57,19 @@ multiplies one per-district constant by the district count, and it has to be
 true. `tools/citygen.test.mjs` guards all of it, and `npm run citygen:calibrate`
 prints the distribution the target came from.
 
-Only the 72 of those 90 plots that front a street are ever for sale; the rest is
-the interior of a deep block, and `civicSites` claims most of it for the 2x2
-quads hospitals, police and fire stations stand on. That leaves 19 housing, 28
-commercial and 11 industrial plots a district — and because the road-adjacent
-R/I split is *not* seed-invariant, `districtPlanAt` rejection-samples the
-district seed a second time until it is. Same trick, one level up.
+Only the 108 of those 144 plots that front a street could ever be for sale, and
+not all of them are: two 3x3 squares go to the university and a landmark, and
+`civicSites` then claims every 2x2 it can find — six for civic buildings, one
+for a smaller landmark, and two left deliberately empty. That leaves 24 housing,
+45 commercial and 13 industrial plots a district, plus eight interior courtyard
+plots of which four carry parks. Because the road-adjacent R/I split is *not*
+seed-invariant, `districtPlanAt` rejection-samples the district seed a second
+time until it is. Same trick, one level up.
+
+The commercial count is invariant for a different reason: `zoneBlocks` lays
+shops along block rings and a ring *is* the frontage, so it is 45 at this span
+at 100% of seeds. Widening the district is therefore never additive — it moves
+commercial capacity, and everything priced against it has to move too.
 
 **Deterministic placement.** The save says `{ homes: 412 }`, never 412
 positions. Which plot the 412th home stands on is a pure function of its index

@@ -416,8 +416,8 @@ export const MAX_ATTEMPTS = 64;
  *
  * The published version of this idea accepts anything within a tolerance band.
  * Here the tolerance is zero, because `PLOTS_PER_DISTRICT` is a constant the
- * economy multiplies by the district count: a district with 90 plots and a
- * district with 72 cannot share one capacity number without either stranding
+ * economy multiplies by the district count: a district with 144 plots and a
+ * district with 132 cannot share one capacity number without either stranding
  * land or letting the player buy a plot that does not exist. Widening the band
  * would mean rewriting `homeCapacity`/`shopCapacity` to walk the plot book,
  * which is a change to the economy this task is not allowed to make.

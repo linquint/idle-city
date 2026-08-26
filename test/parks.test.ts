@@ -34,6 +34,7 @@ import {
   CityLayout,
   districtPlanAt,
   planFor,
+  SPARE_PLOTS_PER_DISTRICT,
 } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
 import { built, housed, housedOn } from './levels';
@@ -68,7 +69,10 @@ describe('park land', () => {
   it('never touches a road, a civic site or a plot that is for sale', () => {
     for (let seed = 0; seed < 400; seed++) {
       const plan = planFor((0x9e3779b9 + seed * 2654435761) | 0);
-      expect(plan.courtyards).toHaveLength(BUILDABLE_PARKS_PER_DISTRICT);
+      // The courtyard list is longer than the park list now: the wider district
+      // leaves eight interior plots and parks take the first four. The rest are
+      // the spare land FRONTAGE_TARGET holds back, drawn as empty ground.
+      expect(plan.courtyards.length).toBeGreaterThanOrEqual(BUILDABLE_PARKS_PER_DISTRICT);
 
       const reserved = new Set(plan.sites.flatMap((site) => site.cells));
       const forSale = new Set([...plan.residential, ...plan.commercial, ...plan.industrial]);
@@ -89,9 +93,40 @@ describe('park land', () => {
       expect(seen.has(key)).toBe(false);
       seen.add(key);
     }
-    // And the plots are the district plans' own courtyards, in order.
+    // And the plots are the front of each district plan's own courtyard list.
     expect(seen.size).toBe(9 * BUILDABLE_PARKS_PER_DISTRICT);
-    expect(districtPlanAt(0, 0).courtyards).toHaveLength(BUILDABLE_PARKS_PER_DISTRICT);
+    expect(districtPlanAt(0, 0).courtyards.length).toBeGreaterThanOrEqual(
+      BUILDABLE_PARKS_PER_DISTRICT,
+    );
+    // Park land comes before spare land in the city's courtyard list, so the
+    // parks a nine-district city can lay out are its first 36 entries and none
+    // of them is spare. Getting this wrong bunches every park into the oldest
+    // districts, which is exactly what the wider district would have done.
+    const spare = new Set(layout.spare.map((c) => `${c.x},${c.z}`));
+    for (let i = 0; i < 9 * BUILDABLE_PARKS_PER_DISTRICT; i++) {
+      const cell = layout.parkCell(i);
+      expect(spare.has(`${cell.x},${cell.z}`)).toBe(false);
+    }
+  });
+
+  /**
+   * The land the wider district was widened for. It is reserved rather than
+   * sold, so the build lists still hit FRONTAGE_TARGET exactly, and nothing
+   * stands on it — the point is that the next feature has somewhere to go
+   * without this budget being re-cut under it.
+   */
+  it('leaves spare land nothing is standing on', () => {
+    for (let seed = 0; seed < 200; seed++) {
+      const plan = planFor((0x1234567 + seed * 2654435761) | 0);
+      const spareCourtyard = plan.courtyards.length - BUILDABLE_PARKS_PER_DISTRICT;
+      const spareSquares = plan.spareSquares.length * 4;
+      expect(spareCourtyard + spareSquares).toBe(SPARE_PLOTS_PER_DISTRICT);
+      // Spare squares are reserved, so they never reach a build list.
+      const forSale = new Set([...plan.residential, ...plan.commercial, ...plan.industrial]);
+      for (const site of plan.spareSquares) {
+        for (const cell of site.cells) expect(forSale.has(cell)).toBe(false);
+      }
+    }
   });
 
   /**

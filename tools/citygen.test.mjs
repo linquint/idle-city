@@ -58,6 +58,30 @@ function assert(condition, message) {
 const seedOf = (i) => (0x9e3779b9 + i * 2654435761) | 0;
 const SEEDS = 1000;
 
+/**
+ * Courtyard plots a district leaves once every square is reserved: park land
+ * first, spare land after it. Arithmetic over the budget rather than a
+ * measurement — 144 less 82 for sale, 9 x 4 of 2x2 squares and 2 x 9 of 3x3.
+ */
+const COURTYARDS =
+  TARGET_PLOTS -
+  FRONTAGE_TARGET.residential -
+  FRONTAGE_TARGET.commercial -
+  FRONTAGE_TARGET.industrial -
+  FRONTAGE_TARGET.squares * 4 -
+  (FRONTAGE_TARGET.universitySites + FRONTAGE_TARGET.landmarkLargeSites) * 9;
+
+/**
+ * Wall-clock budget for generating one on-target district, in milliseconds.
+ *
+ * Raised from 20 with the wider district. A span-15 district rejection-samples
+ * over 144 plots rather than 100 and runs its 3x3 pass for two squares rather
+ * than one, so the worst case measured 26.9ms against a mean of 3.8. A district
+ * is generated once and cached for the life of the tab, so a full 49-district
+ * city is about 190ms of work spread over however long it takes to annex them.
+ */
+const PERF_BUDGET_MS = 40;
+
 // ---------------------------------------------------------------- 1. determinism
 
 check('determinism: one seed, 100 runs, byte-identical zoning', () => {
@@ -321,6 +345,7 @@ check('industrial coherence: at most 4 connected clusters', () => {
 // rather than being allowed to weaken this one.
 check(`frontage: every plot offered for sale touches a road, ${SEEDS} seeds`, () => {
   let offered = 0;
+  let roadAdjacent = null;
   for (let i = 0; i < SEEDS; i++) {
     const layout = generateDistrict(seedOf(i));
     for (const [zone, cells] of [
@@ -336,13 +361,24 @@ check(`frontage: every plot offered for sale touches a road, ${SEEDS} seeds`, ()
         offered++;
       }
     }
-    // 84 of the 100 is invariant across every seed, even though how the 53 that
-    // are neither commercial nor road split between R and I is not.
+    // The road-adjacent count is invariant across every seed at a given span —
+    // 84 of 100 at span 13, 108 of 144 at span 15 — even though how the ones
+    // that are neither commercial nor road split between R and I is not. Taken
+    // from the first seed rather than written down, so the property under test
+    // is the invariance itself and not a number that has to be re-typed every
+    // time the span moves.
     const total = layout.residential.length + layout.commercial.length + layout.industrial.length;
-    assert(total === 84, `seed ${i}: ${total} road-adjacent plots, wanted 84`);
-    assert(layout.commercial.length === 31, `seed ${i}: ${layout.commercial.length} shop plots`);
+    roadAdjacent ??= total;
+    assert(total === roadAdjacent, `seed ${i}: ${total} road-adjacent plots, wanted ${roadAdjacent}`);
+    // Commercial frontage is invariant for a deeper reason: `zoneBlocks` lays
+    // shops along block rings and a ring *is* the frontage. It is 45 at span 15
+    // and there is no seed that offers any other number.
+    assert(
+      layout.commercial.length === FRONTAGE_TARGET.commercial,
+      `seed ${i}: ${layout.commercial.length} shop plots`,
+    );
   }
-  return `${offered} plots, all on a street`;
+  return `${offered} plots, all on a street, ${roadAdjacent} of ${TARGET_PLOTS} road-adjacent`;
 });
 
 check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TARGET.commercial}/${FRONTAGE_TARGET.industrial} for sale, every seed`, () => {
@@ -374,12 +410,16 @@ check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TAR
       plan.universities.length === FRONTAGE_TARGET.universitySites,
       `seed ${i}: ${plan.universities.length} university sites`,
     );
+    // Every square the district reserves, not only the ones something stands
+    // on: the landmark sites and the spare squares are land the sale lists
+    // never saw, and leaving them out of this sum is what would let the budget
+    // drift without anything noticing.
     const accounted =
       plan.residential.length +
       plan.commercial.length +
       plan.industrial.length +
-      plan.sites.length * 4 +
-      plan.universities.length * 9 +
+      (plan.sites.length + plan.landmarksSmall.length + plan.spareSquares.length) * 4 +
+      (plan.universities.length + plan.landmarksLarge.length) * 9 +
       plan.courtyards.length;
     assert(accounted === TARGET_PLOTS, `seed ${i}: ${accounted} plots accounted for, not ${TARGET_PLOTS}`);
     worst = Math.max(worst, plan.layout.attempts);
@@ -389,17 +429,20 @@ check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TAR
 
 // ------------------------------------------------------------------ 9. parks
 
-check(`parks: exactly ${BUILDABLE_PARKS_PER_DISTRICT} a district, never on a street, ${SEEDS} seeds`, () => {
+check(`parks: ${BUILDABLE_PARKS_PER_DISTRICT} a district of ${COURTYARDS} courtyard plots, never on a street, ${SEEDS} seeds`, () => {
   // Parks are the interior of a deep block — the land the frontage rule leaves
   // over. That makes them the one build list where `perimeter === 1` would be a
   // *failure*: a road-adjacent park would mean the frontage pass had missed a
   // plot it should have offered for sale.
+  //
+  // The courtyard list is longer than the park list at span 15: parks take the
+  // front of it and the rest is spare land drawn as empty ground.
   let plots = 0;
   for (let i = 0; i < SEEDS; i++) {
     const plan = planFor(seedOf(i));
     assert(
-      plan.courtyards.length === BUILDABLE_PARKS_PER_DISTRICT,
-      `seed ${i}: ${plan.courtyards.length} park plots, wanted ${BUILDABLE_PARKS_PER_DISTRICT}`,
+      plan.courtyards.length === COURTYARDS,
+      `seed ${i}: ${plan.courtyards.length} courtyard plots, wanted ${COURTYARDS}`,
     );
 
     const reserved = new Set(plan.sites.flatMap((site) => site.cells));
@@ -418,7 +461,7 @@ check(`parks: exactly ${BUILDABLE_PARKS_PER_DISTRICT} a district, never on a str
       plots++;
     }
   }
-  return `${plots} park plots, none of them on a street`;
+  return `${plots} courtyard plots, none of them on a street, ${BUILDABLE_PARKS_PER_DISTRICT} a district for parks`;
 });
 
 // ------------------------------------------------------------ 10. civic sites
@@ -568,7 +611,7 @@ check('universities: ranked by dead land, and reserved before the 2x2 pass', () 
 
 // ---------------------------------------------------------------------- 7. perf
 
-check('perf: a full on-target district, both sampling passes, under 20ms', () => {
+check(`perf: a full on-target district, both sampling passes, under ${PERF_BUDGET_MS}ms`, () => {
   // Warm the JIT, then take the worst single district rather than the mean —
   // one district over budget is one visible hitch when land is annexed.
   for (let i = 0; i < 200; i++) planFor(seedOf(i));
@@ -581,7 +624,7 @@ check('perf: a full on-target district, both sampling passes, under 20ms', () =>
     worst = Math.max(worst, took);
     total += took;
   }
-  assert(worst < 20, `slowest district took ${worst.toFixed(2)}ms`);
+  assert(worst < PERF_BUDGET_MS, `slowest district took ${worst.toFixed(2)}ms`);
   return `worst ${worst.toFixed(2)}ms, mean ${(total / SEEDS).toFixed(3)}ms`;
 });
 

@@ -540,13 +540,15 @@ describe('the v6 migration', () => {
     expect([back.driftR, back.driftC, back.driftI]).toEqual([0, 0, 0]);
   });
 
-  it('clamps counts to capacities that shrank under the save', () => {
-    // Industrial frontage went 11 -> 8 a district with the university, so a v4
-    // city that had filled its industry comes back with less of it. Housing and
-    // commerce grew, so those are carried whole.
-    const stuffed = migrate({ ...v4, homes: 19, shops: 20, industry: 11 }, 0)!;
+  it('clamps counts to the capacities of the build it opens on', () => {
+    // The guard that has to hold across every version bump, whichever way the
+    // land moved. A save is never trusted about how much of it there is: a
+    // count over the capacity is cut to the capacity and its cohort with it,
+    // and a count under it is carried whole.
+    const over = industryCapacity(createState(0)) + 40;
+    const stuffed = migrate({ ...v4, homes: 19, shops: 20, industry: over }, 0)!;
     expect(stuffed.industry).toBe(industryCapacity(stuffed));
-    expect(stuffed.industry).toBe(8);
+    expect(stuffed.industry).toBeLessThan(over);
     expect(stuffed.homes).toBe(19);
     expect(stuffed.shops).toBe(20);
     // And the cohort follows the clamp rather than outliving it.
@@ -557,8 +559,8 @@ describe('the v6 migration', () => {
     for (const raw of [
       v4,
       { ...v4, homes: 1e9, shops: 1e9, industry: 1e9 },
-      { ...v4, homeLevels: [3, 3, 3, 3], homes: 4 },
-      { ...v4, homeLevels: [1, 0, 0, 0], homes: 12 },
+      { ...v4, homeLevels: mix(3, 3, 3, 3), homes: 4 },
+      { ...v4, homeLevels: mix(1), homes: 12 },
       { ...v4, homeLevels: 'not an array' },
       { ...v4, homeLevels: [1, 2, 'x', null, 99, 99], homes: 9 },
       { ...v4, homes: 12, abandonedR: 5 },

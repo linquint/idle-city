@@ -57,8 +57,8 @@ export interface CivicSite {
  *
  * A site needs every plot in one zone and at least one of them on a street.
  * Commercial squares are excluded outright — shop frontage is the scarcest land
- * in the district (31 plots, every one of them on a street) and a hospital
- * sitting on four of them would cost the city a seventh of its commerce.
+ * in the district (45 plots, every one of them on a street) and a hospital
+ * sitting on four of them would cost the city a tenth of its commerce.
  *
  * Sites are ranked by how much *dead* land they swallow, descending. A square at
  * the edge of a deep block covers street plots and interior plots that could
@@ -132,17 +132,23 @@ export function civicSites(layout: DistrictLayout, taken = new Set<number>()): r
  *
  * Two plots, never four. Measured over 100 districts by greedily pairing
  * frontage into 2x1 dominoes and then pairing those into 2x2 quads
- * (tools/parcels.calibrate.mjs):
+ * (tools/parcels.calibrate.mjs), and re-measured at the wider district:
  *
- *   residential  24 plots -> 10.5 dominoes (min 10), 3.0 unpairable (max 4), 0.0 quads
- *   commercial   31 plots -> 15.0 dominoes (min 15), 1.0 unpairable (max 1), 0.4 quads
- *   industrial    8 plots ->  3.0 dominoes (min  3), 2.0 unpairable (max 2), 0.0 quads
+ *   residential  24 plots -> 10.9 dominoes (min  9), 2.2 unpairable (max 6), 0.0 quads
+ *   commercial   45 plots -> 22.0 dominoes (min 22), 1.0 unpairable (max 1), 2.1 quads
+ *   industrial   13 plots ->  5.7 dominoes (min  5), 1.7 unpairable (max 3), 0.0 quads
  *
- * Quads effectively do not exist, and that is structural rather than unlucky:
- * `universitySites` and `civicSites` are ranked on dead land, so they take
- * exactly the deep-block interiors, and what is left for sale is a one-plot-wide
- * perimeter ring. A 2x2 merge would have to be carved back out of park or civic
- * land. Do not "fix" the ordering below to find quads — there are none to find.
+ * Residential quads still do not exist, and that is structural rather than
+ * unlucky: `universitySites` and `civicSites` are ranked on dead land, so they
+ * take exactly the deep-block interiors, and what is left for sale is a
+ * one-plot-wide perimeter ring. A 2x2 merge would have to be carved back out of
+ * park or civic land. Do not "fix" the ordering below to find quads — there are
+ * none to find, and it is housing the footprint ladder is a statement about.
+ *
+ * Commerce found two a district at span 15 where it had 0.4 at span 13, which
+ * is the extra frontage doubling back on itself in the deeper blocks. Nothing
+ * reads them: LEVEL_FOOTPRINT stops at two for every zone, so a commercial quad
+ * is just a pair of dominoes that happen to be adjacent.
  */
 
 /**
@@ -210,7 +216,20 @@ export interface DistrictPlan {
   readonly layout: DistrictLayout;
   /** 3x3 university sites, reserved before anything else. */
   readonly universities: readonly CivicSite[];
+  /** 3x3 landmark sites, reserved alongside the universities. */
+  readonly landmarksLarge: readonly CivicSite[];
+  /** 2x2 landmark sites, taken off the front of the same claim `sites` is. */
+  readonly landmarksSmall: readonly CivicSite[];
   readonly sites: readonly CivicSite[];
+  /**
+   * 2x2 squares the district claimed and reserved but nothing stands on.
+   *
+   * Deliberately empty land, and the reason it is *reserved* rather than left
+   * for sale: the build lists have to hit FRONTAGE_TARGET exactly, so a square
+   * handed back to them would move the count the sampler is pinning. Held for
+   * whatever the city learns to build next. See FRONTAGE_TARGET.
+   */
+  readonly spareSquares: readonly CivicSite[];
   /**
    * Build order per zone: road-adjacent, clear of every reserved site, and
    * ordered parcel by parcel — see `parcelOrder`.
@@ -227,21 +246,41 @@ export interface DistrictPlan {
 }
 
 /**
- * Reserves the university and every civic site up front and hands back what is
- * left.
+ * Reserves every square a district owes before the build lists are drawn, and
+ * hands back what is left.
  *
- * The university goes first because a 3x3 is the scarce shape: the 2x2 pass
- * would otherwise fragment the only squares big enough to hold one. Reserving
- * the whole site list rather than the sites a building has actually landed on is
- * what keeps `homeCapacity` independent of build order — the plot a house gets
- * must be recoverable from `{ homes: 41 }` alone, and it would not be if opening
- * a hospital shortened the housing list under it.
+ * The 3x3s go first because a 3x3 is the scarce shape: the 2x2 pass would
+ * otherwise fragment the only squares big enough to hold one. There are two of
+ * them now — the university and the large landmark — and they are taken off the
+ * same ranked list in order, so which is which is a pure function of the layout
+ * rather than of what the city has built.
+ *
+ * Reserving the whole 2x2 claim rather than the squares a building has actually
+ * landed on is what keeps `homeCapacity` independent of build order — the plot
+ * a house gets must be recoverable from `{ homes: 41 }` alone, and it would not
+ * be if opening a hospital shortened the housing list under it. The claim is
+ * then split by position: the first square is the small landmark's, the next six
+ * are civic, and whatever is past them is spare land nothing stands on yet.
  */
 export function districtPlan(layout: DistrictLayout): DistrictPlan {
   const reserved = new Set<number>();
-  const universities = universitySites(layout).slice(0, FRONTAGE_TARGET.universitySites);
+  const threes = universitySites(layout);
+  const universities = threes.slice(0, FRONTAGE_TARGET.universitySites);
+  const landmarksLarge = threes.slice(
+    FRONTAGE_TARGET.universitySites,
+    FRONTAGE_TARGET.universitySites + FRONTAGE_TARGET.landmarkLargeSites,
+  );
   for (const site of universities) for (const c of site.cells) reserved.add(c);
-  const sites = civicSites(layout, reserved);
+  for (const site of landmarksLarge) for (const c of site.cells) reserved.add(c);
+  const squares = civicSites(layout, reserved);
+  const landmarksSmall = squares.slice(0, FRONTAGE_TARGET.landmarkSmallSites);
+  const sites = squares.slice(
+    FRONTAGE_TARGET.landmarkSmallSites,
+    FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites,
+  );
+  const spareSquares = squares.slice(
+    FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites,
+  );
 
   const keep = (cells: readonly number[]): number[] => cells.filter((c) => !reserved.has(c));
   // Paired after the sites are reserved, never before: a plot a hospital is
@@ -259,7 +298,10 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
   return {
     layout,
     universities,
+    landmarksLarge,
+    landmarksSmall,
     sites,
+    spareSquares,
     residential: residential.cells,
     commercial: commercial.cells,
     industrial: industrial.cells,
@@ -270,14 +312,25 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
   };
 }
 
-/** Whether a plan hits the counts every district has to agree on. */
+/**
+ * Whether a plan hits the counts every district has to agree on.
+ *
+ * The *whole* 2x2 claim is pinned rather than only the squares something stands
+ * on, because the claim is what is reserved and therefore what the build lists
+ * are drawn from what is left of. Pinning six and letting the surplus vary
+ * would leave the sale counts varying with it.
+ */
 function onTarget(plan: DistrictPlan): boolean {
   return (
     plan.residential.length === FRONTAGE_TARGET.residential &&
     plan.commercial.length === FRONTAGE_TARGET.commercial &&
     plan.industrial.length === FRONTAGE_TARGET.industrial &&
     plan.sites.length === FRONTAGE_TARGET.civicSites &&
-    plan.universities.length === FRONTAGE_TARGET.universitySites
+    plan.landmarksSmall.length === FRONTAGE_TARGET.landmarkSmallSites &&
+    plan.spareSquares.length ===
+      FRONTAGE_TARGET.squares - FRONTAGE_TARGET.civicSites - FRONTAGE_TARGET.landmarkSmallSites &&
+    plan.universities.length === FRONTAGE_TARGET.universitySites &&
+    plan.landmarksLarge.length === FRONTAGE_TARGET.landmarkLargeSites
   );
 }
 
@@ -356,7 +409,8 @@ export const worldZ = (z: number): number => (z - OFFSET) * CELL;
 export const DISTRICT_WIDTH = DISTRICT_SPAN * CELL;
 
 /**
- * Zoned land per district: 90 plots, whatever the streets do.
+ * Zoned land per district: every plot that is not a street, whatever the
+ * streets do.
  *
  * This is *not* how much of it can be built on. It is the denominator the
  * zoning budget splits and nothing else — see the four constants below, which
@@ -367,38 +421,56 @@ export const PLOTS_PER_DISTRICT = TARGET_PLOTS;
 
 /**
  * Buildable land per district: the plots that front a street and are not
- * reserved for a site. 24 + 31 + 8 = 63 of the 100 zoned plots are for sale, 24
- * more are held for the six 2x2 civic sites, 9 for the one 3x3 university, and
- * the last 4 are interior land the renderer draws as courtyard.
+ * reserved for a square. 24 + 45 + 13 = 82 of the 144 zoned plots are for sale,
+ * 36 more are held for the nine 2x2 squares, 18 for the two 3x3s — the
+ * university and the large landmark — and the last 8 are interior land the
+ * renderer draws as courtyard, half of it park and half of it spare.
  *
  * These are constants because `districtPlanAt` reseeds until they are — the
  * road-adjacent split is not seed-invariant on its own. See FRONTAGE_TARGET.
  */
 /**
- * Park land per district: whatever is left once frontage, civic sites and the
- * university are taken out. Arithmetic, not a measurement — 100 zoned plots less
- * 24 + 31 + 8 for sale, 6 x 4 held for civic sites and 1 x 9 for the university
- * leaves exactly 4, in every district, for every seed, because `districtPlanAt`
- * reseeds until the other numbers are exact. These are the plots `districtPlan`
- * already reports as courtyards.
+ * Park land per district, in courtyard plots.
  *
- * Holding this at 4 across the university change is the whole reason
- * DISTRICT_SPAN moved: at span 12 the reachable tuple left zero, and park land
- * at zero is a happiness term that can never be earned.
+ * Stated rather than derived, which is what the wider district changed. It used
+ * to be "whatever is left", and at span 13 what was left was exactly 4 — but at
+ * span 15 the courtyard remainder is 8, and letting parks take all of it would
+ * double park land against housing that did not move. PLOTS_PER_PARK is 6 and a
+ * district holds 24 housing plots, so 4 parks cover its housing exactly; a
+ * remainder-derived 8 would cover it twice over and delete recreation as a
+ * happiness term worth earning.
+ *
+ * The other four courtyard plots are spare. The renderer already draws every
+ * courtyard past `state.parks` as empty ground, so they read as what they are.
  */
-export const BUILDABLE_PARKS_PER_DISTRICT =
+export const BUILDABLE_PARKS_PER_DISTRICT = 4;
+
+/**
+ * Land a district holds that nothing stands on: the two spare 2x2 squares, and
+ * the courtyard plots parks do not take.
+ *
+ * Deliberate, and the reason DISTRICT_SPAN moved further than one landmark
+ * needed — a budget with no slack in it is one that has to be re-cut every time
+ * the game learns to build something. Derived rather than stated so it cannot
+ * drift from the numbers above it.
+ */
+export const SPARE_PLOTS_PER_DISTRICT =
   TARGET_PLOTS -
   FRONTAGE_TARGET.residential -
   FRONTAGE_TARGET.commercial -
   FRONTAGE_TARGET.industrial -
-  FRONTAGE_TARGET.civicSites * 4 -
-  FRONTAGE_TARGET.universitySites * 9;
+  FRONTAGE_TARGET.squares * 4 -
+  (FRONTAGE_TARGET.universitySites + FRONTAGE_TARGET.landmarkLargeSites) * 9 -
+  BUILDABLE_PARKS_PER_DISTRICT +
+  (FRONTAGE_TARGET.squares - FRONTAGE_TARGET.civicSites - FRONTAGE_TARGET.landmarkSmallSites) * 4;
 
 export const BUILDABLE_RESIDENTIAL_PER_DISTRICT = FRONTAGE_TARGET.residential;
 export const BUILDABLE_COMMERCIAL_PER_DISTRICT = FRONTAGE_TARGET.commercial;
 export const BUILDABLE_INDUSTRIAL_PER_DISTRICT = FRONTAGE_TARGET.industrial;
 export const CIVIC_SITES_PER_DISTRICT = FRONTAGE_TARGET.civicSites;
 export const UNIVERSITY_SITES_PER_DISTRICT = FRONTAGE_TARGET.universitySites;
+export const LANDMARK_LARGE_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkLargeSites;
+export const LANDMARK_SMALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkSmallSites;
 
 /**
  * The order in which a ring of districts gets annexed.
@@ -629,6 +701,12 @@ interface DistrictPlots {
   readonly civic: Coord[];
   /** Lower-left plot of each university site, in site order. */
   readonly universities: Coord[];
+  /** Lower-left plot of each 3x3 landmark site, in site order. */
+  readonly landmarksLarge: Coord[];
+  /** Lower-left plot of each 2x2 landmark site, in site order. */
+  readonly landmarksSmall: Coord[];
+  /** Lower-left plot of each 2x2 square nothing stands on. */
+  readonly spareSquares: Coord[];
   readonly courtyards: Coord[];
   readonly roads: Coord[];
 }
@@ -665,6 +743,9 @@ function placeDistrict(index: number): DistrictPlots {
     industrial: plan.industrial.map(toGlobal),
     civic: plan.sites.map((site) => toGlobal(site.cell)),
     universities: plan.universities.map((site) => toGlobal(site.cell)),
+    landmarksLarge: plan.landmarksLarge.map((site) => toGlobal(site.cell)),
+    landmarksSmall: plan.landmarksSmall.map((site) => toGlobal(site.cell)),
+    spareSquares: plan.spareSquares.map((site) => toGlobal(site.cell)),
     courtyards: plan.courtyards.map(toGlobal),
     roads,
   };
@@ -720,20 +801,58 @@ export class CityLayout {
   private readonly _industrial: Coord[] = [];
   private readonly _civic: Coord[] = [];
   private readonly _universities: Coord[] = [];
-  private readonly _courtyards: Coord[] = [];
+  /**
+   * Landmark sites, appended district by district exactly as every other site
+   * list is. Two lists because a landmark comes in two sizes and they stand on
+   * different squares — see FRONTAGE_TARGET.
+   */
+  private readonly _landmarksLarge: Coord[] = [];
+  private readonly _landmarksSmall: Coord[] = [];
+  /** Lower-left plot of every 2x2 square held back with nothing on it. */
+  private readonly _spareSquares: Coord[] = [];
+  /**
+   * Interior plots, park land first and spare land after it.
+   *
+   * Two lists rather than one, and the wider district is why. A district now
+   * leaves eight courtyard plots where `parkCapacity` still only counts four, so
+   * appending all eight to a single list would put the city's fifth park on the
+   * first district's *spare* land instead of on the second district's park land
+   * — parks would bunch up in the oldest districts and the spare plots would
+   * quietly disappear under them. Splitting the two at the district and joining
+   * them at the city keeps `parkCell(i)` the i-th park and leaves the renderer's
+   * rule intact: everything past `state.parks` in `courtyards` is empty ground.
+   */
+  private readonly _parks: Coord[] = [];
+  private readonly _spare: Coord[] = [];
+  /** `_parks` then `_spare`, rebuilt in `ensure` so reading it allocates nothing. */
+  private _courtyards: Coord[] = [];
   private readonly _districts: District[] = [];
 
   /** Materialises districts up to `count`. Idempotent and cheap to over-call. */
   ensure(count: number): this {
     for (let i = this.materialised; i < count; i++) {
-      const { residential, commercial, industrial, civic, universities, courtyards, roads } =
-        placeDistrict(i);
+      const {
+        residential,
+        commercial,
+        industrial,
+        civic,
+        universities,
+        landmarksLarge,
+        landmarksSmall,
+        spareSquares,
+        courtyards,
+        roads,
+      } = placeDistrict(i);
       this._residential.push(...residential);
       this._commercial.push(...commercial);
       this._industrial.push(...industrial);
       this._civic.push(...civic);
       this._universities.push(...universities);
-      this._courtyards.push(...courtyards);
+      this._landmarksLarge.push(...landmarksLarge);
+      this._landmarksSmall.push(...landmarksSmall);
+      this._spareSquares.push(...spareSquares);
+      this._parks.push(...courtyards.slice(0, BUILDABLE_PARKS_PER_DISTRICT));
+      this._spare.push(...courtyards.slice(BUILDABLE_PARKS_PER_DISTRICT));
       const c = districtCoord(i);
       this._districts.push({
         index: i,
@@ -746,6 +865,7 @@ export class CityLayout {
         roads,
       });
     }
+    if (count > this.materialised) this._courtyards = this._parks.concat(this._spare);
     this.materialised = Math.max(this.materialised, count);
     return this;
   }
@@ -869,18 +989,54 @@ export class CityLayout {
    * every one of them, and it is why a park never has to be told where it is.
    */
   parkCell(i: number): Coord {
-    return this._courtyards[i] as Coord;
+    return this._parks[i] as Coord;
   }
 
   /**
-   * Every interior plot the city owns, park or not.
+   * Every interior plot the city owns, park land first and spare land after it.
    *
-   * The first `parks` of these carry a park; the rest are drawn as courtyard.
-   * One list rather than two, because a park does not move a plot from one
-   * category to another — it puts something on land the city already had.
+   * The first `parks` of these carry a park; everything past that is drawn as
+   * courtyard — the park plots not yet laid out, then the plots no park will
+   * ever stand on. One list at the city level rather than two, because a park
+   * does not move a plot from one category to another: it puts something on land
+   * the city already had.
    */
   get courtyards(): readonly Coord[] {
     return this._courtyards;
+  }
+
+  /** Interior plots held back for whatever the city learns to build next. */
+  get spare(): readonly Coord[] {
+    return this._spare;
+  }
+
+  /** Lower-left plot of every 2x2 square held back with nothing on it. */
+  get spareSquares(): readonly Coord[] {
+    return this._spareSquares;
+  }
+
+  /**
+   * Lower-left plot of the i-th landmark site of each size.
+   *
+   * The same shape as `civicSiteCell` and for the same reason: a landmark's
+   * position is a pure function of its ordinal and the layout, so the save
+   * carries a count and nothing else. There is one site of each size per
+   * district, so the i-th is the i-th district's.
+   */
+  landmarkLargeSiteCell(i: number): Coord {
+    return this._landmarksLarge[i] as Coord;
+  }
+
+  landmarkSmallSiteCell(i: number): Coord {
+    return this._landmarksSmall[i] as Coord;
+  }
+
+  get landmarkLargeSites(): number {
+    return this._landmarksLarge.length;
+  }
+
+  get landmarkSmallSites(): number {
+    return this._landmarksSmall.length;
   }
 
   /** Every plot of one zone, in build order. Used by the zone overlay. */
