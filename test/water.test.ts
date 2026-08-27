@@ -45,6 +45,19 @@ const tile = (waters: Waters, u: number, v: number): { x: number; z: number } =>
     ? { x: waters.coast.sign * u, z: v }
     : { x: v, z: waters.coast.sign * u };
 
+/**
+ * How long the seed sweeps in this file are allowed to take.
+ *
+ * Stated, the way `parcels.test.ts` states its own, because these are property
+ * sweeps over hundreds of seeds doing real geometry per seed — a second or
+ * three each is what they cost, and vitest's 5-second default leaves them one
+ * slow shared runner away from failing for no reason anyone can act on. It is
+ * a declaration that the work is heavy, not a licence for it to get heavier:
+ * the one test here that went over the default was over it because it made
+ * 360,600 `expect` calls, and that was fixed rather than waited out.
+ */
+const SWEEP = { timeout: 30_000 } as const;
+
 describe('the water field', () => {
   it('gives the same answer every time it is asked', () => {
     const waters = new Waters(SEED);
@@ -115,22 +128,34 @@ describe('the water field', () => {
     const far = (COAST_RINGS + 1.5) * WATER_TILE - DRY_MARGIN;
     expect(COAST_DISTANCE - COAST_WAVE).toBeGreaterThanOrEqual(near);
     expect(COAST_DISTANCE + COAST_WAVE).toBeLessThan(far);
+
+    // Swept into a min and a max and asserted once, rather than asserted at
+    // every sample. The property is exactly a min and a max, so this checks the
+    // same 180,300 shore readings — but `expect` is the expensive part of a
+    // sweep this size, and two of them run in a twentieth of the time 360,600
+    // did. Which mattered: at 4.6 seconds locally this test sat on vitest's
+    // 5-second default and went over it on CI's slower runner.
+    let low = Infinity;
+    let high = -Infinity;
     for (const seed of seeds(300)) {
       const w = new Waters(seed);
       for (let v = -900; v <= 900; v += 3) {
-        expect(w.shore(v)).toBeGreaterThanOrEqual(COAST_DISTANCE - COAST_WAVE - 1e-9);
-        expect(w.shore(v)).toBeLessThanOrEqual(COAST_DISTANCE + COAST_WAVE + 1e-9);
+        const shore = w.shore(v);
+        if (shore < low) low = shore;
+        if (shore > high) high = shore;
       }
     }
+    expect(low).toBeGreaterThanOrEqual(COAST_DISTANCE - COAST_WAVE - 1e-9);
+    expect(high).toBeLessThanOrEqual(COAST_DISTANCE + COAST_WAVE + 1e-9);
   });
 });
 
 describe('water and the land the city can annex', () => {
-  it('leaves the origin district dry, for every seed', () => {
+  it('leaves the origin district dry, for every seed', SWEEP, () => {
     for (const seed of seeds(1_000)) expect(new Waters(seed).dry(0, 0)).toBe(true);
   });
 
-  it('runs a dry corridor from the origin to a coastal district, for every seed', () => {
+  it('runs a dry corridor from the origin to a coastal district, for every seed', SWEEP, () => {
     // The guarantee, checked the way the comment on COAST_DISTANCE claims it:
     // straight out along the axis, every tile dry, the last one coastal.
     for (const seed of seeds(1_000)) {
@@ -146,7 +171,7 @@ describe('water and the land the city can annex', () => {
     }
   });
 
-  it('reaches a coastal district by walking only annexable ones, for every seed', () => {
+  it('reaches a coastal district by walking only annexable ones, for every seed', SWEEP, () => {
     // The same guarantee without assuming the route: a breadth-first walk over
     // dry tiles only, which is what a player annexing outward actually does.
     for (const seed of seeds(400)) {
@@ -207,7 +232,7 @@ describe('water and the land the city can annex', () => {
     }
   });
 
-  it('keeps the opening ring of districts clear of river and lake', () => {
+  it('keeps the opening ring of districts clear of river and lake', SWEEP, () => {
     // CORE_CLEAR, measured rather than trusted: a young city that could not
     // annex its own neighbours would spend its first day scattered.
     for (const seed of seeds(500)) {
