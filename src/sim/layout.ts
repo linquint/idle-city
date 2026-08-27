@@ -504,6 +504,34 @@ export function districtZonePlots(z: Zoning, index: number, zone: Zone): number 
 }
 
 /**
+ * Which district a plot index falls in, for a zone's flat plot list.
+ *
+ * A walk rather than a division, and that is the whole of it: the flat lists are
+ * districts concatenated in annexation order, and each district contributes
+ * `districtZonePlots` of them — 8 to 61 for residential or commercial, not a
+ * constant. Dividing by the old fixed 24 / 45 / 13 was right only while every
+ * district sold the same split, and it has not been since zoning floated: the
+ * inspector reading `floor(plot / 24)` names the wrong district for most of a
+ * surveyed city, and is off by three districts at the far end of eight.
+ *
+ * O(districts) of O(1) lookups, the same walk `zonePlots` measured at 0.31 us
+ * over 49 districts — and this one runs once per inspector card rather than per
+ * tick, so it is not worth memoising and is worth being able to read.
+ */
+export function districtOfPlot(z: Zoning, zone: Zone, plot: number): number {
+  const target = Math.max(0, Math.floor(plot));
+  let end = 0;
+  for (let i = 0; i < z.districts; i++) {
+    end += districtZonePlots(z, i, zone);
+    if (target < end) return i;
+  }
+  // Past the end of the land the city owns, which `place` already clamps
+  // against: the frontier is the honest answer, and a card that named a
+  // district the city has not annexed would read as a bug.
+  return Math.max(0, z.districts - 1);
+}
+
+/**
  * Plots one zone holds across the whole city.
  *
  * A sum over districts rather than a multiplication, and that is the change

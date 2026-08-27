@@ -120,10 +120,8 @@ import { ESTATE_CELLS } from '../sim/estates';
 import type { BuildingRef } from '../render/buildings';
 import type { AwayReport, Game } from '../sim/game';
 import {
-  BUILDABLE_COMMERCIAL_PER_DISTRICT,
-  BUILDABLE_INDUSTRIAL_PER_DISTRICT,
-  BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   createPlacement,
+  districtOfPlot,
   housingCentrality,
   portDistrict,
   type CityLayout,
@@ -154,13 +152,6 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 /** The tabs the docked control is split into, in the order they are shown. */
 const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'trade', 'estates'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
-
-/** Plots one district sells of each zone. Turns a plot index into a district. */
-const ZONE_PLOTS: Record<ZoneKind, number> = {
-  home: BUILDABLE_RESIDENTIAL_PER_DISTRICT,
-  shop: BUILDABLE_COMMERCIAL_PER_DISTRICT,
-  industry: BUILDABLE_INDUSTRIAL_PER_DISTRICT,
-};
 
 /**
  * Seconds a ticker line stays on screen, in simulated time.
@@ -1301,7 +1292,10 @@ export class Hud {
     const at = this.layout
       .ensure(s)
       .place(zoneOf(ref.kind), ref.slot, mergedOf(s, ref.kind), s, this.at);
-    const district = Math.floor(at.plot / (ZONE_PLOTS[ref.kind] || 1));
+    // Asked of the layout rather than divided out of a per-district constant:
+    // districts sell different amounts of each zone now, so there is no divisor
+    // to use. See `districtOfPlot`.
+    const district = districtOfPlot(s, zoneOf(ref.kind), at.plot);
 
     n.inspectTitle.textContent =
       level < 0 ? 'Boarded up' : (names[level] ?? `level ${level}`);

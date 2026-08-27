@@ -12,6 +12,9 @@ import {
   cityRadius,
   DISTRICT_WIDTH,
   districtCoord,
+  districtLand,
+  districtOfPlot,
+  districtZonePlots,
   housingCentrality,
   housingCentralityBase,
   housingCentralityMean,
@@ -23,6 +26,7 @@ import {
   worldX,
   worldZ,
   zoneAt,
+  type Zoning,
 } from '../src/sim/layout';
 
 const key = (c: { x: number; z: number }): string => `${c.x},${c.z}`;
@@ -391,5 +395,55 @@ describe('land value', () => {
     const scores = [];
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) scores.push(housingCentrality(i, zonedAt(1)));
     expect(Math.max(...scores) - Math.min(...scores)).toBeGreaterThan(0.2);
+  });
+});
+
+describe('plot to district', () => {
+  /**
+   * A lopsided city: one district that surveyed its whole pool to housing, one
+   * that gave the same pool to commerce, and one left at its opening split. The
+   * fixture the fixed-divisor arithmetic cannot survive, and the shape a real
+   * city takes — see `willTransfer`, which is what moves a district this far.
+   */
+  const lopsided = (): Zoning => {
+    const districts = 3;
+    const surveyedR: number[] = [];
+    const surveyedC: number[] = [];
+    const surveyedI: number[] = [];
+    for (let i = 0; i < districts; i++) {
+      const limits = districtLand(i).limits;
+      const opening = zonedAt(i + 1);
+      surveyedR.push(i === 0 ? limits.shared : i === 1 ? 0 : (opening.surveyedR[i] ?? 0));
+      surveyedC.push(i === 0 ? 0 : i === 1 ? limits.shared : (opening.surveyedC[i] ?? 0));
+      surveyedI.push(limits.works);
+    }
+    return { districts, surveyedR, surveyedC, surveyedI };
+  };
+
+  it('names the district every plot actually stands in', () => {
+    const z = lopsided();
+    for (const zone of [ZONE.residential, ZONE.commercial, ZONE.industrial]) {
+      let plot = 0;
+      for (let district = 0; district < z.districts; district++) {
+        const held = districtZonePlots(z, district, zone);
+        for (let k = 0; k < held; k++, plot++) {
+          expect(districtOfPlot(z, zone, plot)).toBe(district);
+        }
+      }
+      // Past the land the city owns, the frontier is the honest answer — the
+      // inspector must never name a district that has not been annexed.
+      expect(districtOfPlot(z, zone, plot + 100)).toBe(z.districts - 1);
+    }
+  });
+
+  it('does not divide by a per-district constant', () => {
+    // The regression this exists for: districts sell 8 to 61 plots of a zone
+    // now, so `floor(plot / 24)` names the wrong district for most of a city
+    // that has surveyed anything. If this ever passes, the divisor is back.
+    const z = lopsided();
+    const held = districtZonePlots(z, 0, ZONE.residential);
+    expect(held).toBeGreaterThan(RESIDENTIAL_PER_DISTRICT);
+    expect(districtOfPlot(z, ZONE.residential, held - 1)).toBe(0);
+    expect(Math.floor((held - 1) / RESIDENTIAL_PER_DISTRICT)).not.toBe(0);
   });
 });
