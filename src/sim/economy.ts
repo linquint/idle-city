@@ -16,6 +16,8 @@ import {
   ABANDON_SECONDS,
   ABANDON_SPREAD_SECONDS,
   DEMAND_SCALE,
+  DEMAND_TERMS,
+  type DemandTerm,
   DEMAND_TAU,
   DISTRICT_BONUS,
   ESTATE_BASE,
@@ -1153,6 +1155,35 @@ export const taxStep = (s: GameState): (typeof TAX_STEPS)[number] => {
 };
 
 /**
+ * What the city's tax rate does to the appetite for premises, in [-1, 1].
+ *
+ * Derived from TAX_STEPS' own income multipliers rather than typed as a third
+ * column, so a rate cannot say one thing to the ledger and another to demand.
+ * Normalised on each side of neutral separately, because the table is not
+ * symmetric: there is one step below neutral and two above it, so "as far down
+ * as this game goes" is Low and "as far up" is Punitive, and both read as the
+ * full 1. A city on Standard reads exactly 0, which is what keeps a fresh save's
+ * targets where they were.
+ *
+ * Measured across the table: Low -1.00, Standard 0.00, High +0.50, Punitive
+ * +1.00. Against DEMAND_TERMS' weights that is worth +0.30 / 0 / -0.15 / -0.30
+ * of commercial demand and +0.35 / 0 / -0.175 / -0.35 of industrial — so the
+ * rate is now the single largest lever in the table, in both directions, which
+ * is what "a real strategic choice rather than a mood dial" has to mean.
+ */
+export const taxPressure = (s: GameState): number => {
+  const rate = taxStep(s).income;
+  if (rate === 1) return 0;
+  let span = 0;
+  for (const step of TAX_STEPS) {
+    const reach = rate > 1 ? step.income - 1 : 1 - step.income;
+    if (reach > span) span = reach;
+  }
+  if (span <= 0) return 0;
+  return rate > 1 ? (rate - 1) / span : -((1 - rate) / span);
+};
+
+/**
  * What happiness does to the ledger. Floored, never zeroed: a neglected city
  * should feel like one that has stopped growing, not one that has been fined.
  */
@@ -1348,6 +1379,84 @@ export interface DemandTargets {
   readonly i: number;
 }
 
+/** The police and hospital entries, looked up once. See TRANSIT for the pattern. */
+const POLICE = SERVICES.find((service) => service.key === 'police');
+const HOSPITAL = SERVICES.find((service) => service.key === 'hospital');
+
+/**
+ * What one DEMAND_TERMS entry is reading, in [0, 1] for a coverage and
+ * [-1, 1] for the tax pressure.
+ *
+ * Every one of these already exists and is already read somewhere else — that
+ * is the point of the table. A service term this could not answer would be a
+ * coverage the happiness panel could not name either.
+ */
+const demandReading = (s: GameState, key: DemandTerm['key']): number =>
+  key === 'police' ? (POLICE ? coverage(s, POLICE) : 0)
+  : key === 'hospital' ? (HOSPITAL ? coverage(s, HOSPITAL) : 0)
+  : key === 'recreation' ? recreationCoverage(s)
+  : key === 'transit' ? transitCoverage(s)
+  : key === 'landmark' ? landmarkCoverage(s)
+  : key === 'education' ? educationCoverage(s)
+  : taxPressure(s);
+
+/** What one term contributes to its zone's target, signed. */
+const demandTermValue = (s: GameState, term: DemandTerm): number =>
+  term.weight * (term.centred ? demandReading(s, term.key) - 0.5 : demandReading(s, term.key));
+
+/**
+ * What the city's services add to one zone's demand target.
+ *
+ * Zero — every term, all three zones — while the city has no housing, and that
+ * gate is the whole of what keeps the opening where it was. `coverage` reads 1
+ * against no housing because it is the share a service *fails* and it fails
+ * nothing when nothing is built; so an ungated table would hand a fresh save
+ * +0.225 of residential demand on its first tick, and the bootstrap off the
+ * export tap that the opening minute is built on would be gone. It is the same
+ * special case `coverage` itself carries, one level up.
+ *
+ * A sum rather than a walk over objects, because `demandTargets` runs ten times
+ * a second and this is called three times inside it. `demandTerms` is the
+ * allocating form and it is the HUD's, not the simulation's.
+ */
+export const demandLift = (s: GameState, kind: ZoneKind): number => {
+  if (housingPlots(s) <= 0) return 0;
+  let sum = 0;
+  for (const term of DEMAND_TERMS) {
+    if (term.zone === kind) sum += demandTermValue(s, term);
+  }
+  return sum;
+};
+
+export interface DemandTermReading {
+  readonly term: DemandTerm;
+  /** What the term is reading, before its weight. */
+  readonly reading: number;
+  /** What it is contributing to the target, signed. */
+  readonly value: number;
+}
+
+/**
+ * The whole demand breakdown, in one read, for the HUD.
+ *
+ * The reason this exists rather than three numbers: a signal that moves because
+ * a museum opened and a signal that moves because the tax rate went punitive
+ * look identical on a bar, and the mechanic is only worth having if the player
+ * can see which one it was. Same shape and same job as `happinessTerms`, which
+ * names the term binding happiness for exactly the same reason.
+ *
+ * Empty while the city has no housing, matching `demandLift` — a panel showing
+ * seven terms all reading zero would be worse than showing none.
+ */
+export const demandTerms = (s: GameState, kind: ZoneKind): readonly DemandTermReading[] => {
+  if (housingPlots(s) <= 0) return [];
+  return DEMAND_TERMS.filter((term) => term.zone === kind).map((term) => ({
+    term,
+    reading: demandReading(s, term.key),
+    value: demandTermValue(s, term),
+  }));
+};
+
 /**
  * Where each demand signal is heading, right now.
  *
@@ -1363,16 +1472,28 @@ export interface DemandTargets {
  */
 export const demandTargets = (s: GameState): DemandTargets => {
   const scale = demandScale(s);
+  // The service terms are added *inside* clampDemand and on the target, never on
+  // the integrated signal: `Game.step` stays the only thing that integrates, and
+  // the bounds stay the bounds they always were. See DEMAND_TERMS.
   return {
     // Against the workers an employer can reach rather than the raw labour
     // force: a network that has already put people within reach of a job has
     // met some of the demand another house would have met.
-    r: Math.min(s.happiness, clampDemand((jobs(s) - reachableWorkers(s)) / scale)),
+    //
+    // The happiness ceiling survives the new terms, and has to: a city with no
+    // hospital cannot want more people however covered it is in police, and that
+    // is the tutorial. Services now push at the target from underneath as well,
+    // which is the change — but they can never lift it past what mood allows.
+    r: Math.min(
+      s.happiness,
+      clampDemand((jobs(s) - reachableWorkers(s)) / scale + demandLift(s, 'home')),
+    ),
     c: clampDemand(
       (residents(s) * SPEND_PER_RESIDENT -
         openOf(s, 'shop', SHOP_TRIPS) +
         labourReach(s)) /
-        scale,
+        scale +
+        demandLift(s, 'shop'),
     ),
     i: clampDemand(
       (openOf(s, 'shop', SHOP_SUPPLY) +
@@ -1380,7 +1501,8 @@ export const demandTargets = (s: GameState): DemandTargets => {
         openOf(s, 'industry', INDUSTRY_OUTPUT) -
         estateSupply(s) +
         labourReach(s)) /
-        scale,
+        scale +
+        demandLift(s, 'industry'),
     ),
   };
 };

@@ -54,7 +54,10 @@ import {
   cityHallBlocker,
   cityHallCost,
   cruiseIncome,
+  demandLift,
   demandTargets,
+  demandTerms,
+  ZONE_KINDS,
   educationCoverage,
   estateBlocker,
   estateCapacity,
@@ -194,6 +197,17 @@ const TREND_DEADBAND = 0.004;
 
 const pct = (n: number): string => `${Math.round(n * 100)}%`;
 
+/** A demand contribution, always signed — a term reading +0.00 is not the same
+ *  statement as one reading -0.00, and an unsigned 0.10 says nothing at all. */
+const signed = (n: number): string => `${n >= 0 ? '+' : '\u2212'}${Math.abs(n).toFixed(2)}`;
+
+/** What the breakdown calls each zone. The bars above it are R / C / I. */
+const ZONE_LIFT_NAMES: Record<ZoneKind, string> = {
+  home: 'Residential',
+  shop: 'Commercial',
+  industry: 'Industrial',
+};
+
 /** The highest level anything in a cohort has reached. 0 for an empty city. */
 function topLevel(levels: readonly number[]): number {
   for (let l = LEVELS - 1; l > 0; l--) if ((levels[l] ?? 0) > 0) return l;
@@ -244,6 +258,7 @@ export class Hud {
     demandRFill: el('demand-r-fill'),
     demandCFill: el('demand-c-fill'),
     demandIFill: el('demand-i-fill'),
+    demandLift: el('demand-lift'),
     demandRNum: el('demand-r-num'),
     demandCNum: el('demand-c-num'),
     demandINum: el('demand-i-num'),
@@ -440,6 +455,8 @@ export class Hud {
   private readonly ticker = new EventLog();
   /** What the ticker last rendered, so an unchanged live region is left alone. */
   private tickerShown = '';
+  /** What the demand breakdown was last built for. See `paintLift`. */
+  private liftShown = '';
 
   constructor(
     private readonly game: Game,
@@ -781,6 +798,75 @@ export class Hud {
     n.happiness.textContent = pct(s.happiness);
   }
 
+  /**
+   * What the city's services are doing to each signal, term by term.
+   *
+   * The bars above say a signal moved; this says what moved it. Without it the
+   * player watches three numbers drift and has no way to tell a museum from a
+   * tax rise — which would leave the whole of DEMAND_TERMS as numbers moving on
+   * screen for reasons nobody can act on. Same job the happiness panel's binding
+   * term does, and the same reason it exists.
+   *
+   * Rebuilt only when the words change. This is a live region's neighbour and
+   * runs on every paint, so a `replaceChildren` per frame would churn nine rows
+   * ten times a second for a signal that moves on a 25-second constant.
+   */
+  private paintLift(s: Readonly<GameState>): void {
+    const rows: Array<{ zone: boolean; label: string; reads: string; value: number }> = [];
+    for (const kind of ZONE_KINDS) {
+      const terms = demandTerms(s, kind);
+      if (terms.length === 0) continue;
+      rows.push({ zone: true, label: ZONE_LIFT_NAMES[kind], reads: '', value: demandLift(s, kind) });
+      for (const entry of terms) {
+        rows.push({
+          zone: false,
+          label: entry.term.label,
+          // The tax pressure is the one reading that is not a coverage, so it is
+          // shown signed rather than as a percentage of anything.
+          reads: entry.term.key === 'tax' ? entry.reading.toFixed(2) : pct(entry.reading),
+          value: entry.value,
+        });
+      }
+    }
+
+    const stamp = rows.map((row) => `${row.label}${row.reads}${row.value.toFixed(3)}`).join('|');
+    if (stamp === this.liftShown) return;
+    this.liftShown = stamp;
+
+    if (rows.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'none';
+      // The gate in `demandLift`, said in words. A city with no housing has no
+      // coverage to read, so the terms are off rather than reading zero.
+      empty.textContent = 'Build housing to see what the city asks for.';
+      this.nodes.demandLift.replaceChildren(empty);
+      return;
+    }
+
+    this.nodes.demandLift.replaceChildren(
+      ...rows.map((row) => {
+        const node = document.createElement('div');
+        const tone = row.value > 0.0005 ? ' up' : row.value < -0.0005 ? ' down' : '';
+        node.className = (row.zone ? 'lift-zone' : 'lift-row') + tone;
+        const key = document.createElement('span');
+        key.className = 'k';
+        key.textContent = row.label;
+        node.append(key);
+        if (!row.zone) {
+          const reads = document.createElement('span');
+          reads.className = 'reads';
+          reads.textContent = row.reads;
+          node.append(reads);
+        }
+        const value = document.createElement('span');
+        value.className = row.zone ? 'total' : 'val';
+        value.textContent = signed(row.value);
+        node.append(value);
+        return node;
+      }),
+    );
+  }
+
   private paintDemand(s: Readonly<GameState>): void {
     const n = this.nodes;
     this.paintBar(n.demandRFill, s.demandR);
@@ -794,6 +880,8 @@ export class Hud {
       `Demand: residential ${pct(s.demandR)}, commercial ${pct(s.demandC)}, ` +
         `industrial ${pct(s.demandI)}. Negative is oversupplied.`,
     );
+
+    this.paintLift(s);
 
     // The happiness panel. A bare percentage says nothing a player can act on,
     // so the binding term is named beside it: "Health coverage 41%" is the whole

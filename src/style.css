@@ -402,6 +402,53 @@ button.tab[aria-selected='true'] {
 }
 .svc.covered .covers { color: var(--signal); }
 
+/* The demand breakdown: which term is pushing which signal, and by how much.
+   A bar shows that a signal moved; this says what moved it, which is the only
+   reason the service terms are worth having. Reuses .svc's row metrics so the
+   two blocks under the same tab read as one list rather than two designs. */
+.lift {
+  padding: 2px 0 4px;
+}
+.lift-zone {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0 2px;
+  font-size: 11px;
+  color: var(--concrete);
+}
+.lift-zone .total {
+  flex: 1 1 auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.lift-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0 2px 10px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.lift-row .k { flex: 1 1 auto; }
+.lift-row .reads {
+  font-variant-numeric: tabular-nums;
+  color: var(--concrete);
+}
+.lift-row .val {
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* Sign is the whole reading, so it carries the colour rather than the label. */
+.lift-row.up .val, .lift-zone.up .total { color: var(--signal); }
+.lift-row.down .val, .lift-zone.down .total { color: var(--sodium); }
+.lift .none {
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--dim);
+}
+
 /* Happiness: the percentage is the headline, the binding service is the point.
    A single left-anchored bar, not a diverging one — this signal has no sign. */
 .mood {

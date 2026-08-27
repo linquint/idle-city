@@ -249,6 +249,29 @@ so the order you build in decides which button is cheap next. A positive signal
 discounts that type's price and a negative one surcharges it, which is what
 stops "press whichever button is cheapest" from being the dominant strategy.
 
+**A bigger shop serves a bigger crowd, sub-linearly.** Jobs are flat per plot at
+every level and always will be — that is the arc `WORKING_SHARE` describes, and
+a ladder on them freezes it — but trips, goods drawn and goods made climb at the
+square root of capacity. Flat, they made the city want 0.29 commercial plots per
+housing plot at the bottom of the ladder and 85.71 at the top, against the 1.88 a
+district sells: 45.7x short of commerce with nothing a player could do about it,
+which is what pinned commerce at +1 and housing at -1 the moment the two drifted
+apart. What it costs is build-out — a demand-neutral district of towers settles
+at 24.7% against a 70% annexation gate where it settled at 89.9% — and the
+answer to that is land supply rather than a constant.
+
+**Services reach demand directly, not only through mood.** Until `DEMAND_TERMS`
+existed, everything the player built reached the demand loop through exactly one
+channel: happiness, and only as a ceiling on housing. A hospital and a park and a
+police station were interchangeable to it. Now housing follows safety and health,
+commerce follows footfall — transit and landmarks — industry follows schools, and
+the tax rate drives business away as well as costing mood. Every term is additive
+on the *target*, inside `clampDemand`, so `Game.step` stays the only thing that
+integrates and the bounds are the bounds they always were. The whole table is off
+while the city has no housing, which is what keeps a fresh save bootstrapping off
+the export tap exactly as it did. The Demand tab shows the breakdown, because a
+signal that moves for a reason the player cannot name is not a mechanic.
+
 ### Power is a ratio, not a fourth signal
 
 The city's second resource, and the first thing in it that can be *short*.

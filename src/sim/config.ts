@@ -1082,6 +1082,119 @@ export const INDUSTRY_OUTPUT = LEVEL_FOOTPRINT.map(
 export const EXPORT_BASE = 60;
 export const EXPORT_PER_DISTRICT = 14;
 
+/**
+ * What the city's *services* do to demand, beyond the mood they buy.
+ *
+ * Until this table existed, everything the player built reached demand through
+ * exactly one channel: happiness, and only as a ceiling on residential. A
+ * hospital and a park and a police station were interchangeable to the demand
+ * loop — three ways to move one number — so *what* you built changed how happy
+ * the city was and never what it wanted next. These are the other channels.
+ *
+ * Each entry is an additive term on one signal's target, applied before
+ * `clampDemand` and inside it, so the bounds are the bounds they always were.
+ * `centred` says how the reading is read: a coverage is centred on 0.5, so a
+ * half-covered city is neutral and the term cuts both ways; a bonus (a landmark
+ * reach, a tax pressure) is read raw from zero, because a city with no landmarks
+ * has not earned a penalty for it.
+ *
+ * The design each weight is carrying, which is the part to preserve if the
+ * numbers move:
+ *
+ *   - **housing follows safety and health.** People move toward a covered city.
+ *     Police and hospitals stop being pure mood and become growth, and they are
+ *     the two heaviest terms here because they are the two the tutorial is
+ *     built on;
+ *   - **commerce follows footfall.** Transit brings shoppers and landmarks bring
+ *     visitors, so both go on mattering after the happiness they buy has
+ *     saturated. Landmarks are the heaviest single positive in the table for
+ *     exactly that reason: they are the one thing whose mood contribution caps
+ *     out long before the building stops being worth having;
+ *   - **industry follows skills.** Schools and universities stop being only a
+ *     level gate;
+ *   - **tax has a third dimension.** Punitive costs mood already; it should also
+ *     drive business away. That is what makes the switch a strategic choice
+ *     rather than a dial on one number, and it is why the tax weights are the
+ *     largest in the table and negative on both trading zones.
+ *
+ * Two things this table deliberately does *not* do. It does not touch industry
+ * with a transit term — `labourReach` already is one, and counting the network
+ * twice on the same signal would be a bigger lift for a depot than a depot does.
+ * And it carries no term at all for a city with no housing: every coverage in
+ * this game reads 1 against no housing, because a coverage is the share a
+ * service *fails* and it fails nothing when nothing is built, so an ungated
+ * table would hand a fresh save +0.225 of residential demand on its first tick
+ * and the opening would no longer bootstrap off the export tap. See
+ * `demandLift`, where the gate lives.
+ *
+ * What the table did over 24 hours, and it is a trade rather than a win:
+ *
+ *   policy                  R pinned      C pinned      districts   first annex
+ *   auto-develop            0m -> 0m      0m -> 0m        5 -> 6     1.72 -> 1.25h
+ *   discount-chasing      987m -> 0m    496m -> 952m      9 -> 9     4.99 -> 6.25h
+ *   disciplined             0m -> 0m      0m -> 0m        6 -> 6     1.66 -> 2.15h
+ *
+ * The residential pin is *gone* — the signal the capacity ladder could not
+ * reach, unpinned by a table that was not written to fix it. What did it is the
+ * +0.225 a fully covered city now carries on housing, which lifts a
+ * discount-chasing city off the -1 bound it used to sit on for 16 hours of every
+ * 24. The same mechanism is what made commerce worse: a covered city carries
+ * +0.175 on commerce as well, and commerce was already the signal nearest its
+ * upper bound.
+ *
+ * Worth stating plainly, because it is the honest reading of these weights: a
+ * coverage term centred on 0.5 becomes a *constant* once the coverage
+ * saturates, so most of what it does over a long run is re-centre the
+ * equilibrium rather than offer a decision. The decision is in the transition —
+ * the hour a city spends going from uncovered to covered — and that is real and
+ * visible. If the terms should be about neglect only, centring them on 1
+ * instead of 0.5 would leave a covered city exactly where it was and turn every
+ * one of these into a penalty for going without; it is a one-character change
+ * per row and it is the first thing to reach for if the commercial pin matters
+ * more than the residential one did.
+ *
+ * The other two policies are better off on every axis measured: a district
+ * sooner, half an hour earlier to the first annexation, and 89% happiness at one
+ * hour against 78%. The discount-chasing policy is slower to start — 6.25 hours
+ * to its first annexation against 4.99 — because an uncovered opening now pays a
+ * demand penalty it did not before, which is the tutorial doing its job to a
+ * policy built to ignore it.
+ */
+export interface DemandTerm {
+  /** What the reading is drawn from. Not unique on its own — `zone` completes it. */
+  readonly key: 'police' | 'hospital' | 'recreation' | 'transit' | 'landmark' | 'education' | 'tax';
+  readonly zone: 'home' | 'shop' | 'industry';
+  /** What the HUD calls it. */
+  readonly label: string;
+  readonly weight: number;
+  /** True for a coverage, read against 0.5. False for a bonus, read from 0. */
+  readonly centred: boolean;
+}
+
+export const DEMAND_TERMS: readonly DemandTerm[] = [
+  { key: 'police',     zone: 'home',     label: 'Police coverage',  weight:  0.20, centred: true },
+  { key: 'hospital',   zone: 'home',     label: 'Health coverage',  weight:  0.15, centred: true },
+  { key: 'recreation', zone: 'home',     label: 'Parks',            weight:  0.10, centred: true },
+  { key: 'transit',    zone: 'shop',     label: 'Transit footfall', weight:  0.25, centred: true },
+  { key: 'landmark',   zone: 'shop',     label: 'Landmark reach',   weight:  0.20, centred: false },
+  { key: 'education',  zone: 'shop',     label: 'Education',        weight:  0.10, centred: true },
+  { key: 'tax',        zone: 'shop',     label: 'Tax rate',         weight: -0.30, centred: false },
+  { key: 'education',  zone: 'industry', label: 'Education',        weight:  0.20, centred: true },
+  { key: 'tax',        zone: 'industry', label: 'Tax rate',         weight: -0.35, centred: false },
+];
+
+/**
+ * The most any one term may move a signal, and the most the whole table may.
+ *
+ * Derived rather than typed, because the property worth asserting is that no
+ * single service can pin a signal on its own — `test/services.test.ts` reads
+ * these rather than a pair of literals that would rot the moment a weight moved.
+ * A centred term spans half its weight either way; a bonus term spans all of it.
+ */
+export const DEMAND_TERM_MAX = Math.max(
+  ...DEMAND_TERMS.map((t) => Math.abs(t.weight) * (t.centred ? 0.5 : 1)),
+);
+
 // ------------------------------------------------------------------- pricing
 
 /**
@@ -1882,11 +1995,21 @@ export const TRANSIT_WORKFORCE = 0.25;
  * `demandScale` is a district's labour pool — so feeding the whole surplus in
  * doubles commercial demand and pins it. Measured over 24 hours: at 1.0 the
  * discount-chasing policy sat at +1 commercial for 628 minutes of the run,
- * against a build that pinned nothing at all. At 0.35 the term is worth about
+ * against a build that pinned nothing at all. At 0.35 the term was worth about
  * 0.14 of a demand point to that same city — a lift a player can see on the
  * bar, and nothing pins.
+ *
+ * Cut from 0.35 to 0.30 when DEMAND_TERMS gave commerce a transit term of its
+ * own, and the cut is the whole of what stops the network being counted twice.
+ * The two say different things through one set of buses — this one carries
+ * *workers* to premises and the footfall term carries *shoppers* to shops — but
+ * they land on the same signal, and a depot that lifted commercial demand
+ * through both channels at full strength would be worth more than a depot is.
+ * 0.30 gives back roughly what the footfall term's ceiling adds, and the
+ * measurement to watch is the combined transit contribution to commerce rather
+ * than either term alone.
  */
-export const TRANSIT_LABOUR_DRAW = 0.35;
+export const TRANSIT_LABOUR_DRAW = 0.30;
 
 /**
  * What free transport does, and what it costs.

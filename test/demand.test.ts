@@ -157,7 +157,21 @@ describe('smoothing', () => {
    * on the same city.
    */
   it('gives catch-up and real time the same demand, within 1%', () => {
-    const patch = { homes: 24, shops: 6, industry: 3, cash: 0, hospitals: 1, police: 1, fire: 1 };
+    // Through `built` rather than raw counts, and the difference is not
+    // cosmetic. `{ homes: 24 }` on its own leaves the cohort at zero, which is
+    // 24 buildings standing at no level: the city houses nobody, earns exactly
+    // zero, and cannot meet a civic payroll it has already opened. That puts it
+    // in permanent wage arrears, where `payWages` and `integrateStaffing` are a
+    // feedback loop — and *that* loop is what a 60-second step resolves
+    // differently from a tenth-second one. Measured on the old fixture:
+    // staffing diverged by 0.115, happiness by 0.098 and occupancy by 0.088,
+    // all of them larger than the 0.039 that eventually reached demand.
+    //
+    // None of which this test is about, and none of which is reachable: `Game`
+    // never produces a count without a cohort and `migrate` repairs one that
+    // arrives. On a legal city every field above agrees to the last decimal.
+    // See test/levels.ts, whose own comment names exactly this bug.
+    const patch = { ...built(24, 6, 3), cash: 0, hospitals: 1, police: 1, fire: 1 };
     const away = at(patch);
     const watched = play(at(patch), 3600);
     away.catchUp(3600);
