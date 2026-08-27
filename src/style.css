@@ -552,7 +552,16 @@ button.civic {
   gap: 2px;
   /* 7px rather than 9: both civic rows carry four buttons now, and the widest
      of them says "University" against a 266px panel. Measured, 9px overflows
-     the row by 4px and 7px leaves 12px in hand. */
+     the row by 4px and 7px leaves 12px in hand.
+
+     That settles the row; the budget it leaves each *name* is the thing to
+     remember when adding a button. Four equal quarters of 266 with a 6px gap
+     is a 62px button, and at 11px monospace a name clears its border by
+     62 - 1 - 7 - 6.63n. So seven characters clear by 8px, eight ("Hospital")
+     by one, and nine do not fit at all — which is why the university's button
+     says Campus. Letting the buttons size to their contents instead would fit
+     any name, at the cost of a row that twitches every time a cost crosses a
+     thousands boundary. */
   padding: 8px 7px;
   font-size: 11px;
   border-color: rgba(127, 168, 255, 0.3);

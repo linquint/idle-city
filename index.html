@@ -119,8 +119,16 @@
         <span>School</span><span class="built" id="build-school-built">0/1</span>
         <span class="cost" id="build-school-cost">180</span>
       </button>
-      <button class="civic school" id="build-university" type="button">
-        <span>University</span><span class="built" id="build-university-built">0/1</span>
+      <!-- "Campus" rather than "University": the row is four equal quarters of a
+           266px panel, which leaves 48px of content box, and "University" needs
+           66. Every other button in both rows is already a short form of the
+           service's real name — Depot for transit depots, Power for power
+           plants — so this one joins them, and the title carries the full name
+           for a hover. The alternative was letting the buttons size to their
+           contents, which would have made the row twitch every time a cost
+           crossed a thousands boundary. -->
+      <button class="civic school" id="build-university" type="button" title="Found university">
+        <span>Campus</span><span class="built" id="build-university-built">0/1</span>
         <span class="cost" id="build-university-cost">7.2K</span>
       </button>
       <button class="civic transit" id="build-transit" type="button">
