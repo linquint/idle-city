@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { zonedAt } from './levels';
 import { ZONE } from '../src/sim/citygen';
 import { CELL, DISTRICT_SPAN, FRONTAGE_TARGET, MAX_DISTRICTS } from '../src/sim/config';
 import {
@@ -54,7 +55,7 @@ describe('land tiles', () => {
   it('sit exactly on top of their own streets', () => {
     // A tile that is offset from the cells it is supposed to hold shows up as
     // a slab of ground sliding out from under the road grid.
-    const layout = new CityLayout().ensure(9);
+    const layout = new CityLayout().ensure(zonedAt(9));
     for (const district of layout.districts) {
       const xs = district.roads.map((c) => worldX(c.x));
       const zs = district.roads.map((c) => worldZ(c.z));
@@ -69,7 +70,7 @@ describe('land tiles', () => {
   });
 
   it('tiles the plane edge to edge', () => {
-    const layout = new CityLayout().ensure(9);
+    const layout = new CityLayout().ensure(zonedAt(9));
     const a = layout.districts[0]!;
     const neighbours = layout.districts.filter(
       (d) => Math.abs(d.coord.x - a.coord.x) + Math.abs(d.coord.z - a.coord.z) === 1,
@@ -133,7 +134,7 @@ describe('plot book', () => {
     expect(sellable).toBeLessThan(PLOTS_PER_DISTRICT);
     expect(PLOTS_PER_DISTRICT).toBeLessThan(DISTRICT_SPAN * DISTRICT_SPAN);
 
-    const layout = new CityLayout().ensure(MAX_DISTRICTS);
+    const layout = new CityLayout().ensure(zonedAt(MAX_DISTRICTS));
     for (const district of layout.districts) {
       const plots = DISTRICT_SPAN * DISTRICT_SPAN - district.roads.length;
       expect(plots).toBe(PLOTS_PER_DISTRICT);
@@ -143,7 +144,7 @@ describe('plot book', () => {
   it('offers only plots that front a street', () => {
     // The rule the whole change turns on: no building is ever landlocked in the
     // middle of a block, so every plot the city can buy has a road neighbour.
-    const layout = new CityLayout().ensure(4);
+    const layout = new CityLayout().ensure(zonedAt(4));
     const fronts = (c: { x: number; z: number }): boolean =>
       isRoad(c.x - 1, c.z) || isRoad(c.x + 1, c.z) || isRoad(c.x, c.z - 1) || isRoad(c.x, c.z + 1);
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 4; i++) expect(fronts(layout.homeCell(i))).toBe(true);
@@ -159,7 +160,7 @@ describe('plot book', () => {
   });
 
   it('never places a building on a street', () => {
-    const layout = new CityLayout().ensure(6);
+    const layout = new CityLayout().ensure(zonedAt(6));
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 6; i++) {
       const cell = layout.homeCell(i);
       expect(isRoad(cell.x, cell.z)).toBe(false);
@@ -175,7 +176,7 @@ describe('plot book', () => {
   });
 
   it('puts every building on a plot zoned for it', () => {
-    const layout = new CityLayout().ensure(6);
+    const layout = new CityLayout().ensure(zonedAt(6));
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 6; i++) {
       const cell = layout.homeCell(i);
       expect(zoneAt(cell.x, cell.z)).toBe(ZONE.residential);
@@ -191,7 +192,7 @@ describe('plot book', () => {
   });
 
   it('gives every plot in the city a distinct cell', () => {
-    const layout = new CityLayout().ensure(9);
+    const layout = new CityLayout().ensure(zonedAt(9));
     const seen = new Set<string>();
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 9; i++) seen.add(key(layout.homeCell(i)));
     for (let i = 0; i < COMMERCIAL_PER_DISTRICT * 9; i++) seen.add(key(layout.shopCell(i)));
@@ -303,8 +304,8 @@ describe('plot book', () => {
   it('keeps existing plots put when the city expands', () => {
     // This is the invariant the whole save format rests on: a building placed in
     // district 1 must not move when district 20 is annexed.
-    const small = new CityLayout().ensure(1);
-    const large = new CityLayout().ensure(MAX_DISTRICTS);
+    const small = new CityLayout().ensure(zonedAt(1));
+    const large = new CityLayout().ensure(zonedAt(MAX_DISTRICTS));
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) {
       expect(large.homeCell(i)).toEqual(small.homeCell(i));
     }
@@ -317,15 +318,15 @@ describe('plot book', () => {
   });
 
   it('is identical across independently built layouts', () => {
-    const a = new CityLayout().ensure(4);
-    const b = new CityLayout().ensure(2).ensure(4);
+    const a = new CityLayout().ensure(zonedAt(4));
+    const b = new CityLayout().ensure(zonedAt(2)).ensure(zonedAt(4));
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT * 4; i++) {
       expect(a.homeCell(i)).toEqual(b.homeCell(i));
     }
   });
 
   it('clusters commerce instead of scattering it', () => {
-    const layout = new CityLayout().ensure(1);
+    const layout = new CityLayout().ensure(zonedAt(1));
     const cells = Array.from({ length: COMMERCIAL_PER_DISTRICT }, (_, i) => layout.shopCell(i));
     const cx = cells.reduce((sum, c) => sum + c.x, 0) / cells.length;
     const cz = cells.reduce((sum, c) => sum + c.z, 0) / cells.length;
@@ -348,17 +349,17 @@ describe('land value', () => {
     const plots = districts * RESIDENTIAL_PER_DISTRICT;
     let sum = 0;
     for (let n = 1; n <= plots; n++) {
-      sum += housingCentrality(n - 1, districts);
-      expect(housingCentralityMean(n, districts)).toBeCloseTo(sum / n, 12);
+      sum += housingCentrality(n - 1, zonedAt(districts));
+      expect(housingCentralityMean(n, zonedAt(districts))).toBeCloseTo(sum / n, 12);
     }
-    expect(housingCentralityBase(districts)).toBeCloseTo(sum / plots, 12);
+    expect(housingCentralityBase(zonedAt(districts))).toBeCloseTo(sum / plots, 12);
   });
 
   it('scores every housing plot inside the range citygen promises', () => {
     // 1 at a district's middle and 0 at its furthest corner. A plot outside
     // that band would mean the block lookup had fallen through to a road.
     for (let i = 0; i < MAX_DISTRICTS * RESIDENTIAL_PER_DISTRICT; i++) {
-      const score = housingCentrality(i, MAX_DISTRICTS);
+      const score = housingCentrality(i, zonedAt(MAX_DISTRICTS));
       expect(score).toBeGreaterThan(0);
       expect(score).toBeLessThanOrEqual(1);
     }
@@ -370,17 +371,17 @@ describe('land value', () => {
     // the map. The *normaliser* moves, and deliberately — see
     // `housingCentralityBase` — but the plot's own score never does.
     const small = [];
-    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) small.push(housingCentrality(i, 1));
+    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) small.push(housingCentrality(i, zonedAt(1)));
     for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) {
-      expect(housingCentrality(i, MAX_DISTRICTS)).toBe(small[i]);
+      expect(housingCentrality(i, zonedAt(MAX_DISTRICTS))).toBe(small[i]);
     }
   });
 
   it('clamps rather than reading off the end of the land', () => {
-    const last = housingCentrality(MAX_DISTRICTS * RESIDENTIAL_PER_DISTRICT - 1, MAX_DISTRICTS);
-    expect(housingCentrality(1e9, MAX_DISTRICTS)).toBe(last);
-    expect(housingCentrality(-5, MAX_DISTRICTS)).toBe(housingCentrality(0, MAX_DISTRICTS));
-    expect(housingCentralityMean(0, 1)).toBe(0);
+    const last = housingCentrality(MAX_DISTRICTS * RESIDENTIAL_PER_DISTRICT - 1, zonedAt(MAX_DISTRICTS));
+    expect(housingCentrality(1e9, zonedAt(MAX_DISTRICTS))).toBe(last);
+    expect(housingCentrality(-5, zonedAt(MAX_DISTRICTS))).toBe(housingCentrality(0, zonedAt(MAX_DISTRICTS)));
+    expect(housingCentralityMean(0, zonedAt(1))).toBe(0);
   });
 
   it('varies enough between plots to be worth reading', () => {
@@ -388,7 +389,7 @@ describe('land value', () => {
     // there would be nothing to redistribute. Checked inside one district, so
     // this is about the street plan rather than about the spiral.
     const scores = [];
-    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) scores.push(housingCentrality(i, 1));
+    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) scores.push(housingCentrality(i, zonedAt(1)));
     expect(Math.max(...scores) - Math.min(...scores)).toBeGreaterThan(0.2);
   });
 });

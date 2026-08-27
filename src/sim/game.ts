@@ -1,8 +1,11 @@
 import { EventLog, EVENT_COVERAGE_LOST, type GameEvent } from '../core/events.ts';
+import { districtLand } from './layout.ts';
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
   CATCHUP_MAX_ABANDONED,
   CATCHUP_MAX_ANNEXES,
+  CATCHUP_MAX_SURVEYS,
+  SURVEY_SECONDS,
   CATCHUP_MAX_LOSSES,
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
@@ -26,6 +29,12 @@ import {
   burnableBuildings,
   burnableOf,
   canAnnex,
+  annexZoning,
+  frontierDistrict,
+  willSurvey,
+  willRelease,
+  willTransfer,
+  capacityOf,
   airportCost,
   canBuildAirport,
   canBuildCityHall,
@@ -250,6 +259,15 @@ export interface AwayReport {
   recovered: number;
   /** Districts the city took on its own while nobody was watching. */
   districts: number;
+  /**
+   * Parcels the surveyor rezoned while nobody was watching.
+   *
+   * Reported for the same reason abandonment is: a player who comes back to a
+   * different-looking frontier and no explanation has been robbed. Capped at
+   * CATCHUP_MAX_SURVEYS for the length of the absence, so the number is small
+   * enough to be a line rather than a list.
+   */
+  surveyed: number;
 }
 
 /** What one pass of auto-development put on the ground. */
@@ -313,6 +331,17 @@ export class Game {
   private abandonsLeft = Number.POSITIVE_INFINITY;
   /** Districts this run may still take on its own. See `autoAnnex`. */
   private annexesLeft = Number.POSITIVE_INFINITY;
+  /**
+   * Surveys a single `catchUp` may make. Unlimited while the player is watching.
+   *
+   * The same guard the other three carry, and the one the brief for this feature
+   * asked for by name: a twelve-hour absence must not return a city whose zoning
+   * nobody watched change. Generous, because the surveyor is self-limiting —
+   * every survey shuts its own gate until the player builds again.
+   */
+  private surveysLeft = Number.POSITIVE_INFINITY;
+  /** Surveys made, for the away sheet. */
+  private surveyed = 0;
   /** Reused by `promote`, which runs every tick and must not allocate. */
   private readonly scratch: number[] = new Array<number>(LEVELS).fill(0);
   /**
@@ -421,6 +450,9 @@ export class Game {
     // building was lost in rather than a tenth of a second later.
     this.resolveFires();
     this.igniteFires(dt);
+    // The surveyor before annexation, so a district that is about to freeze gets
+    // the last word on its own split before the next one arrives and fixes it.
+    this.survey(dt);
     // Annexation before auto-development, so a district that arrives this tick
     // is land the same tick can start building on rather than land that waits a
     // tenth of a second — the same reasoning fires already follow.
@@ -1212,7 +1244,19 @@ export class Game {
     const s = this.inner;
     if (!canAnnex(s)) return false;
     s.cash -= annexCost(s);
+    // The outgoing district's split is fixed before the new one exists, because
+    // freezing appends to what is still the end of the plot lists. One tick
+    // later it would be inserting into the middle of them.
+    this.freeze(frontierDistrict(s));
     s.districts++;
+    // And the new district opens halfway between what the city has been choosing
+    // and ZONE_SHARE's own equilibrium. Inheriting outright would be a feedback
+    // loop that let the first hour's zoning decide the fortieth district's;
+    // opening at neutral would throw the choice away on every expansion.
+    const opened = annexZoning(s);
+    s.surveyedR.push(opened.home);
+    s.surveyedC.push(opened.shop);
+    s.surveyedI.push(opened.industry);
     this.annexed++;
     this.emit({ kind: 'annexed', at: s.elapsed, districts: s.districts, count: 1 });
     return true;
@@ -1241,6 +1285,119 @@ export class Game {
       // the treasury unrecorded would read as income that never arrived.
       this.autoSpend += cost;
     }
+  }
+
+  /**
+   * Zones one more parcel to whichever zones are short of land, on the frontier.
+   *
+   * No clock and no RNG. `willSurvey` is a predicate on the state, so this is a
+   * loop over the three zones and nothing else — the same shape `autoAnnex` has,
+   * and for the same reason: a condition that is true is acted on now rather
+   * than on the next tick of some other rhythm. It is bounded without a guard,
+   * because a survey drops its own zone under SURVEY_FILL and shuts the gate
+   * behind it; the counter below is only for the length of a `catchUp`.
+   */
+  private survey(dt: number): void {
+    const s = this.inner;
+    // Banked rather than run per tick. A pass per tick is a rate that depends on
+    // the step size, which is the one thing offline catch-up cannot have — see
+    // SURVEY_SECONDS. Whole passes are spent out of the bank and the remainder
+    // stays for next time, so sixty ticks of a second and one step of a minute
+    // make the same number of moves.
+    s.surveyClock += Math.max(0, dt);
+    let passes = Math.floor(s.surveyClock / SURVEY_SECONDS);
+    if (passes <= 0) return;
+    s.surveyClock -= passes * SURVEY_SECONDS;
+    // Bounded for the same reason CATCHUP_MAX_STEPS is: an absurd `dt` from a
+    // clock that jumped must not turn into an unbounded loop.
+    passes = Math.min(passes, CATCHUP_MAX_SURVEYS);
+    for (let pass = 0; pass < passes; pass++) this.surveyPass();
+  }
+
+  /** One pass of the surveyor: at most one move per zone, plus one transfer. */
+  private surveyPass(): void {
+    const s = this.inner;
+    for (const kind of ZONE_KINDS) {
+      if (this.surveysLeft <= 0) return;
+      // Both directions, checked in one pass. They are mutually exclusive by
+      // construction — one wants demand past +SURVEY_DEMAND and the other past
+      // -SURVEY_DEMAND — so the order inside the loop decides nothing.
+      const by = willSurvey(s, kind) ? 1 : willRelease(s, kind) ? -1 : 0;
+      if (by === 0) continue;
+      this.surveysLeft--;
+      this.zone(kind, by);
+      this.surveyed++;
+      this.emit({
+        kind: 'surveyed',
+        at: s.elapsed,
+        zone: kind,
+        plots: capacityOf(s, kind),
+        count: 1,
+      });
+    }
+
+    // And last, the contest. A district opens with its pool fully allocated, so
+    // for most of its life the only way housing grows is by taking commercial
+    // land and the other way about — which the absolute gates above cannot ask
+    // for, because neither zone need be in surplus for one to want it more.
+    // After them, so spare land is always spent before anything is taken.
+    if (this.surveysLeft <= 0) return;
+    const swap = willTransfer(s);
+    if (swap === null) return;
+    this.surveysLeft--;
+    this.zone(swap.from, -1);
+    this.zone(swap.to, 1);
+    this.surveyed++;
+    this.emit({
+      kind: 'surveyed',
+      at: s.elapsed,
+      zone: swap.to,
+      plots: capacityOf(s, swap.to),
+      count: 1,
+    });
+  }
+
+  /** Moves the frontier district's parcel count for one zone. */
+  private zone(kind: ZoneKind, by: number): void {
+    const s = this.inner;
+    const at = frontierDistrict(s);
+    const list = kind === 'home' ? s.surveyedR : kind === 'shop' ? s.surveyedC : s.surveyedI;
+    while (list.length <= at) list.push(0);
+    list[at] = Math.max(0, (list[at] ?? 0) + by);
+  }
+
+  /**
+   * Fixes a district's split, spending whatever it never zoned.
+   *
+   * Called from `annex`, at the one moment a district stops being the frontier.
+   * The remainder is not stranded and must not be: land the city bought and left
+   * unzoned would be deleted on every expansion and would sit in the annexation
+   * gate's denominator forever. So the pool is emptied — pro rata to the split
+   * the district already has, so freezing *amplifies* the choice that was made
+   * rather than introducing a new one — and industry's unused reserve goes the
+   * same way, into the shared pool the other two draw from.
+   *
+   * It has to happen here rather than continuously, and that is the theorem one
+   * layer down: commerce fills the pool from the back, so a pool whose size moved
+   * with the industrial count would move every commercial plot in the district
+   * each time industry surveyed. The freeze is the one moment the district's
+   * segment is still the end of the list, so it is the one moment anything can
+   * be appended to it without moving what is already there.
+   */
+  private freeze(index: number): void {
+    const s = this.inner;
+    const limits = districtLand(index).limits;
+    const home = s.surveyedR[index] ?? 0;
+    const shop = s.surveyedC[index] ?? 0;
+    let spare = limits.shared - home - shop;
+    if (spare <= 0) return;
+    // Pro rata to what the district already chose, with a bare split going half
+    // and half — a district that surveyed nothing has expressed no preference,
+    // and the neutral reading of no preference is the middle.
+    const taken = home + shop;
+    const toHome = taken > 0 ? Math.round((spare * home) / taken) : Math.round(spare / 2);
+    s.surveyedR[index] = home + toHome;
+    s.surveyedC[index] = shop + (spare - toHome);
   }
 
   /** Records when the game was last persisted, so time away can be measured. */
@@ -1452,6 +1609,7 @@ export class Game {
       spend: this.autoSpend,
       wages: this.wagesPaid,
       districts: this.inner.districts,
+      surveyed: this.surveyed,
       started: this.firesStarted,
       extinguished: this.firesExtinguished,
       lost: this.firesLost,
@@ -1471,6 +1629,7 @@ export class Game {
     // at most CATCHUP_MAX_ABANDONED plots darker than it was left.
     this.abandonsLeft = CATCHUP_MAX_ABANDONED;
     this.annexesLeft = CATCHUP_MAX_ANNEXES;
+    this.surveysLeft = CATCHUP_MAX_SURVEYS;
 
     // Fixed steps, not a fixed step count: coarse steps let auto-development
     // buy against a demand curve that has already jumped to its asymptote.
@@ -1485,6 +1644,7 @@ export class Game {
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
     this.annexesLeft = Number.POSITIVE_INFINITY;
+    this.surveysLeft = Number.POSITIVE_INFINITY;
 
     const s = this.inner;
     return {
@@ -1515,6 +1675,7 @@ export class Game {
       recovered: this.recovered - before.recovered,
       merges: this.merged - before.merged,
       districts: s.districts - before.districts,
+      surveyed: this.surveyed - before.surveyed,
     };
   }
 }

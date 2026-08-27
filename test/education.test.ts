@@ -26,7 +26,7 @@ import {
 import { Game } from '../src/sim/game';
 import { CityLayout } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { housed, housedOn, powered } from './levels';
+import { housed, housedOn, powered, zonedAt } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -232,7 +232,7 @@ describe('education land', () => {
       expect(universitySiteCapacity(s)).toBe(districts);
     }
     // And it never draws on a civic quad, so a hospital cannot take its land.
-    const layout = new CityLayout().ensure(4);
+    const layout = new CityLayout().ensure(zonedAt(4));
     const civic = new Set<string>();
     for (let i = 0; i < layout.civicSites; i++) {
       const c = layout.civicSiteCell(i);

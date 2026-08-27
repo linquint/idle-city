@@ -5,6 +5,7 @@ import {
   CELL,
   DISTRICT_SPAN,
   FRONTAGE_TARGET,
+  ZONE_FLOOR,
   LANDMARKS,
   SEED,
   TARGET_PLOTS,
@@ -218,6 +219,372 @@ export function parcelOrder(cells: readonly number[]): {
     sizes.push(1);
   }
   return { cells: ordered, sizes };
+}
+
+/**
+ * A run of parcels: the cells, and how many plots each parcel holds.
+ *
+ * The pair `parcelOrder` returns, named so the pool below can pass it around
+ * whole. Cells are laid out parcel by parcel, so `sizes[k]` covers the cells at
+ * the running offset — see `parcelPlots` for the reader.
+ */
+export interface Parcels {
+  readonly cells: readonly number[];
+  readonly sizes: readonly number[];
+}
+
+/** Plots a run of parcels covers. */
+export const parcelPlots = (p: Parcels): number => p.cells.length;
+
+/** Plots the first `n` parcels of a run cover. */
+export function plotsThrough(p: Parcels, n: number): number {
+  const take = Math.max(0, Math.min(n, p.sizes.length));
+  let plots = 0;
+  for (let i = 0; i < take; i++) plots += p.sizes[i] as number;
+  return plots;
+}
+
+/**
+ * Cuts a run of parcels in two at the first parcel boundary at or past `plots`.
+ *
+ * At a boundary, never inside one, and that is the whole reason the zoning pool
+ * is counted in parcels rather than plots. A merge takes the two halves of a
+ * parcel together, so a boundary that fell inside one would hand each half to a
+ * different zone and neither could ever merge — and worse, moving the boundary
+ * by a plot would turn a single into a pair and reorder `ParcelBook`'s merged
+ * slots underneath buildings that are already standing.
+ */
+export function cutParcels(p: Parcels, plots: number): { head: Parcels; tail: Parcels } {
+  let taken = 0;
+  let parcel = 0;
+  while (parcel < p.sizes.length && taken < plots) {
+    taken += p.sizes[parcel] as number;
+    parcel++;
+  }
+  return {
+    head: { cells: p.cells.slice(0, taken), sizes: p.sizes.slice(0, parcel) },
+    tail: { cells: p.cells.slice(taken), sizes: p.sizes.slice(parcel) },
+  };
+}
+
+/** A run of parcels with the *parcel* order reversed, each parcel's cells intact. */
+export function reverseParcels(p: Parcels): Parcels {
+  const cells: number[] = [];
+  const sizes: number[] = [];
+  let end = p.cells.length;
+  for (let i = p.sizes.length - 1; i >= 0; i--) {
+    const size = p.sizes[i] as number;
+    cells.push(...p.cells.slice(end - size, end));
+    sizes.push(size);
+    end -= size;
+  }
+  return { cells, sizes };
+}
+
+/** Two runs of parcels, end to end. */
+export const joinParcels = (a: Parcels, b: Parcels): Parcels => ({
+  cells: [...a.cells, ...b.cells],
+  sizes: [...a.sizes, ...b.sizes],
+});
+
+/** The first `n` parcels of a run. */
+export const takeParcels = (p: Parcels, n: number): Parcels => {
+  const take = Math.max(0, Math.min(n, p.sizes.length));
+  const plots = plotsThrough(p, take);
+  return { cells: p.cells.slice(0, plots), sizes: p.sizes.slice(0, take) };
+};
+
+/**
+ * One district's sellable land, arranged so its split can float without moving
+ * anything already standing.
+ *
+ * Five runs, and every one of a district's 82 plots is in exactly one of them:
+ *
+ *   homeFloor      the housing a district keeps whatever happens
+ *   shopFloor      the same for commerce
+ *   worksFloor     the same for industry
+ *   worksReserve   industry's own draw, INDUSTRY_RESERVE plots of it
+ *   shared         what residential and commercial contest
+ *
+ * Residential takes a *prefix* of `shared` and commercial takes a *suffix*, and
+ * that is the whole trick: a zone's k-th parcel is then a function of k alone
+ * rather than of the other zone's count, so surveying commerce cannot move a
+ * home that is already built. They are disjoint for every split whose two counts
+ * sum to no more than the pool, which is exactly the constraint the surveyor
+ * enforces. Three zones drawing from one pool this way is a contradiction rather
+ * than a harder problem — see INDUSTRY_RESERVE.
+ *
+ * The pool is laid out so each zone reaches its own kind of land first. The
+ * front of `shared` is the housing frontage left over after the floor, and the
+ * back is the commercial frontage left over after its floor, reversed so that
+ * reading from the back walks it forwards. A district that grows its housing
+ * therefore spreads inward through land the generator already zoned residential
+ * before it starts taking high street, and commerce spreads outward from the
+ * high street before it starts taking housing.
+ *
+ * The property that makes the migration free: at the *default* split — every
+ * leftover parcel taken by the zone it came from — this reconstructs
+ * `plan.residential`, `plan.commercial` and `plan.industrial` cell for cell, in
+ * their original order. A v9 city reopens on exactly the land it was left on.
+ */
+export interface DistrictPool {
+  readonly homeFloor: Parcels;
+  readonly shopFloor: Parcels;
+  readonly worksFloor: Parcels;
+  readonly worksReserve: Parcels;
+  readonly shared: Parcels;
+}
+
+export function districtPool(plan: DistrictPlan): DistrictPool {
+  const home = cutParcels(
+    { cells: plan.residential, sizes: plan.residentialParcels },
+    ZONE_FLOOR.home,
+  );
+  const shop = cutParcels(
+    { cells: plan.commercial, sizes: plan.commercialParcels },
+    ZONE_FLOOR.shop,
+  );
+  const works = cutParcels(
+    { cells: plan.industrial, sizes: plan.industrialParcels },
+    ZONE_FLOOR.industry,
+  );
+  return {
+    homeFloor: home.head,
+    shopFloor: shop.head,
+    worksFloor: works.head,
+    // Industry's whole remainder. INDUSTRY_RESERVE is what it *is* rather than a
+    // cut of it: a district's industrial frontage is 13 plots and the floor took
+    // the first four, so what is left is the reserve.
+    worksReserve: works.tail,
+    shared: joinParcels(home.tail, reverseParcels(shop.tail)),
+  };
+}
+
+/** How many parcels each zone may survey in one district, before any are taken. */
+export interface PoolLimits {
+  /** Shared parcels, contested by residential and commercial together. */
+  readonly shared: number;
+  /** Parcels industry may take on top of its floor. */
+  readonly works: number;
+}
+
+export const poolLimits = (pool: DistrictPool): PoolLimits => ({
+  shared: pool.shared.sizes.length,
+  works: pool.worksReserve.sizes.length,
+});
+
+/**
+ * One district's zoning: how many *parcels* each zone has surveyed out of the
+ * pool, on top of its floor.
+ *
+ * Parcels rather than plots, because the pool is cut at parcel boundaries — see
+ * `cutParcels`. Plot counts are derived from these and the seed, which is what
+ * keeps them out of the save.
+ */
+export interface DistrictZoning {
+  readonly home: number;
+  readonly shop: number;
+  readonly industry: number;
+}
+
+/** The parcels one zone holds in a district, at a given zoning. */
+export function zoneParcels(
+  pool: DistrictPool,
+  zoning: DistrictZoning,
+  zone: Zone,
+): Parcels {
+  if (zone === ZONE.industrial) {
+    return joinParcels(pool.worksFloor, takeParcels(pool.worksReserve, zoning.industry));
+  }
+  if (zone === ZONE.commercial) {
+    // From the back. `reverseParcels` walks the pool's tail forwards, which is
+    // the order the generator laid the commercial frontage in — so commerce
+    // fills its own high street before it reaches into housing land.
+    return joinParcels(pool.shopFloor, takeParcels(reverseParcels(pool.shared), zoning.shop));
+  }
+  return joinParcels(pool.homeFloor, takeParcels(pool.shared, zoning.home));
+}
+
+/**
+ * One district's pool, with the prefix sums the capacity reads need.
+ *
+ * `homeCapacity` and its siblings are sums over districts now rather than one
+ * multiplication, and they run ten times a second — so turning a parcel count
+ * into a plot count has to be a lookup rather than a walk. Both directions are
+ * held, because residential reads the pool from the front and commerce from the
+ * back.
+ */
+export interface DistrictLand {
+  readonly pool: DistrictPool;
+  readonly limits: PoolLimits;
+  /** Plots in the first k shared parcels, indexed by k. */
+  readonly sharedFront: readonly number[];
+  /** Plots in the last k shared parcels, indexed by k. */
+  readonly sharedBack: readonly number[];
+  /** Plots in the first k of industry's reserve parcels. */
+  readonly worksFront: readonly number[];
+  readonly floor: { readonly home: number; readonly shop: number; readonly industry: number };
+}
+
+const prefix = (sizes: readonly number[]): number[] => {
+  const out = [0];
+  for (const size of sizes) out.push((out[out.length - 1] as number) + size);
+  return out;
+};
+
+const suffix = (sizes: readonly number[]): number[] => {
+  const out = [0];
+  for (let i = sizes.length - 1; i >= 0; i--) {
+    out.push((out[out.length - 1] as number) + (sizes[i] as number));
+  }
+  return out;
+};
+
+const lands = new Map<number, DistrictLand>();
+
+/** One district's pool, memoised. Keyed by annexation index, like every list. */
+export function districtLand(index: number): DistrictLand {
+  let land = lands.get(index);
+  if (!land) {
+    const c = districtCoord(index);
+    const pool = districtPool(districtPlanAt(c.x, c.z));
+    land = {
+      pool,
+      limits: poolLimits(pool),
+      sharedFront: prefix(pool.shared.sizes),
+      sharedBack: suffix(pool.shared.sizes),
+      worksFront: prefix(pool.worksReserve.sizes),
+      floor: {
+        home: parcelPlots(pool.homeFloor),
+        shop: parcelPlots(pool.shopFloor),
+        industry: parcelPlots(pool.worksFloor),
+      },
+    };
+    lands.set(index, land);
+  }
+  return land;
+}
+
+/**
+ * The city's zoning: how many pool parcels each zone has surveyed, per district.
+ *
+ * `GameState` satisfies this structurally, which is deliberate — `economy.ts`
+ * and the renderer both have a state in hand and neither should have to build a
+ * second thing to ask a layout question.
+ */
+export interface Zoning {
+  readonly districts: number;
+  readonly surveyedR: readonly number[];
+  readonly surveyedC: readonly number[];
+  readonly surveyedI: readonly number[];
+}
+
+/** A city with no districts and no zoning. What a renderer holds before its first sync. */
+export const EMPTY_ZONING: Zoning = { districts: 0, surveyedR: [], surveyedC: [], surveyedI: [] };
+
+/** One district's zoning, clamped to the land it actually has. */
+export function zoningAt(z: Zoning, index: number): DistrictZoning {
+  const limits = districtLand(index).limits;
+  // Clamped rather than trusted, for the reason `place` is: this is the one
+  // place a doctored save would index off the end of a parcel list, and the
+  // answer to a broken save is a wrong-looking city rather than a thrown frame.
+  const home = Math.max(0, Math.min(Math.floor(z.surveyedR[index] ?? 0), limits.shared));
+  const shop = Math.max(0, Math.min(Math.floor(z.surveyedC[index] ?? 0), limits.shared - home));
+  const industry = Math.max(0, Math.min(Math.floor(z.surveyedI[index] ?? 0), limits.works));
+  return { home, shop, industry };
+}
+
+/** Plots one zone holds in one district, at that district's zoning. */
+export function districtZonePlots(z: Zoning, index: number, zone: Zone): number {
+  const land = districtLand(index);
+  const at = zoningAt(z, index);
+  if (zone === ZONE.industrial) return land.floor.industry + (land.worksFront[at.industry] as number);
+  if (zone === ZONE.commercial) return land.floor.shop + (land.sharedBack[at.shop] as number);
+  return land.floor.home + (land.sharedFront[at.home] as number);
+}
+
+/**
+ * Plots one zone holds across the whole city.
+ *
+ * A sum over districts rather than a multiplication, and that is the change
+ * demand-driven zoning actually makes to the economy: every district has its own
+ * split now, written when it was the frontier and frozen when the next arrived.
+ * O(districts) of O(1) lookups — a walk over 49 districts costs 0.31 us, which
+ * `coastalDistricts`' own note already measured, so this is not worth memoising
+ * and is worth being able to read.
+ */
+/**
+ * The three zone totals, memoised against every mutation the arrays can take.
+ *
+ * Four numbers and three references, compared rather than hashed — this is read
+ * several times a tick through `capacityOf` and `plotCapacity`, and a template
+ * string per call allocates more than the walk it is there to avoid. Measured,
+ * the string form cost about a microsecond a tick on a small city.
+ *
+ * Only the last district's entry ever changes in play, because the surveyor
+ * works the frontier and nothing else — so the district count and the three last
+ * values catch every in-place write. What they miss is a wholesale replacement,
+ * which is what a load or a reset does, and the array *references* catch that:
+ * `migrate` and `createState` both build new arrays rather than writing into old
+ * ones.
+ */
+const zoneTotals = {
+  districts: -1,
+  lastR: -1,
+  lastC: -1,
+  lastI: -1,
+  arrays: [null, null, null] as unknown[],
+  plots: [0, 0, 0],
+};
+
+export function zonePlots(z: Zoning, zone: Zone): number {
+  const last = z.districts - 1;
+  const lastR = z.surveyedR[last] ?? -1;
+  const lastC = z.surveyedC[last] ?? -1;
+  const lastI = z.surveyedI[last] ?? -1;
+  if (
+    zoneTotals.districts !== z.districts ||
+    zoneTotals.lastR !== lastR ||
+    zoneTotals.lastC !== lastC ||
+    zoneTotals.lastI !== lastI ||
+    zoneTotals.arrays[0] !== z.surveyedR ||
+    zoneTotals.arrays[1] !== z.surveyedC ||
+    zoneTotals.arrays[2] !== z.surveyedI
+  ) {
+    // All three at once, because the caller that costs is `plotCapacity` and it
+    // wants all three plus the scrub they leave — six walks over the districts
+    // for one answer, measured at 10 us a call on a full map, which is the whole
+    // of why this is memoised at all.
+    zoneTotals.districts = z.districts;
+    zoneTotals.lastR = lastR;
+    zoneTotals.lastC = lastC;
+    zoneTotals.lastI = lastI;
+    zoneTotals.arrays = [z.surveyedR, z.surveyedC, z.surveyedI];
+    let home = 0;
+    let shop = 0;
+    let works = 0;
+    for (let i = 0; i < z.districts; i++) {
+      const land = districtLand(i);
+      const at = zoningAt(z, i);
+      home += land.floor.home + (land.sharedFront[at.home] as number);
+      shop += land.floor.shop + (land.sharedBack[at.shop] as number);
+      works += land.floor.industry + (land.worksFront[at.industry] as number);
+    }
+    zoneTotals.plots = [home, shop, works];
+  }
+  const at = zone === ZONE.commercial ? 1 : zone === ZONE.industrial ? 2 : 0;
+  return zoneTotals.plots[at] as number;
+}
+
+/** Shared parcels a district still has spare, for the surveyor. */
+export function sharedSpare(z: Zoning, index: number): number {
+  const at = zoningAt(z, index);
+  return districtLand(index).limits.shared - at.home - at.shop;
+}
+
+/** Industry reserve parcels a district still has spare. */
+export function worksSpare(z: Zoning, index: number): number {
+  return districtLand(index).limits.works - zoningAt(z, index).industry;
 }
 
 /** One district's land, split into what can be bought and what cannot. */
@@ -511,6 +878,22 @@ export const SPARE_PLOTS_PER_DISTRICT =
     FRONTAGE_TARGET.powerSites) *
     4;
 
+/**
+ * Sellable frontage a district carries, however it is zoned.
+ *
+ * The number demand-driven zoning holds fixed while everything under it floats:
+ * 24 + 45 + 13 is what the generator's reservations leave road-adjacent, and it
+ * is geometry rather than balance. What the surveyor moves is the split between
+ * the three; the total is not its to move. See `districtPool`.
+ */
+export const SELLABLE_PER_DISTRICT =
+  FRONTAGE_TARGET.residential + FRONTAGE_TARGET.commercial + FRONTAGE_TARGET.industrial;
+
+/**
+ * What a district's zones held before zoning floated. Kept for the migration and
+ * for the tools that still speak in the old split — nothing in the running game
+ * multiplies by these any more.
+ */
 export const BUILDABLE_RESIDENTIAL_PER_DISTRICT = FRONTAGE_TARGET.residential;
 export const BUILDABLE_COMMERCIAL_PER_DISTRICT = FRONTAGE_TARGET.commercial;
 export const BUILDABLE_INDUSTRIAL_PER_DISTRICT = FRONTAGE_TARGET.industrial;
@@ -715,9 +1098,12 @@ export class ParcelBook {
   private readonly pairsBefore: number[] = [];
   /** Two-plot parcels in the first d districts, indexed by d. */
   private readonly pairsThrough: number[] = [0];
+  /** Parcels, and plots, in the first d districts. What `rewind` rolls back to. */
+  private readonly parcelsThrough: number[] = [0];
+  private readonly plotsThrough: number[] = [0];
   private total = 0;
 
-  /** Appends one district's parcels. Sizes are 1 or 2, pairs first. */
+  /** Appends one district's parcels. Sizes are 1 or 2. */
   push(sizes: readonly number[]): void {
     for (const size of sizes) {
       this.begin.push(this.total);
@@ -727,6 +1113,37 @@ export class ParcelBook {
       this.total += size;
     }
     this.pairsThrough.push(this.pairAt.length);
+    this.parcelsThrough.push(this.size.length);
+    this.plotsThrough.push(this.total);
+  }
+
+  /** Districts this book has been given. */
+  get districts(): number {
+    return this.parcelsThrough.length - 1;
+  }
+
+  /**
+   * Drops every district past the `d`-th, so the tail can be pushed again.
+   *
+   * The one thing demand-driven zoning asks of this class. A district's split
+   * floats while it is the frontier, so its parcels change under it — and every
+   * district before it is frozen, so what has to be rebuilt is only ever the
+   * last one. Rolling back to a district boundary and pushing again is exactly
+   * that, and it leaves every earlier parcel where it was, which is what stops a
+   * survey from moving a building three districts away.
+   */
+  rewind(d: number): void {
+    const at = Math.max(0, Math.min(d, this.districts));
+    const parcels = this.parcelsThrough[at] as number;
+    const pairs = this.pairsThrough[at] as number;
+    this.size.length = parcels;
+    this.begin.length = parcels;
+    this.pairsBefore.length = parcels;
+    this.pairAt.length = pairs;
+    this.pairsThrough.length = at + 1;
+    this.parcelsThrough.length = at + 1;
+    this.plotsThrough.length = at + 1;
+    this.total = this.plotsThrough[at] as number;
   }
 
   /**
@@ -806,29 +1223,58 @@ export class ParcelBook {
   }
 }
 
-function parcelsOf(plan: DistrictPlan, zone: Zone): readonly number[] {
-  if (zone === ZONE.commercial) return plan.commercialParcels;
-  if (zone === ZONE.industrial) return plan.industrialParcels;
-  return plan.residentialParcels;
-}
-
 const PARCEL_ZONES: readonly Zone[] = [ZONE.residential, ZONE.commercial, ZONE.industrial];
 
-/** One set of books, per zone, grown district by district. */
+/**
+ * One set of books, per zone, grown district by district.
+ *
+ * Grown *and* rewound, since zoning arrived. Districts before the last are
+ * frozen and are pushed once; the last is the frontier, its split moves, and its
+ * parcels are rebuilt whenever it does. `stamp` is what says whether it moved —
+ * three small integers, compared rather than recomputed, because this is on the
+ * path `place` takes for every building on every rebuild.
+ */
 class ParcelBooks {
   private readonly books = new Map<Zone, ParcelBook>(
     PARCEL_ZONES.map((zone) => [zone, new ParcelBook()]),
   );
-  private districts = 0;
+  private frozen = 0;
+  private stamp = '';
 
-  of(zone: Zone, districts: number): ParcelBook {
-    for (let i = this.districts; i < districts; i++) {
-      const c = districtCoord(i);
-      const plan = districtPlanAt(c.x, c.z);
-      for (const z of PARCEL_ZONES) (this.books.get(z) as ParcelBook).push(parcelsOf(plan, z));
+  of(zone: Zone, z: Zoning): ParcelBook {
+    const districts = Math.max(0, z.districts);
+    // A shorter city than the book holds is a `reset` or a save from a smaller
+    // one: roll the whole tail off rather than trusting what is past it.
+    if (districts < this.frozen) {
+      for (const key of PARCEL_ZONES) (this.books.get(key) as ParcelBook).rewind(districts);
+      this.frozen = districts;
+      this.stamp = '';
     }
-    this.districts = Math.max(this.districts, districts);
+    // Everything but the newest district is frozen, so push those once.
+    const settled = Math.max(0, districts - 1);
+    for (let i = this.frozen; i < settled; i++) this.pushDistrict(i, z);
+    if (this.frozen < settled) this.stamp = '';
+    this.frozen = Math.max(this.frozen, settled);
+
+    if (districts > 0) {
+      const live = districts - 1;
+      const at = zoningAt(z, live);
+      const stamp = `${live}:${at.home}:${at.shop}:${at.industry}`;
+      if (stamp !== this.stamp) {
+        for (const key of PARCEL_ZONES) (this.books.get(key) as ParcelBook).rewind(live);
+        this.pushDistrict(live, z);
+        this.stamp = stamp;
+      }
+    }
     return this.books.get(zone) as ParcelBook;
+  }
+
+  private pushDistrict(index: number, z: Zoning): void {
+    const land = districtLand(index);
+    const at = zoningAt(z, index);
+    for (const key of PARCEL_ZONES) {
+      (this.books.get(key) as ParcelBook).push(zoneParcels(land.pool, at, key).sizes);
+    }
   }
 }
 
@@ -844,9 +1290,9 @@ class ParcelBooks {
  */
 const cityBooks = new ParcelBooks();
 
-/** The parcel book for one zone, materialised out to `districts`. */
-export function parcelBook(zone: Zone, districts: number): ParcelBook {
-  return cityBooks.of(zone, districts);
+/** The parcel book for one zone, materialised against the city's zoning. */
+export function parcelBook(zone: Zone, z: Zoning): ParcelBook {
+  return cityBooks.of(zone, z);
 }
 
 /**
@@ -886,6 +1332,10 @@ export function parcelBook(zone: Zone, districts: number): ParcelBook {
  */
 class LandmarkReach {
   private materialised = 0;
+  /** Districts whose housing plots are frozen, and where they end. */
+  private settled = 0;
+  private frozenPlots = 0;
+  private liveStamp = '';
   /** Residential plots, in the same order `CityLayout.homeCell` hands them out. */
   private readonly plots: Coord[] = [];
   /** Lower-left plot of each landmark site, in site order. */
@@ -903,15 +1353,40 @@ class LandmarkReach {
    * housing inside the reach of landmarks that were already standing — the
    * tables are not append-only even though the lists they index are.
    */
-  private ensure(districts: number): void {
-    if (districts <= this.materialised) return;
+  private ensure(z: Zoning): void {
+    const districts = Math.max(0, z.districts);
+    if (districts < this.materialised) {
+      this.plots.length = 0;
+      this.museums.length = 0;
+      this.stadiums.length = 0;
+      this.materialised = 0;
+      this.settled = 0;
+      this.frozenPlots = 0;
+      this.liveStamp = '';
+    }
+    const live = districts - 1;
+    const at = districts > 0 ? zoningAt(z, live) : undefined;
+    const stamp = at === undefined ? '' : `${live}:${at.home}`;
+    if (districts === this.materialised && stamp === this.liveStamp) return;
+
+    // The landmark sites are fixed land and are appended once; the housing plots
+    // are not, because the frontier district's split moves them. Same frozen /
+    // live split `CityLayout.ensure` carries, and for the same reason.
     for (let i = this.materialised; i < districts; i++) {
-      const { residential, landmarksSmall, landmarksLarge } = placeDistrict(i);
-      this.plots.push(...residential);
+      const { landmarksSmall, landmarksLarge } = placeDistrict(i, z);
       this.museums.push(...landmarksSmall);
       this.stadiums.push(...landmarksLarge);
     }
+    this.plots.length = this.frozenPlots;
+    for (let i = this.settled; i < Math.max(0, live); i++) {
+      this.plots.push(...placeDistrict(i, z).residential);
+    }
+    this.settled = Math.max(0, live);
+    this.frozenPlots = this.plots.length;
+    if (districts > 0) this.plots.push(...placeDistrict(live, z).residential);
+
     this.materialised = districts;
+    this.liveStamp = stamp;
     this.nearestMuseum = LandmarkReach.nearest(this.plots, this.museums, 2, reachOf('museum'));
     this.nearestStadium = LandmarkReach.nearest(this.plots, this.stadiums, 3, reachOf('stadium'));
     this.stamp = '';
@@ -955,10 +1430,10 @@ class LandmarkReach {
    * Housing plots inside reach of the first `museums` and `stadiums` landmarks,
    * out of the first `plots` the city has developed.
    */
-  covered(museums: number, stadiums: number, plots: number, districts: number): number {
-    this.ensure(districts);
+  covered(museums: number, stadiums: number, plots: number, z: Zoning): number {
+    this.ensure(z);
     const capped = Math.max(0, Math.min(plots, this.plots.length));
-    const stamp = `${districts}:${museums}:${stadiums}:${capped}`;
+    const stamp = `${this.liveStamp}:${z.districts}:${museums}:${stadiums}:${capped}`;
     if (stamp === this.stamp) return this.cached;
     let n = 0;
     for (let i = 0; i < capped; i++) {
@@ -987,9 +1462,9 @@ export function landmarkPlotsCovered(
   museums: number,
   stadiums: number,
   plots: number,
-  districts: number,
+  z: Zoning,
 ): number {
-  return cityReach.covered(museums, stadiums, plots, districts);
+  return cityReach.covered(museums, stadiums, plots, z);
 }
 
 /**
@@ -1024,39 +1499,75 @@ export function landmarkPlotsCovered(
  */
 class LandValue {
   private materialised = 0;
+  /** Districts whose housing plots are frozen, and where their scores end. */
+  private settled = 0;
+  private frozenLen = 0;
+  private liveStamp = '';
   /** Centrality per housing plot, in the order `CityLayout` hands them out. */
-  private readonly score: number[] = [];
+  private score: number[] = [];
   /** `sum[i]` is the total score of the first i plots. One longer than `score`. */
-  private readonly sum: number[] = [0];
+  private sum: number[] = [0];
 
-  private ensure(districts: number): void {
-    for (let i = this.materialised; i < districts; i++) {
-      const c = districtCoord(i);
-      const plan = districtPlanAt(c.x, c.z);
-      const { blocks, block } = plan.layout;
-      for (const cell of plan.residential) {
-        const id = block[cell] as number;
-        // A road cell has no block and cannot be in a build list, but the list
-        // is data and the lookup is cheap: a missing block reads as the
-        // district's edge rather than as a crash.
-        const score = (blocks[id]?.centrality ?? 0);
-        this.score.push(score);
-        this.sum.push((this.sum[this.sum.length - 1] as number) + score);
-      }
+  /**
+   * Materialises the housing scores against the city's zoning.
+   *
+   * The frozen / live split every table over the housing list now carries: which
+   * plots are housing depends on the frontier district's split, so its scores are
+   * rolled off and rebuilt when the surveyor moves it. The prefix sum has to be
+   * rebuilt from the boundary for the same reason, which is cheap — it is a
+   * running total over one district's plots.
+   */
+  private ensure(z: Zoning): void {
+    const districts = Math.max(0, z.districts);
+    if (districts < this.materialised) {
+      this.score = [];
+      this.sum = [0];
+      this.materialised = 0;
+      this.settled = 0;
+      this.frozenLen = 0;
+      this.liveStamp = '';
     }
-    this.materialised = Math.max(this.materialised, districts);
+    const live = districts - 1;
+    const at = districts > 0 ? zoningAt(z, live) : undefined;
+    const stamp = at === undefined ? '' : `${live}:${at.home}`;
+    if (districts === this.materialised && stamp === this.liveStamp) return;
+
+    this.score.length = this.frozenLen;
+    this.sum.length = this.frozenLen + 1;
+    for (let i = this.settled; i < Math.max(0, live); i++) this.pushDistrict(i, z);
+    this.settled = Math.max(0, live);
+    this.frozenLen = this.score.length;
+    if (districts > 0) this.pushDistrict(live, z);
+    this.materialised = districts;
+    this.liveStamp = stamp;
+  }
+
+  private pushDistrict(index: number, z: Zoning): void {
+    const c = districtCoord(index);
+    const plan = districtPlanAt(c.x, c.z);
+    const { blocks, block } = plan.layout;
+    const land = districtLand(index);
+    for (const cell of zoneParcels(land.pool, zoningAt(z, index), ZONE.residential).cells) {
+      const id = block[cell] as number;
+      // A road cell has no block and cannot be in a build list, but the list
+      // is data and the lookup is cheap: a missing block reads as the
+      // district's edge rather than as a crash.
+      const score = (blocks[id]?.centrality ?? 0);
+      this.score.push(score);
+      this.sum.push((this.sum[this.sum.length - 1] as number) + score);
+    }
   }
 
   /** Centrality of one housing plot, clamped to the land the city owns. */
-  at(plot: number, districts: number): number {
-    this.ensure(districts);
+  at(plot: number, z: Zoning): number {
+    this.ensure(z);
     const i = Math.max(0, Math.min(Math.floor(plot), this.score.length - 1));
     return this.score[i] ?? 0;
   }
 
   /** Mean centrality over the first `plots` housing plots the city sells. */
-  mean(plots: number, districts: number): number {
-    this.ensure(districts);
+  mean(plots: number, z: Zoning): number {
+    this.ensure(z);
     const n = Math.max(0, Math.min(Math.floor(plots), this.score.length));
     if (n <= 0) return 0;
     return (this.sum[n] as number) / n;
@@ -1073,15 +1584,15 @@ const cityLand = new LandValue();
  * game. See the `LevelCohort` comment in state.ts for what that does and does
  * not justify.
  */
-export function housingCentrality(plot: number, districts: number): number {
-  return cityLand.at(plot, districts);
+export function housingCentrality(plot: number, z: Zoning): number {
+  return cityLand.at(plot, z);
 }
 
 /**
  * Mean centrality over the first `plots` housing plots. What `income` reads.
  */
-export function housingCentralityMean(plots: number, districts: number): number {
-  return cityLand.mean(plots, districts);
+export function housingCentralityMean(plots: number, z: Zoning): number {
+  return cityLand.mean(plots, z);
 }
 
 /**
@@ -1099,15 +1610,22 @@ export function housingCentralityMean(plots: number, districts: number): number 
  * the middle of the city has moved. Measured, the shift is a fraction of a
  * percent — districts are generated by one process and their means agree
  * closely — see tools/landvalue.calibrate.mjs.
+ *
+ * It moves when the city *rezones*, too, and that is the same statement one
+ * layer down: surveying housing into a district adds plots to this mean, and
+ * surveying commerce over housing takes them out of it. The normaliser is the
+ * housing land the city owns, whatever the surveyor has decided that is.
  */
-export function housingCentralityBase(districts: number): number {
-  return cityLand.mean(districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT, districts);
+export function housingCentralityBase(z: Zoning): number {
+  return cityLand.mean(zonePlots(z, ZONE.residential), z);
 }
 
 interface DistrictPlots {
   readonly residential: Coord[];
   readonly commercial: Coord[];
   readonly industrial: Coord[];
+  /** Sellable plots the district has not zoned to anything yet. */
+  readonly scrub: Coord[];
   /** Lower-left plot of each civic site, in site order. */
   readonly civic: Coord[];
   /** Lower-left plot of each university site, in site order. */
@@ -1132,11 +1650,22 @@ interface DistrictPlots {
  * `districtPlan` has already taken the civic sites out, so there is nothing to
  * decide here.
  */
-function placeDistrict(index: number): DistrictPlots {
+function placeDistrict(index: number, z: Zoning): DistrictPlots {
   const c = districtCoord(index);
   const ox = c.x * DISTRICT_SPAN;
   const oz = c.z * DISTRICT_SPAN;
   const plan = districtPlanAt(c.x, c.z);
+  // The three sale lists come from the district's *pool* at its own zoning now,
+  // rather than from the plan's fixed 24 / 45 / 13. Everything else on the plan —
+  // the reserved squares, the courtyards, the streets — is untouched by zoning
+  // and is read straight off it, which is why `districtPlan` did not have to move.
+  const land = districtLand(index);
+  const at = zoningAt(z, index);
+  const sale = {
+    residential: zoneParcels(land.pool, at, ZONE.residential).cells,
+    commercial: zoneParcels(land.pool, at, ZONE.commercial).cells,
+    industrial: zoneParcels(land.pool, at, ZONE.industrial).cells,
+  };
 
   const toGlobal = (local: number): Coord => ({
     x: ox + (local % DISTRICT_SPAN),
@@ -1152,10 +1681,20 @@ function placeDistrict(index: number): DistrictPlots {
     }
   }
 
+  // Sellable land the district has not zoned to anything: the survey ground.
+  // Drawn as scrub rather than left as a hole — it is land the city owns and is
+  // not building on, which is what the courtyard list already means.
+  const zoned = new Set([...sale.residential, ...sale.commercial, ...sale.industrial]);
+  const scrub: number[] = [];
+  for (const cell of [...plan.residential, ...plan.commercial, ...plan.industrial]) {
+    if (!zoned.has(cell)) scrub.push(cell);
+  }
+
   return {
-    residential: plan.residential.map(toGlobal),
-    commercial: plan.commercial.map(toGlobal),
-    industrial: plan.industrial.map(toGlobal),
+    residential: sale.residential.map(toGlobal),
+    commercial: sale.commercial.map(toGlobal),
+    industrial: sale.industrial.map(toGlobal),
+    scrub: scrub.map(toGlobal),
     civic: plan.sites.map((site) => toGlobal(site.cell)),
     universities: plan.universities.map((site) => toGlobal(site.cell)),
     landmarksLarge: plan.landmarksLarge.map((site) => toGlobal(site.cell)),
@@ -1210,7 +1749,6 @@ export const createPlacement = (): Placement => ({
  * placed in district 1 keeps its exact plot after you annex district 20.
  */
 export class CityLayout {
-  private materialised = 0;
   /** This layout's own parcel books. See `cityBooks` for why they are not shared. */
   private readonly books = new ParcelBooks();
   private readonly _residential: Coord[] = [];
@@ -1256,50 +1794,164 @@ export class CityLayout {
   private _courtyards: Coord[] = [];
   private readonly _districts: District[] = [];
 
-  /** Materialises districts up to `count`. Idempotent and cheap to over-call. */
-  ensure(count: number): this {
-    for (let i = this.materialised; i < count; i++) {
-      const {
-        residential,
-        commercial,
-        industrial,
-        civic,
-        universities,
-        landmarksLarge,
-        landmarksSmall,
-        cityHalls,
-        powerPlants,
-        spareSquares,
-        courtyards,
-        roads,
-      } = placeDistrict(i);
-      this._residential.push(...residential);
-      this._commercial.push(...commercial);
-      this._industrial.push(...industrial);
-      this._civic.push(...civic);
-      this._universities.push(...universities);
-      this._landmarksLarge.push(...landmarksLarge);
-      this._landmarksSmall.push(...landmarksSmall);
-      this._cityHalls.push(...cityHalls);
-      this._powerPlants.push(...powerPlants);
-      this._spareSquares.push(...spareSquares);
-      this._parks.push(...courtyards.slice(0, BUILDABLE_PARKS_PER_DISTRICT));
-      this._spare.push(...courtyards.slice(BUILDABLE_PARKS_PER_DISTRICT));
-      const c = districtCoord(i);
-      this._districts.push({
-        index: i,
-        coord: c,
-        // worldX already folds OFFSET in, so the centre of a district's cells
-        // is just its coordinate scaled up. Adding OFFSET again here slides
-        // every land tile half a district off its own streets.
-        centreX: c.x * DISTRICT_WIDTH,
-        centreZ: c.z * DISTRICT_WIDTH,
-        roads,
-      });
+  /** Sellable plots no zone has taken, appended district by district. */
+  private readonly _scrub: Coord[] = [];
+  /** Districts whose *fixed* land — sites, courtyards, streets — is materialised. */
+  private fixed = 0;
+  /** Districts whose *sale* land is frozen. Always `districts - 1` or 0. */
+  private settled = 0;
+  /** Where the frozen districts' sale lists end. What `rewindSale` rolls back to. */
+  private frozenLengths = { residential: 0, commercial: 0, industrial: 0, scrub: 0 };
+  /** The frontier district's zoning, as last built. Empty forces a rebuild. */
+  private liveStamp = '';
+
+  /**
+   * Materialises the city's land against its zoning. Idempotent and cheap to
+   * over-call, which the renderer relies on — it calls this every sync.
+   *
+   * Two kinds of land, and the split is what makes demand-driven zoning safe.
+   * A district's *fixed* land — its civic squares, its courtyards, its streets —
+   * has nothing to do with zoning and is appended once, exactly as it always
+   * was. Its *sale* land is the three zoned lists, and those depend on the split.
+   *
+   * Every district but the newest is frozen: its split was written while it was
+   * the frontier and fixed the moment the next was annexed, so its plots are
+   * appended once and never touched again. The newest is live, and its segment
+   * is rolled off and rebuilt whenever the surveyor moves it.
+   *
+   * That the live district is the last one is the whole reason a survey never
+   * moves a building. A list may only grow at its end, and the frontier's segment
+   * is the end — rezoning district 0 under a city of twelve would insert plots
+   * before district 1's and shift every home past them onto new ground.
+   */
+  ensure(z: Zoning): this {
+    const count = Math.max(0, z.districts);
+    if (count < this.fixed) this.rewind();
+
+    for (let i = this.fixed; i < count; i++) this.appendFixed(i);
+    if (count > this.fixed) {
+      this.fixed = count;
+      this._courtyards = this._parks.concat(this._spare);
     }
-    if (count > this.materialised) this._courtyards = this._parks.concat(this._spare);
-    this.materialised = Math.max(this.materialised, count);
+
+    const live = count - 1;
+    const at = count > 0 ? zoningAt(z, live) : undefined;
+    const stamp = at === undefined ? '' : `${live}:${at.home}:${at.shop}:${at.industry}`;
+    if (stamp === this.liveStamp && this.settled === Math.max(0, live)) return this;
+
+    // Back to the frozen prefix, then forward again: any district that has since
+    // stopped being the frontier is appended as frozen, and the new frontier is
+    // built on top of it.
+    this.rewindSale();
+    for (let i = this.settled; i < Math.max(0, live); i++) this.appendSale(i, z);
+    this.settled = Math.max(0, live);
+    this.frozenLengths = {
+      residential: this._residential.length,
+      commercial: this._commercial.length,
+      industrial: this._industrial.length,
+      scrub: this._scrub.length,
+    };
+    if (count > 0) this.appendSale(live, z);
+    this.liveStamp = stamp;
     return this;
+  }
+
+  /**
+   * Materialises only the land zoning cannot move: streets, sites, courtyards.
+   *
+   * What the ground renderer wants, and all it wants — it draws tarmac and land
+   * tiles, neither of which has an opinion about what is zoned on top. Composes
+   * with `ensure`: the two share the same counter, so whichever runs first does
+   * the work and the other finds it done.
+   */
+  ensureFixed(districts: number): this {
+    const count = Math.max(0, districts);
+    if (count < this.fixed) this.rewind();
+    for (let i = this.fixed; i < count; i++) this.appendFixed(i);
+    if (count > this.fixed) {
+      this.fixed = count;
+      this._courtyards = this._parks.concat(this._spare);
+    }
+    return this;
+  }
+
+  /** Rolls the whole layout back to nothing. A `reset`, or a save from a smaller city. */
+  private rewind(): void {
+    for (const list of [
+      this._residential, this._commercial, this._industrial, this._scrub,
+      this._civic, this._universities, this._landmarksLarge, this._landmarksSmall,
+      this._cityHalls, this._powerPlants, this._spareSquares, this._parks, this._spare,
+    ]) {
+      list.length = 0;
+    }
+    this._districts.length = 0;
+    this._courtyards = [];
+    this.fixed = 0;
+    this.settled = 0;
+    this.liveStamp = '';
+    this.frozenLengths = { residential: 0, commercial: 0, industrial: 0, scrub: 0 };
+  }
+
+  /** Drops every sale plot past the frozen districts. The four zoned lists only. */
+  private rewindSale(): void {
+    this._residential.length = this.frozenLengths.residential;
+    this._commercial.length = this.frozenLengths.commercial;
+    this._industrial.length = this.frozenLengths.industrial;
+    this._scrub.length = this.frozenLengths.scrub;
+  }
+
+  /** One district's zoned plots, at the zoning it currently has. */
+  private appendSale(i: number, z: Zoning): void {
+    const { residential, commercial, industrial, scrub } = placeDistrict(i, z);
+    this._residential.push(...residential);
+    this._commercial.push(...commercial);
+    this._industrial.push(...industrial);
+    this._scrub.push(...scrub);
+  }
+
+  /** Everything about a district that zoning cannot move. Appended once. */
+  private appendFixed(i: number): void {
+    const c = districtCoord(i);
+    const ox = c.x * DISTRICT_SPAN;
+    const oz = c.z * DISTRICT_SPAN;
+    const plan = districtPlanAt(c.x, c.z);
+    const toGlobal = (local: number): Coord => ({
+      x: ox + (local % DISTRICT_SPAN),
+      z: oz + Math.floor(local / DISTRICT_SPAN),
+    });
+    const roads: Coord[] = [];
+    for (let lz = 0; lz < DISTRICT_SPAN; lz++) {
+      for (let lx = 0; lx < DISTRICT_SPAN; lx++) {
+        if (plan.layout.zone[lz * DISTRICT_SPAN + lx] === ZONE.road) {
+          roads.push({ x: ox + lx, z: oz + lz });
+        }
+      }
+    }
+    const courtyards = plan.courtyards.map(toGlobal);
+    this._civic.push(...plan.sites.map((site) => toGlobal(site.cell)));
+    this._universities.push(...plan.universities.map((site) => toGlobal(site.cell)));
+    this._landmarksLarge.push(...plan.landmarksLarge.map((site) => toGlobal(site.cell)));
+    this._landmarksSmall.push(...plan.landmarksSmall.map((site) => toGlobal(site.cell)));
+    this._cityHalls.push(...plan.cityHalls.map((site) => toGlobal(site.cell)));
+    this._powerPlants.push(...plan.powerPlants.map((site) => toGlobal(site.cell)));
+    this._spareSquares.push(...plan.spareSquares.map((site) => toGlobal(site.cell)));
+    this._parks.push(...courtyards.slice(0, BUILDABLE_PARKS_PER_DISTRICT));
+    this._spare.push(...courtyards.slice(BUILDABLE_PARKS_PER_DISTRICT));
+    this._districts.push({
+      index: i,
+      coord: c,
+      // worldX already folds OFFSET in, so the centre of a district's cells
+      // is just its coordinate scaled up. Adding OFFSET again here slides
+      // every land tile half a district off its own streets.
+      centreX: c.x * DISTRICT_WIDTH,
+      centreZ: c.z * DISTRICT_WIDTH,
+      roads,
+    });
+  }
+
+  /** Sellable plots the city owns and has zoned to nothing. Drawn as scrub. */
+  get scrub(): readonly Coord[] {
+    return this._scrub;
   }
 
   get districts(): readonly District[] {
@@ -1314,14 +1966,14 @@ export class CityLayout {
    * save carries `{ homes, mergedR }` and the position of every building in the
    * city falls out of them. Slots are merged-first — see `ParcelBook`.
    */
-  place(zone: Zone, slot: number, merged: number, out: Placement): Placement {
-    const book = this.books.of(zone, this.materialised);
+  place(zone: Zone, slot: number, merged: number, z: Zoning, out: Placement): Placement {
+    const book = this.books.of(zone, z);
     const cells = this.zoneCells(zone);
     // Clamped rather than trusted. `migrate` and `Game` both keep the counts
     // inside the land, but this is the one place a state that got past them
     // would index off the end of a plot list — and the renderer's answer to a
     // broken save has to be a wrong-looking city, not a thrown frame.
-    merged = Math.max(0, Math.min(merged, book.pairs(this.materialised)));
+    merged = Math.max(0, Math.min(merged, book.pairs(z.districts)));
     if (slot < merged) {
       const first = book.mergedPlot(slot, 0);
       const a = cells[first] as Coord;

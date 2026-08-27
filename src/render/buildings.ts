@@ -21,6 +21,8 @@ import {
   zoneOf,
 } from '../sim/economy';
 import {
+  EMPTY_ZONING,
+  type Zoning,
   createPlacement,
   worldX,
   worldZ,
@@ -582,6 +584,8 @@ class ZoneLayer {
   private readonly starts: number[] = new Array<number>(LEVELS).fill(0);
   private shown = 0;
   private shownMerged = -1;
+  /** The zoning the shown plots were placed against. See `CityLayout.ensure`. */
+  private shownZoning: Zoning = EMPTY_ZONING;
   private ruins = 0;
   private overlay: number | null = null;
   /**
@@ -682,6 +686,7 @@ class ZoneLayer {
     const levels = levelsOf(state, this.kind);
     this.shown = countOf(state, this.kind);
     this.shownMerged = mergedOf(state, this.kind);
+    this.shownZoning = state;
     this.ruins = this.shown - cohortTotal(levels);
     for (let l = 0; l < LEVELS; l++) this.cohort[l] = levels[l] ?? 0;
     cohortStart(this.cohort, this.starts);
@@ -744,7 +749,7 @@ class ZoneLayer {
     now: number,
     place: boolean,
   ): void {
-    const at = this.layout.place(this.zone, slot, this.shownMerged, SCRATCH_AT);
+    const at = this.layout.place(this.zone, slot, this.shownMerged, this.shownZoning, SCRATCH_AT);
     const scale = this.growth.scaleAt(slot, now);
     const shape = shapeOf(this.kind, level);
     const style = styleOf(this.kind, slot);
@@ -1534,7 +1539,7 @@ export class Buildings {
 
   /** Brings the scene in line with the simulation. Cheap when nothing changed. */
   sync(state: Readonly<GameState>, now: number): void {
-    this.layout.ensure(state.districts);
+    this.layout.ensure(state);
 
     // One decision for the whole city, because the detail parts are one bank.
     // A purchase appends to it and disturbs nothing already in it, so it can be
@@ -1665,7 +1670,7 @@ export class Buildings {
       this.outline.hide();
       return;
     }
-    const at = this.layout.place(zoneOf(ref.kind), ref.slot, mergedOf(state, ref.kind), SCRATCH_AT);
+    const at = this.layout.place(zoneOf(ref.kind), ref.slot, mergedOf(state, ref.kind), state, SCRATCH_AT);
     const level = levelAt(levelsOf(state, ref.kind), ref.slot);
     const shape = shapeOf(ref.kind, level);
     const style = styleOf(ref.kind, ref.slot);

@@ -32,7 +32,7 @@ function scene(patch: Partial<GameState>): {
   const layout = new CityLayout();
   const buildings = new Buildings(root, layout);
   const s = state(patch);
-  layout.ensure(s.districts);
+  layout.ensure(s);
   buildings.sync(s, 0);
   return { buildings, layout, s };
 }
@@ -58,7 +58,7 @@ describe('picking a building', () => {
     for (const kind of ['home', 'shop', 'industry'] as ZoneKind[]) {
       const count = kind === 'home' ? s.homes : kind === 'shop' ? s.shops : s.industry;
       for (let slot = 0; slot < count; slot++) {
-        const at = layout.place(zoneOf(kind), slot, mergedOf(s, kind), out);
+        const at = layout.place(zoneOf(kind), slot, mergedOf(s, kind), s, out);
         const found = under(buildings, at.x, at.z);
         expect(found).not.toBeNull();
         expect(found?.kind).toBe(kind);
@@ -79,7 +79,7 @@ describe('picking a building', () => {
     });
     const out = createPlacement();
     for (let slot = 0; slot < s.homes; slot++) {
-      const at = layout.place(zoneOf('home'), slot, s.mergedR, out);
+      const at = layout.place(zoneOf('home'), slot, s.mergedR, s, out);
       const found = under(buildings, at.x, at.z);
       expect(found?.slot).toBe(slot);
       expect(found?.kind).toBe('home');
@@ -95,7 +95,7 @@ describe('picking a building', () => {
     });
     const out = createPlacement();
     for (let slot = 0; slot < s.homes; slot++) {
-      const at = layout.place(zoneOf('home'), slot, 0, out);
+      const at = layout.place(zoneOf('home'), slot, 0, s, out);
       expect(under(buildings, at.x, at.z)?.slot).toBe(slot);
     }
   });

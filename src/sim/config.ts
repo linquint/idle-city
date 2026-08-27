@@ -199,27 +199,35 @@ export const FRONTAGE_TARGET = {
  * worker-rich and has to go and find them work. That arc is the design.
  *
  * A district built out at one level, measured through `demandTargets` at the
- * wider district's 24 / 45 / 13 frontage:
+ * wider district's 24 / 45 / 13 frontage, before TRADE_LADDER and after:
  *
- *   level              w/j    demand R      C      I
- *   detached housing  0.09       +1.00  -0.89  +0.41
- *   apartments        0.34       +0.34  -0.10  +0.10
- *   towers            1.56       -0.06  +0.10  +0.02
- *   arcologies        6.69       -0.15  +0.15  +0.01
- *   megastructures   26.76       -0.17  +0.16   0.00
+ *   level              w/j    flat trade ladder       sqrt trade ladder
+ *                             demand R      C      I    R      C      I
+ *   detached housing  0.09       +1.00  -0.82  +0.39  +1.00  -0.82  +0.39
+ *   apartments        0.34       +0.31  -0.09  +0.10  +0.31  -0.34  +0.15
+ *   towers            1.49       -0.05  +0.09  +0.02  -0.05  -0.08  +0.06
+ *   arcologies        6.39       -0.14  +0.13  +0.01  -0.14  +0.04  +0.03
+ *   megastructures   25.55       -0.16  +0.14   0.00  -0.16  +0.09  +0.01
  *
- * The fifth rung adds a hundredth of a demand point to a signal already
- * settled, which is `demandScale` doing its job: it divides by `cityScale`, so
- * the imbalance a built city can reach and the scale it is read against climb
- * together. The ratios above are therefore still the ones to solve, and they
- * did not move.
+ * The residential column does not move at all, and that is the whole of the
+ * split TRADE_LADDER is: jobs stay flat, so the labour market this budget
+ * solves is untouched at every rung. What moves is commerce, from a curve that
+ * ran -0.82 to +0.14 to one that runs -0.82 to +0.09 through a shallower
+ * middle — and, far more importantly, the *land* those numbers imply. See
+ * TRADE_LADDER for the ratio the flat ladder was asking the district for.
+ *
+ * `demandScale` is why the fifth rung adds a hundredth of a point to a signal
+ * already settled: it divides by `cityScale`, so the imbalance a built city can
+ * reach and the scale it is read against climb together. The ratios above are
+ * therefore still the ones to solve, and they did not move.
  *
  * What the rung *does* move is a mixed city. Over 24 hours the discount-chasing
- * policy — which buys housing and lets commerce lag — now pins residential at
- * -1 for 1,145 of 1,440 minutes where it pinned nothing before: it reaches
- * 146,000 residents against 74 shops. That is the surcharge doing what it is
- * for rather than a broken ratio, and it is the one thing to watch if the
- * ladder ever gains a sixth rung. See tools/economy.calibrate.mjs.
+ * policy — which buys housing and lets commerce lag — pins residential at -1
+ * for 990 of 1,440 minutes and commerce at +1 for 1,035, reaching 141,000
+ * residents against 91 shops. That is not the surcharge working: it is a city
+ * that wants 85.71 commercial plots per housing plot standing on land that
+ * sells 1.88 of them. The ladder halves the ask; the land supply is the other
+ * half and is not this constant's to fix. See tools/economy.calibrate.mjs.
  */
 export const ZONE_SHARE = {
   residential: 0.48,
@@ -316,8 +324,17 @@ export const LEVEL_HOUSING = LEVEL_CAPACITY.map(
  *     cities are job-rich and pull people in, mature ones are worker-rich and
  *     have to go and find them work.
  *
- * So levels raise what a building is worth to the ledger, and leave the number
- * of people it employs and the number of customers it serves per plot alone.
+ * Both are still true, and they are true about *different ladders*, which is
+ * what the flat answer missed. The first is an argument about how fast trade
+ * may climb, not about whether it may: at exponent 1 the land can never be
+ * filled and at exponent 0 the city wants 45.7x the commercial land a district
+ * holds. TRADE_LADDER is the middle, and its exponent is set by where the
+ * wanted ratio crosses the land rather than by either failure. The second is an
+ * argument about jobs and admits no middle at all — SHOP_JOBS and INDUSTRY_JOBS
+ * stay flat, and the arc survives at every rung.
+ *
+ * So levels raise what a building is worth to the ledger, leave the number of
+ * people it employs per plot alone, and raise the trade it carries sub-linearly.
  * A district still needs more shops as its towers fill, which is what fills the
  * land, and the land filling is what makes annexation reachable.
  *
@@ -867,31 +884,114 @@ export const JOBS_PER_COMMERCIAL = 8;
 export const JOBS_PER_INDUSTRIAL = 20;
 
 /**
- * What one commercial or industrial *building* is worth to the labour market
- * and to the goods cycle at each level.
+ * What one commercial or industrial *building* is worth to the labour market at
+ * each level. The footprint, and nothing else.
  *
- * The commerce-and-industry answer to LEVEL_CAPACITY, and the ladder is the
- * footprint rather than the income scale. That is not a shortcut; it is the only
- * ladder that survives the two measurements in LEVEL_SCALE. Scaling trips with
- * *capacity* means a level-2 shop serves 17.5x the trade, the city needs 17.5x
- * fewer shops, commercial land can never be filled and the annexation gate can
- * never be reached — measured, auto-develop stalled at 7 shops of 31. Scaling
- * with footprint says the honest thing instead: a retail park is two shopfronts
- * knocked together, so it employs two shopfronts' worth and serves two
- * shopfronts' worth of trips.
+ * Jobs are the ladder that must not move, and the reason is the arc
+ * WORKING_SHARE is built around: workers per housing plot climb 300x while jobs
+ * per commercial plot stand still, so a young city is job-rich and pulls people
+ * in and a mature one is worker-rich and has to go and find them work. Put a
+ * ladder on jobs and that arc is deleted — the job/worker ratio freezes at
+ * whatever it is at level 0 and the city is job-rich for its whole life.
  *
- * The consequence worth stating plainly, because it is what keeps ZONE_SHARE
- * true: jobs, trips, supply and output are all constant *per plot* at every
- * level. Merging changes how many buildings a district holds and never how much
- * land they cover, so the tier-0 equilibrium 14R = 8C + 20I is the equilibrium
- * at every level, not just the first. What levels buy commerce and industry is
- * LEVEL_SCALE — a retail park earns 17.5x a corner shop's keep per plot — and
- * the land still fills, which is the pair of things the old build could not have
- * at once.
+ * Measured, because it was tried. With a [1, 2.5, 7, 20, 55] ladder on jobs, a
+ * district built out at one level reads residential demand +1.00 at detached
+ * housing, *+1.00 again* at apartments, then +0.60 / +0.35 / +0.19. Pinned
+ * positive for two rungs and never once negative: the city never becomes
+ * worker-rich and residential demand never turns. That is the second of the two
+ * failures LEVEL_SCALE's comment records, and it is still exactly as fatal.
+ *
+ * Trips, supply and output are a different question with a different partner —
+ * see TRADE_LADDER, which is the one that moved.
  */
 export const SHOP_JOBS = LEVEL_FOOTPRINT.map((f) => JOBS_PER_COMMERCIAL * f) as readonly number[];
 export const INDUSTRY_JOBS = LEVEL_FOOTPRINT.map(
   (f) => JOBS_PER_INDUSTRIAL * f,
+) as readonly number[];
+
+/**
+ * How much more trade a plot carries at each level than a level-0 plot does.
+ *
+ * The ladder that jobs deliberately do not take. Trips balance against
+ * *residents*, which climb LEVEL_CAPACITY's 300x per plot, so a flat trade
+ * ladder means the number of commercial plots the city wants per housing plot
+ * climbs by the same 300x — from 0.29 at detached housing to 85.71 at
+ * megastructures, against the 45 / 24 = 1.88 a district actually sells. A city
+ * that climbs the ladder is 45.7x short of commercial land at the top and there
+ * is nothing a player can do about it, which is what pins commerce at +1 and
+ * housing at -1 the moment the two get even slightly out of step.
+ *
+ * `demandScale` hides this from a *balanced* district — it divides by
+ * `cityScale`, which is the same 300x, so a district built out uniformly reads
+ * -0.16 / +0.14 / 0.00 at the top and never pins. The imbalance is what pins,
+ * and the imbalance is unfixable while the wanted ratio outruns the land by two
+ * orders of magnitude. Measured over 24 hours, the discount-chasing policy sat
+ * at R -1 for 990 minutes of 1,440 and C +1 for 1,035, holding 173 residential
+ * plots against 91 commercial.
+ *
+ * So the ladder is neither flat nor proportional, and the exponent is what sets
+ * where it lands. Proportional (exponent 1) is the *first* failure in
+ * LEVEL_SCALE's comment: a level-2 shop serving 17.5x the trade means the city
+ * needs 17.5x fewer shops, commercial land can never be filled, and auto-develop
+ * stalled at 7 shops of 31 with the annexation gate unreachable. What decides
+ * the exponent is not the drift but the *anchor*: level 0 wants 0.29 commercial
+ * plots per housing plot and the land offers 1.88, so a ladder whose drift is
+ * under 6.5x never reaches the land at all and commerce is oversupplied at every
+ * rung. Measured, jobs held flat throughout:
+ *
+ *   exponent  ladder                     drift   top wants   x land   C at rungs 0-4
+ *   0.00      1, 1, 1, 1, 1               300x       85.71    45.7x   -.82 -.09 +.09 +.13 +.14
+ *   0.35      1, 1.6, 2.7, 4.7, 7.5      7.5x        11.43     6.1x   -.82 -.24 -.02 +.09 +.13
+ *   0.45      1, 1.9, 3.6, 7.0, 13.0      23x         6.58     3.5x   -.82 -.30 -.05 +.06 +.11
+ *   0.50      1, 2.0, 4.2, 8.7, 17.3      17x         4.95     2.6x   -.82 -.34 -.08 +.04 +.09
+ *   0.60      1, 2.3, 5.6, 13.3, 30.6    9.8x         2.80     1.5x   -.82 -.41 -.16 -.02 +.05
+ *   1.00      1, 4, 17.5, 75, 300           1x        0.29     0.15x  -.82 -.82 -.82 -.82 -.82
+ *
+ * 0.5 is the square root of the capacity ladder, and it is taken because of
+ * where it *crosses*: the wanted ratio passes the land's 1.88 between apartments
+ * and towers, which is exactly where the flat ladder crosses it today, so the
+ * shape of the early game is unchanged and only the runaway is cut. It holds
+ * commercial demand inside +-0.35 at every rung against a flat ladder's -0.82,
+ * and its top wants 4.95 commercial plots per housing plot — a ratio a district
+ * cannot supply today at 1.88, and the number the zoning work is sized against.
+ *
+ * The first rung is exactly 1, so nothing about a fresh save moves. That is not
+ * a hope: the demand-neutral build-out probe reads 55.1% and 24R / 7C / 11I at
+ * detached housing at *every* exponent from 0 to 0.5, which is what a ladder
+ * anchored at 1 has to mean and what the probe had to be repaired to show.
+ *
+ * What it costs, stated plainly, because it is a real loss and not a rounding
+ * one. The demand-neutral build-out of one district, per level held:
+ *
+ *   exponent   detached  apartments   towers  arcologies  megastructures
+ *   0 (flat)      55.1%       10.1%    89.9%       78.7%           76.4%
+ *   0.35          55.1%       11.2%    47.2%       36.0%           62.9%
+ *   0.45          55.1%       11.2%    27.0%       29.2%           47.2%
+ *   0.50          55.1%       11.2%    24.7%       24.7%           40.4%
+ *
+ * Against a 70% annexation gate, a uniform district above apartments used to
+ * justify filling itself and now does not. That is the *first* failure in
+ * LEVEL_SCALE's comment arriving in a milder form, and it is accepted here for
+ * one reason only: the probe measures against a commercial allotment fixed at
+ * 45, and a district of towers that wants 8 commercial plots rather than 23 is
+ * a district that should be *zoned* for 8. The land supply is the other half of
+ * this change and it is not this constant's to fix. If demand-driven zoning
+ * does not recover the gate, this exponent is the first thing to bring down —
+ * 0.35 and 0.45 are measured above and are the fallbacks, and 0.35's top wants
+ * 11.43 commercial plots per housing plot, which is past what a shared pool can
+ * offer.
+ *
+ * What it buys, over 24 hours, is the other half of the same trade. The
+ * discount-chasing policy's commercial pin falls from 1,035 minutes of 1,440 to
+ * 496 — less than half — while residential holds at 987, because residential
+ * pinning is a *mix* failure that no capacity ladder reaches. Auto-develop is
+ * unmoved (5 districts, first annex 1.72h against 1.73h) and the disciplined
+ * policy is better off (6 districts against 5). See tools/economy.calibrate.mjs.
+ */
+export const TRADE_EXPONENT = 0.5;
+
+export const TRADE_LADDER = LEVEL_CAPACITY.map(
+  (capacity) => (capacity / (LEVEL_CAPACITY[0] ?? 1)) ** TRADE_EXPONENT,
 ) as readonly number[];
 
 /**
@@ -912,8 +1012,19 @@ export const INDUSTRY_JOBS = LEVEL_FOOTPRINT.map(
 export const SPEND_PER_RESIDENT = 0.5;
 export const SHOP_THROUGHPUT = 7;
 
-/** Trips one shop serves at each level. Per plot, as SHOP_JOBS explains. */
-export const SHOP_TRIPS = LEVEL_FOOTPRINT.map((f) => SHOP_THROUGHPUT * f) as readonly number[];
+/**
+ * Trips one shop serves at each level.
+ *
+ * Two factors and they say different things. The footprint is per *building* —
+ * a retail park is two shopfronts knocked together and serves two shopfronts'
+ * worth — and TRADE_LADDER is per *plot*: a shopfront on the ground floor of a
+ * trade tower serves more trade than a corner shop does. Keeping them as two
+ * factors is what keeps the per-plot and per-building readings from drifting,
+ * which is the distinction SHOP_JOBS' comment has always defended.
+ */
+export const SHOP_TRIPS = LEVEL_FOOTPRINT.map(
+  (f, l) => SHOP_THROUGHPUT * (TRADE_LADDER[l] ?? 1) * f,
+) as readonly number[];
 
 /**
  * Goods one shop pulls from industry, against what one industrial plot makes.
@@ -930,10 +1041,29 @@ export const SHOP_TRIPS = LEVEL_FOOTPRINT.map((f) => SHOP_THROUGHPUT * f) as rea
 export const SUPPLY_DRAW = 4;
 export const INDUSTRIAL_OUTPUT = 9;
 
-/** Goods one shop draws and one works makes, per level. Per plot, as above. */
-export const SHOP_SUPPLY = LEVEL_FOOTPRINT.map((f) => SUPPLY_DRAW * f) as readonly number[];
+/**
+ * Goods one shop draws and one works makes, per level.
+ *
+ * Both take TRADE_LADDER, and taking it as a matched pair is the point: a
+ * bigger shop sells more and a bigger works makes more, so the goods cycle's
+ * *shape* is left where SUPPLY_DRAW and INDUSTRIAL_OUTPUT put it and only the
+ * flat export tap is diluted against it. Measured on a district built out at one
+ * level, industrial demand reads +0.39 / +0.15 / +0.06 / +0.02 / +0.01 against a
+ * flat ladder's +0.39 / +0.10 / +0.02 / +0.01 / 0.00 — so industry stays worth
+ * building a rung or two longer than it used to, which is the direction the
+ * estates were built to relieve rather than the one they were built to cause.
+ *
+ * Estates are the one industrial supply that does *not* take the ladder, and
+ * cannot: `estateSupply` reads ESTATE_PLOTS against `industryScale`, and an
+ * estate holds no level of its own. So a band of works is worth relatively less
+ * to a city high on the ladder than it was — see ESTATE_YIELD, whose own
+ * measurement is re-checked against this.
+ */
+export const SHOP_SUPPLY = LEVEL_FOOTPRINT.map(
+  (f, l) => SUPPLY_DRAW * (TRADE_LADDER[l] ?? 1) * f,
+) as readonly number[];
 export const INDUSTRY_OUTPUT = LEVEL_FOOTPRINT.map(
-  (f) => INDUSTRIAL_OUTPUT * f,
+  (f, l) => INDUSTRIAL_OUTPUT * (TRADE_LADDER[l] ?? 1) * f,
 ) as readonly number[];
 
 /**
@@ -951,6 +1081,264 @@ export const INDUSTRY_OUTPUT = LEVEL_FOOTPRINT.map(
  */
 export const EXPORT_BASE = 60;
 export const EXPORT_PER_DISTRICT = 14;
+
+/**
+ * What the city's *services* do to demand, beyond the mood they buy.
+ *
+ * Until this table existed, everything the player built reached demand through
+ * exactly one channel: happiness, and only as a ceiling on residential. A
+ * hospital and a park and a police station were interchangeable to the demand
+ * loop — three ways to move one number — so *what* you built changed how happy
+ * the city was and never what it wanted next. These are the other channels.
+ *
+ * Each entry is an additive term on one signal's target, applied before
+ * `clampDemand` and inside it, so the bounds are the bounds they always were.
+ * `centred` says how the reading is read: a coverage is centred on 0.5, so a
+ * half-covered city is neutral and the term cuts both ways; a bonus (a landmark
+ * reach, a tax pressure) is read raw from zero, because a city with no landmarks
+ * has not earned a penalty for it.
+ *
+ * The design each weight is carrying, which is the part to preserve if the
+ * numbers move:
+ *
+ *   - **housing follows safety and health.** People move toward a covered city.
+ *     Police and hospitals stop being pure mood and become growth, and they are
+ *     the two heaviest terms here because they are the two the tutorial is
+ *     built on;
+ *   - **commerce follows footfall.** Transit brings shoppers and landmarks bring
+ *     visitors, so both go on mattering after the happiness they buy has
+ *     saturated. Landmarks are the heaviest single positive in the table for
+ *     exactly that reason: they are the one thing whose mood contribution caps
+ *     out long before the building stops being worth having;
+ *   - **industry follows skills.** Schools and universities stop being only a
+ *     level gate;
+ *   - **tax has a third dimension.** Punitive costs mood already; it should also
+ *     drive business away. That is what makes the switch a strategic choice
+ *     rather than a dial on one number, and it is why the tax weights are the
+ *     largest in the table and negative on both trading zones.
+ *
+ * Two things this table deliberately does *not* do. It does not touch industry
+ * with a transit term — `labourReach` already is one, and counting the network
+ * twice on the same signal would be a bigger lift for a depot than a depot does.
+ * And it carries no term at all for a city with no housing: every coverage in
+ * this game reads 1 against no housing, because a coverage is the share a
+ * service *fails* and it fails nothing when nothing is built, so an ungated
+ * table would hand a fresh save +0.225 of residential demand on its first tick
+ * and the opening would no longer bootstrap off the export tap. See
+ * `demandLift`, where the gate lives.
+ *
+ * What the table did over 24 hours, and it is a trade rather than a win:
+ *
+ *   policy                  R pinned      C pinned      districts   first annex
+ *   auto-develop            0m -> 0m      0m -> 0m        5 -> 6     1.72 -> 1.25h
+ *   discount-chasing      987m -> 0m    496m -> 952m      9 -> 9     4.99 -> 6.25h
+ *   disciplined             0m -> 0m      0m -> 0m        6 -> 6     1.66 -> 2.15h
+ *
+ * The residential pin is *gone* — the signal the capacity ladder could not
+ * reach, unpinned by a table that was not written to fix it. What did it is the
+ * +0.225 a fully covered city now carries on housing, which lifts a
+ * discount-chasing city off the -1 bound it used to sit on for 16 hours of every
+ * 24. The same mechanism is what made commerce worse: a covered city carries
+ * +0.175 on commerce as well, and commerce was already the signal nearest its
+ * upper bound.
+ *
+ * Worth stating plainly, because it is the honest reading of these weights: a
+ * coverage term centred on 0.5 becomes a *constant* once the coverage
+ * saturates, so most of what it does over a long run is re-centre the
+ * equilibrium rather than offer a decision. The decision is in the transition —
+ * the hour a city spends going from uncovered to covered — and that is real and
+ * visible. If the terms should be about neglect only, centring them on 1
+ * instead of 0.5 would leave a covered city exactly where it was and turn every
+ * one of these into a penalty for going without; it is a one-character change
+ * per row and it is the first thing to reach for if the commercial pin matters
+ * more than the residential one did.
+ *
+ * The other two policies are better off on every axis measured: a district
+ * sooner, half an hour earlier to the first annexation, and 89% happiness at one
+ * hour against 78%. The discount-chasing policy is slower to start — 6.25 hours
+ * to its first annexation against 4.99 — because an uncovered opening now pays a
+ * demand penalty it did not before, which is the tutorial doing its job to a
+ * policy built to ignore it.
+ */
+export interface DemandTerm {
+  /** What the reading is drawn from. Not unique on its own — `zone` completes it. */
+  readonly key: 'police' | 'hospital' | 'recreation' | 'transit' | 'landmark' | 'education' | 'tax';
+  readonly zone: 'home' | 'shop' | 'industry';
+  /** What the HUD calls it. */
+  readonly label: string;
+  readonly weight: number;
+  /** True for a coverage, read against 0.5. False for a bonus, read from 0. */
+  readonly centred: boolean;
+}
+
+export const DEMAND_TERMS: readonly DemandTerm[] = [
+  { key: 'police',     zone: 'home',     label: 'Police coverage',  weight:  0.20, centred: true },
+  { key: 'hospital',   zone: 'home',     label: 'Health coverage',  weight:  0.15, centred: true },
+  { key: 'recreation', zone: 'home',     label: 'Parks',            weight:  0.10, centred: true },
+  { key: 'transit',    zone: 'shop',     label: 'Transit footfall', weight:  0.25, centred: true },
+  { key: 'landmark',   zone: 'shop',     label: 'Landmark reach',   weight:  0.20, centred: false },
+  { key: 'education',  zone: 'shop',     label: 'Education',        weight:  0.10, centred: true },
+  { key: 'tax',        zone: 'shop',     label: 'Tax rate',         weight: -0.30, centred: false },
+  { key: 'education',  zone: 'industry', label: 'Education',        weight:  0.20, centred: true },
+  { key: 'tax',        zone: 'industry', label: 'Tax rate',         weight: -0.35, centred: false },
+];
+
+/**
+ * The most any one term may move a signal, and the most the whole table may.
+ *
+ * Derived rather than typed, because the property worth asserting is that no
+ * single service can pin a signal on its own — `test/services.test.ts` reads
+ * these rather than a pair of literals that would rot the moment a weight moved.
+ * A centred term spans half its weight either way; a bonus term spans all of it.
+ */
+export const DEMAND_TERM_MAX = Math.max(
+  ...DEMAND_TERMS.map((t) => Math.abs(t.weight) * (t.centred ? 0.5 : 1)),
+);
+
+// ------------------------------------------------------------------- zoning
+
+/**
+ * The least land a zone keeps in a district, in plots, however unwanted it is.
+ *
+ * A district still sells exactly 82 plots — that number is geometry, not
+ * balance, and it does not move. What moves is the split, and these are the
+ * stops at the bottom of it: no amount of sustained negative demand can zone a
+ * type out of a district entirely, because a district with nowhere at all to
+ * live is a district that can never recover the demand that would fix it.
+ *
+ * Read as *at least*, not exactly. The pool is drawn in whole parcels — see
+ * `districtPool` — so a floor lands on the first parcel boundary at or past
+ * these, which is 8 or 9 plots rather than 8 on the nose. Nothing multiplies a
+ * per-district constant any more (`homeCapacity` is a sum over districts now),
+ * so the exactness that FRONTAGE_TARGET needed is not needed here.
+ */
+export const ZONE_FLOOR = {
+  home: 8,
+  shop: 8,
+  industry: 4,
+} as const;
+
+/**
+ * Plots industry may survey on top of its floor, and the whole of its range.
+ *
+ * Industry does not draw from the shared pool, and cannot: three zones taking
+ * prefixes of one pool is a contradiction rather than a tuning problem. If
+ * residential can take nearly all of a pool of N, then at (N-1, 1, 0) commerce's
+ * first plot is forced onto the one cell residential leaves, at (N-1, 0, 1)
+ * industry's first plot is forced onto that same cell, and (0, 1, 1) — two plots
+ * surveyed of N — has them both claiming it. Two zones have no such
+ * contradiction, because one can fill from each end.
+ *
+ * So industry takes a reserve of its own and residential and commerce contest
+ * the rest. 9 plots on top of a floor of 4 keeps industry's ceiling at the 13 it
+ * has today, which is the number every goods constant was measured against.
+ *
+ * The consequence is worth stating rather than discovering: **an industry-led
+ * city is impossible by construction.** Industry tops out at 13 of 82 plots —
+ * 16% — where residential and commerce can each reach 61, or 74%. No amount of
+ * industrial demand makes industry the dominant zone inside the city. The outlet
+ * is the estates, which stand on land the city does not own and are counted
+ * apart from every plot total for exactly that reason.
+ *
+ * What industry gives up is not deleted. A district that surveys 6 of its 13
+ * releases the other 7 to residential and commerce when it freezes — see
+ * `freezeDistrict`. It cannot be released *live*, because commerce fills the
+ * pool from the back and a pool whose size moved with the industrial count would
+ * move every commercial plot in the district each time industry surveyed.
+ */
+export const INDUSTRY_RESERVE = 9;
+
+/**
+ * The demand a zone needs before the surveyor will zone it more land.
+ *
+ * Above the noise a settled city sits at — the disciplined policy ends a day at
+ * R -0.36 / C +0.53 / I +0.30 — so a city drifting near balance does not slowly
+ * rezone itself into whatever it happened to want last. It has to actually be
+ * short.
+ */
+export const SURVEY_DEMAND = 0.35;
+
+/**
+ * How built-out a zone has to be before more of it is worth zoning.
+ *
+ * The constant that stops the surveyor being a stall. Derived growth means the
+ * price of a plot falls when the allotment it is counted against grows, so a
+ * player who stops building while the surveyor runs is paid to wait — measured
+ * on the unmodified design, waiting five surveys beat building through them by
+ * 1.7x at three hours and 23x at twenty-four, because the saving is a fraction
+ * of a price that compounds while the forgone income is a flat rate.
+ *
+ * This closes it, and closes it by construction rather than by balance. A move
+ * takes the zone from `n / A` to `n / (A + size)`, so the fill ratio falls
+ * strictly and the gate shuts itself; it reopens only when the player builds
+ * again. A zone that was already *past* the gate may take a second parcel on the
+ * way under it — 20 built of 24 reads 0.833, and one plot more of land reads
+ * exactly 0.800 — so the bound is a parcel or two rather than exactly one.
+ * Measured, a city that stops building mid-move gains at most four plots and
+ * then stops. There is no clock to wait out either: the surveyor is a predicate
+ * on the state, checked every tick like `autoAnnex`, not a periodic pass.
+ *
+ * 0.8 rather than ANNEX_MIN_OCCUPANCY's 0.7 because this gate fires far more
+ * often and against a much smaller denominator: a zone at its floor holds 8
+ * plots, so 0.7 and 0.8 are 5.6 and 6.4 of them, and the tighter one is what
+ * keeps a district from surveying on the strength of two buildings.
+ *
+ * What the whole of it bought, and it is the debt TRADE_LADDER's comment left
+ * open. The demand-neutral build-out of one district, per level held, against a
+ * 70% annexation gate:
+ *
+ *   level              flat ladder   sqrt ladder, fixed land   with zoning
+ *   detached housing         55.1%                     55.1%        100.0%
+ *   apartments               10.1%                     11.2%          9.0%
+ *   towers                   89.9%                     24.7%        102.2%
+ *   arcologies               78.7%                     24.7%         94.4%
+ *   megastructures           76.4%                     40.4%         92.1%
+ *
+ * The middle column is what the capacity ladder cost on land fixed at 24 / 45 /
+ * 13, and the right is that same ladder against land that follows demand. A
+ * district of towers that wants eight commercial plots rather than twenty-three
+ * now *zones* itself for eight and fills them, which is the argument the ladder
+ * was accepted on. The apartments row is a probe artefact and reads about 10%
+ * in all three columns.
+ */
+export const SURVEY_FILL = 0.8;
+
+/**
+ * Seconds between the surveyor's passes.
+ *
+ * A clock, and it is here for step-size invariance rather than for pacing. The
+ * surveyor was built without one — a predicate on the state, acted on every tick
+ * like `autoAnnex` — and that is not invariant: a pass per *tick* means a
+ * 60-second catch-up step makes one move where six hundred tenth-second ticks
+ * make up to six hundred. Measured, an hour away rezoned a district to 11
+ * parcels where an hour watched reached 13.
+ *
+ * So it accumulates, in the shape `fireHazard` and the levelling drift already
+ * use: seconds bank up and whole passes are spent out of the bank, which gives
+ * the same answer at any step size the loop is run at.
+ *
+ * The clock does *not* reopen the stall, and the reason is worth being precise
+ * about because the first design removed it for exactly that fear. What kills
+ * the stall is SURVEY_FILL: a move drops the zone under its own gate, so waiting
+ * harvests a parcel or two whenever it happens and no more. The clock decides
+ * when that lands, never how much of it there is.
+ *
+ * 20 seconds against demand's 25: fast enough that a zone that has just filled
+ * does not wait a visible beat for the land it has earned, slow enough that the
+ * signal it reads has moved between passes.
+ */
+export const SURVEY_SECONDS = 20;
+
+/**
+ * Surveys a single `catchUp` call may make, however long the absence.
+ *
+ * The same guard CATCHUP_MAX_ANNEXES and CATCHUP_MAX_ABANDONED are, and set for
+ * the same reason: a twelve-hour absence must not return a city whose zoning
+ * nobody watched change. Larger than either of theirs because a survey is a
+ * parcel rather than a district or a building, and because the surveyor is
+ * self-limiting — every survey shuts its own gate until the player builds.
+ */
+export const CATCHUP_MAX_SURVEYS = 8;
 
 // ------------------------------------------------------------------- pricing
 
@@ -1752,11 +2140,21 @@ export const TRANSIT_WORKFORCE = 0.25;
  * `demandScale` is a district's labour pool — so feeding the whole surplus in
  * doubles commercial demand and pins it. Measured over 24 hours: at 1.0 the
  * discount-chasing policy sat at +1 commercial for 628 minutes of the run,
- * against a build that pinned nothing at all. At 0.35 the term is worth about
+ * against a build that pinned nothing at all. At 0.35 the term was worth about
  * 0.14 of a demand point to that same city — a lift a player can see on the
  * bar, and nothing pins.
+ *
+ * Cut from 0.35 to 0.30 when DEMAND_TERMS gave commerce a transit term of its
+ * own, and the cut is the whole of what stops the network being counted twice.
+ * The two say different things through one set of buses — this one carries
+ * *workers* to premises and the footfall term carries *shoppers* to shops — but
+ * they land on the same signal, and a depot that lifted commercial demand
+ * through both channels at full strength would be worth more than a depot is.
+ * 0.30 gives back roughly what the footfall term's ceiling adds, and the
+ * measurement to watch is the combined transit contribution to commerce rather
+ * than either term alone.
  */
-export const TRANSIT_LABOUR_DRAW = 0.35;
+export const TRANSIT_LABOUR_DRAW = 0.30;
 
 /**
  * What free transport does, and what it costs.

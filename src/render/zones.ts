@@ -54,6 +54,8 @@ export class Courtyards {
   private readonly pads: GrowableInstancedMesh;
   private readonly dummy = new THREE.Object3D();
   private readonly tint = new THREE.Color(PALETTE.courtyard);
+  /** Survey ground. Drier and paler than a courtyard, so the two read apart. */
+  private readonly scrubTint = new THREE.Color(PALETTE.scrub);
   private stamp = '';
 
   constructor(
@@ -71,11 +73,16 @@ export class Courtyards {
 
   sync(state: Readonly<GameState>): void {
     const built = SERVICE_KEYS.map((key) => serviceCount(state, key));
+    // The frontier district's zoning is in the stamp because scrub moves with
+    // it: a survey turns a scrub plot into zoned land and this is what draws the
+    // difference. Only the last entry can change, so three numbers cover it.
+    const at = state.districts - 1;
     const stamp =
-      `${state.districts}:${state.parks}:${state.cityHall}:${state.plants}:${built.join(',')}`;
+      `${state.districts}:${state.parks}:${state.cityHall}:${state.plants}:${built.join(',')}` +
+      `:${state.surveyedR[at] ?? 0}:${state.surveyedC[at] ?? 0}:${state.surveyedI[at] ?? 0}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
-    this.layout.ensure(state.districts);
+    this.layout.ensure(state);
 
     const courtyards = this.layout.courtyards;
     // Parks are the front of the courtyard list, so the plots still standing
@@ -88,11 +95,11 @@ export class Courtyards {
       (built[site % types] as number) > Math.floor(site / types);
 
     let n = 0;
-    const write = (cell: Coord): void => {
+    const write = (cell: Coord, tint = this.tint): void => {
       this.dummy.position.set(worldX(cell.x), PAD_Y, worldZ(cell.z));
       this.dummy.updateMatrix();
       this.pads.setMatrixAt(n, this.dummy.matrix);
-      this.pads.setColorAt(n, this.tint);
+      this.pads.setColorAt(n, tint);
       n++;
     };
 
@@ -107,7 +114,13 @@ export class Courtyards {
     const plants = Math.max(0, this.layout.powerPlantSites - state.plants);
     let empty = 0;
     for (let i = 0; i < this.layout.civicSites; i++) if (!taken(i)) empty++;
-    this.pads.ensure(courtyards.length - laid + (empty + halls + plants) * 4);
+    // Survey ground: sellable frontage the city owns and has zoned to nothing.
+    // Through this mesh rather than one of its own, because BUILDING_MESH_BUDGET
+    // is 24 with no slack in it — what tells scrub from courtyard is the tint on
+    // the instance, which this mesh already varies. Only the frontier district
+    // ever holds any, so this list is one district's pool at most.
+    const scrub = this.layout.scrub;
+    this.pads.ensure(courtyards.length - laid + scrub.length + (empty + halls + plants) * 4);
 
     const quad = (c: Coord): void => {
       write(c);
@@ -117,6 +130,7 @@ export class Courtyards {
     };
 
     for (let i = laid; i < courtyards.length; i++) write(courtyards[i] as Coord);
+    for (const cell of scrub) write(cell, this.scrubTint);
     for (let i = 0; i < this.layout.civicSites; i++) {
       // The site's four plots, from its lower-left corner.
       if (!taken(i)) quad(this.layout.civicSiteCell(i));
@@ -191,7 +205,7 @@ export class Parks {
     const stamp = `${state.districts}:${state.parks}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
-    this.layout.ensure(state.districts);
+    this.layout.ensure(state);
 
     const n = Math.min(state.parks, state.districts * PARKS_PER_DISTRICT);
     this.pads.ensure(n);
@@ -325,7 +339,7 @@ export class Zones {
         : `demand:${counts}:${quantise(state.demandR)}:${quantise(state.demandC)}:${quantise(state.demandI)}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
-    this.layout.ensure(state.districts);
+    this.layout.ensure(state);
 
     const residential = this.layout.zoneCells(ZONE.residential);
     const commercial = this.layout.zoneCells(ZONE.commercial);

@@ -211,7 +211,7 @@ export class Ground {
       if (this.ranges.length > districts) this.rebuild(districts);
       return;
     }
-    this.layout.ensure(districts);
+    this.layout.ensureFixed(districts);
 
     for (let i = this.ranges.length; i < districts; i++) {
       const district = this.layout.districts[i] as District;

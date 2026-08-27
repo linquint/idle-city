@@ -10,6 +10,10 @@ import {
   LEVELS,
   MAX_DISTRICTS,
   SERVICES,
+  DEMAND_TERMS,
+  DEMAND_TERM_MAX,
+  TAX_NEUTRAL,
+  TAX_STEPS,
 } from '../src/sim/config';
 import {
   bindingTerm,
@@ -17,8 +21,12 @@ import {
   civicBuildings,
   covered,
   coverage,
+  demandLift,
   demandTargets,
+  demandTerms,
   educationCoverage,
+  taxPressure,
+  ZONE_KINDS,
   happinessTarget,
   homeBlocker,
   income,
@@ -37,8 +45,8 @@ import {
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { BUILDABLE_RESIDENTIAL_PER_DISTRICT, CityLayout } from '../src/sim/layout';
-import { createState, type GameState } from '../src/sim/state';
-import { built, housed, housedOn } from './levels';
+import { createState, type GameState, type ZoneKind } from '../src/sim/state';
+import { built, housed, housedOn, zonedAt } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -349,7 +357,7 @@ describe('the build gate', () => {
     // counted — and the university has a list of its own, one to a district.
     for (const districts of [1, 2, 5]) {
       const s = state({ districts });
-      const layout = new CityLayout().ensure(districts);
+      const layout = new CityLayout().ensure(zonedAt(districts));
       const civic = CIVIC_SERVICES.reduce((sum, svc) => sum + siteCapacity(s, svc.key), 0);
       expect(civic).toBe(layout.civicSites);
       expect(siteCapacity(s, 'university')).toBe(layout.universitySites);
@@ -490,7 +498,7 @@ describe('civic land', () => {
    */
   it('never lets a hospital and a house share a plot', () => {
     for (const districts of [1, 2, 4]) {
-      const layout = new CityLayout().ensure(districts);
+      const layout = new CityLayout().ensure(zonedAt(districts));
       const seen = new Set<string>();
       const key = (c: { x: number; z: number }): string => `${c.x},${c.z}`;
       const s = state({ districts });
@@ -519,7 +527,7 @@ describe('civic land', () => {
   it('places by index, never by build order', () => {
     // Towers, so the population gate allows a dozen buildings rather than three
     // and the two orders have something to disagree about.
-    const layout = new CityLayout().ensure(3);
+    const layout = new CityLayout().ensure(zonedAt(3));
     const patch = (): Partial<GameState> => ({ ...housed(19 * 3, 2), districts: 3, cash: 1e12 });
     const forwards = at(patch());
     for (let i = 0; i < 8; i++) for (const service of SERVICES) forwards.buildService(service);
@@ -555,8 +563,8 @@ describe('civic land', () => {
   });
 
   it('keeps a site put when the city expands', () => {
-    const small = new CityLayout().ensure(1);
-    const large = new CityLayout().ensure(9);
+    const small = new CityLayout().ensure(zonedAt(1));
+    const large = new CityLayout().ensure(zonedAt(9));
     for (let i = 0; i < small.civicSites; i++) {
       expect(large.civicSiteCell(i)).toEqual(small.civicSiteCell(i));
     }
@@ -565,7 +573,7 @@ describe('civic land', () => {
   it('cannot be spent past the sites the city owns', () => {
     const game = at({ ...housed(19, 3), cash: 1e15 });
     for (let i = 0; i < 500; i++) for (const service of SERVICES) game.buildService(service);
-    const layout = new CityLayout().ensure(game.state.districts);
+    const layout = new CityLayout().ensure(game.state);
     expect(civicBuildings(game.state)).toBeLessThanOrEqual(
       layout.civicSites + layout.universitySites,
     );
@@ -579,7 +587,7 @@ describe('the tier arc', () => {
     // survivable: a fully built city at the top tier with every site used must
     // still be able to build the next house.
     const districts = 9;
-    const layout = new CityLayout().ensure(districts);
+    const layout = new CityLayout().ensure(zonedAt(districts));
     const perType = Math.ceil(layout.civicSites / 3);
     const s = state({
       districts,
@@ -597,5 +605,161 @@ describe('the tier arc', () => {
       parks: 4 * districts,
     });
     expect(happinessTarget(s)).toBeGreaterThan(HAPPINESS_MIN_BUILD);
+  });
+});
+
+/** Which field of `DemandTargets` a zone's signal lives in. */
+const TARGET_OF: Record<ZoneKind, 'r' | 'c' | 'i'> = { home: 'r', shop: 'c', industry: 'i' };
+
+describe('services as a demand channel', () => {
+  /**
+   * A city with land, housing and nothing else. Four districts so the coverages
+   * have somewhere to fall short, and happiness pinned at 1 so the residential
+   * ceiling is never the thing being measured.
+   */
+  const bare = (patch: Partial<GameState> = {}): GameState => ({
+    ...createState(0),
+    districts: 4,
+    ...housed(40, 0),
+    occupancyR: 0.92,
+    happiness: 1,
+    cash: 1e9,
+    ...patch,
+  });
+
+  it('leaves a fresh save exactly where it was', () => {
+    // The whole compatibility claim, and the reason `demandLift` is gated on
+    // housing at all. Every coverage in this game reads 1 against no housing —
+    // it is the share a service *fails*, and it fails nothing when nothing is
+    // built — so an ungated table would hand the opening +0.225 of residential
+    // demand on its first tick and the export-tap bootstrap would be gone.
+    const fresh = createState(0);
+    expect(demandLift(fresh, 'home')).toBe(0);
+    expect(demandLift(fresh, 'shop')).toBe(0);
+    expect(demandLift(fresh, 'industry')).toBe(0);
+    const target = demandTargets(fresh);
+    expect(target.r).toBe(0);
+    expect(target.c).toBe(0);
+    // Industry is the one signal a fresh city has, and it is the export tap.
+    expect(target.i).toBeGreaterThan(0);
+    for (const kind of ZONE_KINDS) expect(demandTerms(fresh, kind)).toHaveLength(0);
+  });
+
+  it('moves the signal each service is meant to move, and only that one', () => {
+    const before = demandTargets(bare());
+    const cases: Array<[Partial<GameState>, ZoneKind]> = [
+      [{ police: 2, policeStaff: 1 }, 'home'],
+      [{ hospitals: 2, hospitalStaff: 1 }, 'home'],
+      [{ parks: 8 }, 'home'],
+      [{ museums: 4 }, 'shop'],
+    ];
+    for (const [patch, moved] of cases) {
+      const after = demandTargets(bare(patch));
+      expect(after[TARGET_OF[moved]]).toBeGreaterThan(before[TARGET_OF[moved]]);
+      // Nothing else stirs. Transit is deliberately not in this list: it has a
+      // second, older channel through `labourReach` and moves all three.
+      for (const other of ZONE_KINDS) {
+        if (other === moved) continue;
+        expect(after[TARGET_OF[other]]).toBeCloseTo(before[TARGET_OF[other]], 9);
+      }
+    }
+  });
+
+  it('lets schools reach industry and the tax rate reach both trading zones', () => {
+    const before = demandTargets(bare());
+    const taught = demandTargets(bare({ schools: 3, schoolStaff: 1 }));
+    expect(taught.i).toBeGreaterThan(before.i);
+    expect(taught.c).toBeGreaterThan(before.c);
+    expect(taught.r).toBeCloseTo(before.r, 9);
+
+    // Tax needs a hall, because a rate is policy and policy needs somebody to
+    // set it — a save with the switch flipped and no hall runs at neutral.
+    const punitive = demandTargets(bare({ cityHall: true, taxRate: TAX_STEPS.length - 1 }));
+    const low = demandTargets(bare({ cityHall: true, taxRate: 0 }));
+    expect(punitive.c).toBeLessThan(before.c);
+    expect(punitive.i).toBeLessThan(before.i);
+    expect(low.c).toBeGreaterThan(before.c);
+    expect(low.i).toBeGreaterThan(before.i);
+    // And it reaches housing through mood alone, exactly as it did before.
+    expect(punitive.r).toBeCloseTo(before.r, 9);
+  });
+
+  it('reads the tax table on both sides of neutral', () => {
+    const at = (rate: number): number => taxPressure(bare({ cityHall: true, taxRate: rate }));
+    expect(at(TAX_NEUTRAL)).toBe(0);
+    expect(at(0)).toBeCloseTo(-1, 9);
+    expect(at(TAX_STEPS.length - 1)).toBeCloseTo(1, 9);
+    // Monotone in the rate, so a step up is never a step down for business.
+    for (let i = 1; i < TAX_STEPS.length; i++) expect(at(i)).toBeGreaterThan(at(i - 1));
+    // And neutral is what a city with no hall is on, whatever it has stored.
+    expect(taxPressure(bare({ taxRate: TAX_STEPS.length - 1 }))).toBe(0);
+  });
+
+  it('gives no single term enough weight to pin a signal', () => {
+    expect(DEMAND_TERM_MAX).toBeLessThan(1);
+    // Nor the whole table for one zone, at either extreme of every reading.
+    for (const kind of ZONE_KINDS) {
+      let span = 0;
+      for (const term of DEMAND_TERMS) {
+        if (term.zone === kind) span += Math.abs(term.weight) * (term.centred ? 0.5 : 1);
+      }
+      expect(span).toBeLessThan(1);
+    }
+  });
+
+  it('keeps the happiness ceiling on housing', () => {
+    // The hospital tutorial depends on it: a city with no hospital cannot want
+    // more people however covered it is in everything else. The service terms
+    // push at the target from underneath and must never lift it past mood.
+    const covered = bare({
+      police: 4, policeStaff: 1, parks: 20, happiness: 0.2,
+    });
+    expect(demandLift(covered, 'home')).toBeGreaterThan(0);
+    expect(demandTargets(covered).r).toBeLessThanOrEqual(covered.happiness + 1e-12);
+  });
+
+  it('adds up to what the breakdown says it does', () => {
+    // The panel and the simulation read one table, so they cannot disagree —
+    // this is what asserts they are actually the same table.
+    const city = bare({
+      police: 3, policeStaff: 1, hospitals: 3, hospitalStaff: 1, parks: 10,
+      depots: 2, depotStaff: 1, museums: 4, schools: 3, schoolStaff: 1,
+      cityHall: true, taxRate: 2,
+    });
+    for (const kind of ZONE_KINDS) {
+      const rows = demandTerms(city, kind);
+      const summed = rows.reduce((total, row) => total + row.value, 0);
+      expect(summed).toBeCloseTo(demandLift(city, kind), 12);
+      expect(rows).toHaveLength(DEMAND_TERMS.filter((term) => term.zone === kind).length);
+    }
+  });
+
+  it('gives catch-up and real time the same demand, with the terms live', () => {
+    // The table adds no lag of its own — it is read off the state every tick and
+    // `Game.step` remains the only thing that integrates — so an hour away and
+    // an hour watched still have to land on the same city. Catch-up runs
+    // 60-second steps against a 25-second constant, which is exactly the case a
+    // term with a hidden integrator in it would break.
+    // No schools, and that is a property of the *probe* rather than of the
+    // terms: a school opens LEVEL_EDUCATION's first rung, the cohort starts
+    // promoting, and whole buildings promote at slightly different moments under
+    // 60-second steps than under tenths — which is a levelling question this
+    // test has no business measuring. The education term is covered by the
+    // breakdown test instead, which reads it directly.
+    const patch = {
+      cash: 0,
+      police: 2, policeStaff: 1, hospitals: 1, hospitalStaff: 1,
+      museums: 2, depots: 1, depotStaff: 1,
+      cityHall: true, taxRate: TAX_STEPS.length - 1,
+    };
+    const away = new Game(bare(patch));
+    const watched = new Game(bare(patch));
+    away.catchUp(3_600);
+    for (let i = 0; i < 36_000; i++) watched.advance(0.1);
+
+    for (const key of ['demandR', 'demandC', 'demandI'] as const) {
+      const gap = Math.abs(away.state[key] - watched.state[key]);
+      expect(gap).toBeLessThanOrEqual(Math.max(0.01, Math.abs(watched.state[key]) * 0.01));
+    }
   });
 });

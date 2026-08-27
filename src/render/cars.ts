@@ -329,7 +329,7 @@ export class Cars {
   /** Reads the counts. Nothing here is stored; it is all recomputed from state. */
   sync(state: Readonly<GameState>): void {
     if (state.districts !== this.districts) {
-      this.layout.ensure(state.districts);
+      this.layout.ensure(state);
       for (let i = this.lines.length; i < state.districts; i++) {
         this.lines.push(roadLines(this.layout.districts[i] as District));
       }

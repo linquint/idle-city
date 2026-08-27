@@ -170,12 +170,12 @@ export class Fires {
    */
   private placeOf(fire: Fire, state: Readonly<GameState>): Placement {
     if (fire.kind === 'shop') {
-      return this.layout.place(ZONE.commercial, fire.index, state.mergedC, this.at);
+      return this.layout.place(ZONE.commercial, fire.index, state.mergedC, state, this.at);
     }
     if (fire.kind === 'industry') {
-      return this.layout.place(ZONE.industrial, fire.index, state.mergedI, this.at);
+      return this.layout.place(ZONE.industrial, fire.index, state.mergedI, state, this.at);
     }
-    return this.layout.place(ZONE.residential, fire.index, state.mergedR, this.at);
+    return this.layout.place(ZONE.residential, fire.index, state.mergedR, state, this.at);
   }
 
   /**
@@ -261,7 +261,7 @@ export class Fires {
         blaze.startedAt === fire.startedAt;
       if (same && !grown) continue;
 
-      this.layout.ensure(state.districts);
+      this.layout.ensure(state);
       const at = this.placeOf(fire, state);
       blaze.x = at.x;
       blaze.z = at.z;

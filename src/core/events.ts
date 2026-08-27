@@ -78,6 +78,23 @@ export type GameEvent =
   | { readonly kind: 'recovered'; readonly at: number; readonly zone: EventZone; readonly count: number }
   | { readonly kind: 'annexed'; readonly at: number; readonly districts: number; readonly count: number }
   /**
+   * The surveyor zoned more land to a type the city was short of.
+   *
+   * The one event that reports a change to the *map* rather than to what is
+   * standing on it, and the reason it is worth a line: a player who watches
+   * commercial land appear where scrub was and is told nothing has to work out
+   * from a price chip that the city rezoned itself. `plots` is what the zone
+   * holds afterwards, because "commercial land now 31 plots" is a fact the
+   * player can act on where "one parcel surveyed" is trivia.
+   */
+  | {
+      readonly kind: 'surveyed';
+      readonly at: number;
+      readonly zone: EventZone;
+      readonly plots: number;
+      readonly count: number;
+    }
+  /**
    * A service that was covering the whole city no longer is.
    *
    * Emitted on the crossing rather than on the level, because the level is
@@ -173,6 +190,10 @@ function sameSubject(a: GameEvent, b: GameEvent): boolean {
     case 'fire-lost':
     case 'abandoned':
     case 'recovered':
+    // Two surveys into the same zone are the same subject, so a frontier that
+    // rezones twice in a wave says so once with a count and the *latest* plot
+    // total rather than twice with two.
+    case 'surveyed':
       return a.zone === (b as typeof a).zone;
     case 'level-up':
       return a.zone === (b as typeof a).zone && a.level === (b as typeof a).level;

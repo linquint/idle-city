@@ -283,8 +283,19 @@ describe('offline progress', () => {
     // ledger into the billions, where a double has about a millionth to give
     // and an absolute tolerance of 5e-7 is asking for more precision than the
     // number type has.
+    //
+    // And relative to `trueEarned` on both lines, not to each side's own value.
+    // `trueSpent` is a *difference* of two enormous near-equal numbers — gross
+    // earnings against the change in cash — so its absolute error is set by the
+    // largest operand and not by the small result it leaves. Scaling by the
+    // result instead is an error model that tightens as the cancellation gets
+    // worse, which is backwards. Measured over the same run at one, three, six
+    // and twelve hours: against `trueSpent` the relative gap runs 1.8e-14 to
+    // 1.2e-11 and climbs with the horizon, and against `trueEarned` it runs
+    // 2.7e-16 to 7.8e-15 and stays flat — which is what a rounding floor looks
+    // like and what a leak does not.
     expect(Math.abs(report.earned - trueEarned)).toBeLessThan(Math.abs(trueEarned) * 1e-12);
-    expect(Math.abs(report.spent - trueSpent)).toBeLessThan(Math.abs(trueSpent) * 1e-12);
+    expect(Math.abs(report.spent - trueSpent)).toBeLessThan(Math.abs(trueEarned) * 1e-12);
   });
 
   it('will not build into a zone the city is already oversupplied in', () => {
@@ -311,9 +322,16 @@ describe('offline progress', () => {
         expect(game.state.shops).toBe(shops);
       }
     }
-    // And it really was oversupplied for most of the run, so the assertion above
+    // And it really was oversupplied for a good stretch, so the assertion above
     // was doing work rather than never firing.
-    expect(surcharged).toBeGreaterThan(1_000);
+    //
+    // 200 rather than the 1,000 this watched before zoning floated, and the
+    // window shrank for a reason worth naming: housing can now take commercial
+    // land when it wants it more, so a city short of homes and long on shops
+    // rezones its way out of the oversupply instead of waiting to grow out of
+    // it. Measured, the surcharge lasts about 360 ticks where it lasted over a
+    // thousand. What is asserted is unchanged — while it lasts, nothing buys.
+    expect(surcharged).toBeGreaterThan(200);
   });
 });
 

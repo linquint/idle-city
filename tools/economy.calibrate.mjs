@@ -32,6 +32,7 @@ import {
   SHOP_BONUS,
   SHOP_GROWTH,
   LEVEL_CAPACITY,
+  LEVEL_FOOTPRINT,
   LEVEL_NAMES,
 } from '../src/sim/config.ts';
 import {
@@ -438,28 +439,60 @@ function equilibrium(level) {
   // only way to ask "what does a district of towers settle at" is to keep
   // putting the cohort back where the question wants it after every purchase.
   const game = new Game({ ...createState(0), cash: 1e12 });
+  const cohort = (standing) => {
+    // LEVELS wide, not four. The ladder grew a fifth rung and this array did
+    // not, so `levels[4] = standing` on a four-wide literal was writing past the
+    // end of what every cohort walk reads.
+    const levels = new Array(LEVEL_CAPACITY.length).fill(0);
+    levels[level] = Math.max(0, standing);
+    return levels;
+  };
   const pin = () => {
     const s = game.state;
-    const standing = s.homes - s.abandonedR;
-    const levels = [0, 0, 0, 0];
-    levels[level] = standing;
-    // Lit as well as pinned. This asks what a *demand-neutral* district settles
-    // at, and a browned-out one is not demand-neutral: the power cap drags
-    // commercial and industrial occupancy down, their demand targets follow, and
-    // the probe buys a district's worth of shops it would never have wanted.
-    // Measured without it, the towers row read 176 shops against 69.
+    // All three zones, not just housing. Pinning only the homes let commerce and
+    // industry climb the ladder underneath the question — and with TRADE_LADDER
+    // a level-2 shop serves 4.2x the trips, so the probe was reporting the
+    // build-out of a district whose shops were four rungs above its houses.
+    // Measured before the fix: the detached-housing row bought 1 shop where a
+    // district of level-0 shops wants 17.
     Object.assign(s, {
-      homeLevels: levels,
+      homeLevels: cohort(s.homes - s.abandonedR),
+      shopLevels: cohort(s.shops - s.abandonedC),
+      industryLevels: cohort(s.industry - s.abandonedI),
+      mergedR: LEVEL_FOOTPRINT[level] > 1 ? s.homes - s.abandonedR : 0,
+      mergedC: LEVEL_FOOTPRINT[level] > 1 ? s.shops - s.abandonedC : 0,
+      mergedI: LEVEL_FOOTPRINT[level] > 1 ? s.industry - s.abandonedI : 0,
       occupancyR: 0.92,
+      occupancyC: 0.92,
+      occupancyI: 0.92,
+      // One district, held. `autoAnnex` is not gated on `autoDevelop` — it fires
+      // on the gate and the treasury alone — so a probe holding 1e12 in cash
+      // annexed underneath itself and then reported the build-out of a city it
+      // had grown mid-measurement. That is what let the towers row print 109
+      // shops against a district that sells 45.
+      districts: 1,
+      // Lit as well as pinned. This asks what a *demand-neutral* district settles
+      // at, and a browned-out one is not demand-neutral: the power cap drags
+      // commercial and industrial occupancy down, their demand targets follow, and
+      // the probe buys a district's worth of shops it would never have wanted.
+      // Measured without it, the towers row read 176 shops against 69.
       plants: s.districts,
       plantStaff: 1,
     });
   };
   for (let step = 0; step < 400; step++) {
     pin();
-    // ~12 tau, so the signal is at its target before the next decision.
-    for (let i = 0; i < 3000; i++) game.advance(0.1);
-    pin();
+    // ~12 tau, so the signal is at its target before the next decision — and
+    // pinned on every tick of it, not merely at both ends. Pinning only around
+    // the settle let the cohorts climb *during* it: the demand the probe then
+    // read was a district whose shops had levelled under the question, which is
+    // why the level-0 row moved when a ladder that is exactly 1 at level 0 was
+    // introduced. It has to be a fixed point of the whole loop or it measures
+    // the levelling rather than the equilibrium.
+    for (let i = 0; i < 3000; i++) {
+      game.advance(0.1);
+      pin();
+    }
     const s = game.state;
     let bought = false;
     for (const service of SERVICES) {

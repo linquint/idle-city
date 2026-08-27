@@ -10,6 +10,8 @@ import {
   INDUSTRY_OUTPUT,
   JOBS_PER_COMMERCIAL,
   JOBS_PER_INDUSTRIAL,
+  FRONTAGE_TARGET,
+  LEVEL_CAPACITY,
   LEVEL_FOOTPRINT,
   LEVELS,
   PRICE_DISCOUNT_MAX,
@@ -21,6 +23,7 @@ import {
   SHOP_THROUGHPUT,
   SHOP_TRIPS,
   SUPPLY_DRAW,
+  TRADE_LADDER,
   ZONE_LEVEL_NAMES,
 } from '../src/sim/config';
 import {
@@ -37,7 +40,7 @@ import {
   workers,
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
-import { built, housed, making, trading } from './levels';
+import { built, housed, making, trading, zoning } from './levels';
 import { createState, type GameState } from '../src/sim/state';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
@@ -91,19 +94,32 @@ describe('cost curves', () => {
   });
 
   it('keep the discounted floor an exponential, not a rebate', () => {
+    // On a city with the land to hold what it is being asked to price. The
+    // curve compounds over the share of each district's *own* allotment that is
+    // built on, so quoting 120 homes against a single district's 24 plots is
+    // asking what a plot costs that the city does not own — which the curve
+    // answers, at a rate this test has no business pinning. See
+    // `zoneFillMultiples`; `test/zoning.test.ts` covers the over-capacity tail.
+    const enough = (plots: number, per: number): Partial<GameState> =>
+      zoning(Math.max(1, Math.ceil(plots / per)));
     for (const n of [0, 7, 40, 120]) {
       const floor = 1 - PRICE_DISCOUNT_MAX;
-      expect(homeCost(state({ homes: n, demandR: 1 }))).toBeCloseTo(
+      const rel = (got: number, want: number): void => {
+        // Relative: the curve reaches 1e9 by 120 plots of commerce, and an
+        // absolute 5e-7 there asks for more precision than a double carries.
+        expect(Math.abs(got / want - 1)).toBeLessThan(1e-12);
+      };
+      rel(
+        homeCost(state({ ...enough(n, FRONTAGE_TARGET.residential), homes: n, demandR: 1 })),
         HOME_BASE * HOME_GROWTH ** n * floor,
-        6,
       );
-      expect(shopCost(state({ shops: n, demandC: 1 }))).toBeCloseTo(
+      rel(
+        shopCost(state({ ...enough(n, FRONTAGE_TARGET.commercial), shops: n, demandC: 1 })),
         SHOP_BASE * SHOP_GROWTH ** n * floor,
-        6,
       );
-      expect(industryCost(state({ industry: n, demandI: 1 }))).toBeCloseTo(
+      rel(
+        industryCost(state({ ...enough(n, FRONTAGE_TARGET.industrial), industry: n, demandI: 1 })),
         INDUSTRY_BASE * INDUSTRY_GROWTH ** n * floor,
-        6,
       );
     }
   });
@@ -155,7 +171,21 @@ describe('smoothing', () => {
    * on the same city.
    */
   it('gives catch-up and real time the same demand, within 1%', () => {
-    const patch = { homes: 24, shops: 6, industry: 3, cash: 0, hospitals: 1, police: 1, fire: 1 };
+    // Through `built` rather than raw counts, and the difference is not
+    // cosmetic. `{ homes: 24 }` on its own leaves the cohort at zero, which is
+    // 24 buildings standing at no level: the city houses nobody, earns exactly
+    // zero, and cannot meet a civic payroll it has already opened. That puts it
+    // in permanent wage arrears, where `payWages` and `integrateStaffing` are a
+    // feedback loop — and *that* loop is what a 60-second step resolves
+    // differently from a tenth-second one. Measured on the old fixture:
+    // staffing diverged by 0.115, happiness by 0.098 and occupancy by 0.088,
+    // all of them larger than the 0.039 that eventually reached demand.
+    //
+    // None of which this test is about, and none of which is reachable: `Game`
+    // never produces a count without a cohort and `migrate` repairs one that
+    // arrives. On a legal city every field above agrees to the last decimal.
+    // See test/levels.ts, whose own comment names exactly this bug.
+    const patch = { ...built(24, 6, 3), cash: 0, hospitals: 1, police: 1, fire: 1 };
     const away = at(patch);
     const watched = play(at(patch), 3600);
     away.catchUp(3600);
@@ -333,17 +363,63 @@ describe('commercial and industrial levels', () => {
     cohortAgainst(kind === 'shop' ? s.shopLevels : s.industryLevels, ladder) /
     cohortFootprint(kind === 'shop' ? s.shopLevels : s.industryLevels);
 
-  it('employ, serve and make the same per plot at every level', () => {
+  it('employ the same per plot at every level', () => {
+    // The half of the old claim that is still the design. Jobs are what the
+    // ZONE_SHARE equilibrium is solved against, and a ladder on them freezes the
+    // job/worker arc at level 0 — see SHOP_JOBS for the measurement that killed
+    // the attempt. Flat, at every rung, forever.
     for (let level = 0; level < LEVELS; level++) {
       const shops = state({ ...trading(8, level), occupancyC: 1 });
       expect(perPlot(shops, 'shop', SHOP_JOBS)).toBeCloseTo(JOBS_PER_COMMERCIAL, 9);
-      expect(perPlot(shops, 'shop', SHOP_TRIPS)).toBeCloseTo(SHOP_THROUGHPUT, 9);
-      expect(perPlot(shops, 'shop', SHOP_SUPPLY)).toBeCloseTo(SUPPLY_DRAW, 9);
 
       const works = state({ ...making(6, level), occupancyI: 1 });
       expect(perPlot(works, 'industry', INDUSTRY_JOBS)).toBeCloseTo(JOBS_PER_INDUSTRIAL, 9);
-      expect(perPlot(works, 'industry', INDUSTRY_OUTPUT)).toBeCloseTo(INDUSTRIAL_OUTPUT, 9);
     }
+  });
+
+  it('serve and make more per plot as they climb, sub-linearly', () => {
+    // The half that changed, and the assumption this test used to encode. Trips
+    // balance against residents, which climb LEVEL_CAPACITY's 300x per plot, so
+    // a flat trade ladder made the city want 45.7x the commercial land a
+    // district sells. TRADE_LADDER is the middle path; what this asserts is that
+    // it *is* a middle — strictly climbing, and strictly slower than capacity.
+    let previousTrips = 0;
+    let previousOutput = 0;
+    for (let level = 0; level < LEVELS; level++) {
+      const capacity = (LEVEL_CAPACITY[level] as number) / (LEVEL_CAPACITY[0] as number);
+
+      const shops = state({ ...trading(8, level), occupancyC: 1 });
+      const trips = perPlot(shops, 'shop', SHOP_TRIPS);
+      const supply = perPlot(shops, 'shop', SHOP_SUPPLY);
+      expect(trips).toBeGreaterThan(previousTrips);
+      expect(trips).toBeCloseTo(SHOP_THROUGHPUT * (TRADE_LADDER[level] as number), 9);
+      // Supply and output take the same ladder, as a matched pair.
+      expect(supply / SUPPLY_DRAW).toBeCloseTo(trips / SHOP_THROUGHPUT, 9);
+      previousTrips = trips;
+
+      const works = state({ ...making(6, level), occupancyI: 1 });
+      const output = perPlot(works, 'industry', INDUSTRY_OUTPUT);
+      expect(output).toBeGreaterThan(previousOutput);
+      expect(output / INDUSTRIAL_OUTPUT).toBeCloseTo(trips / SHOP_THROUGHPUT, 9);
+      previousOutput = output;
+
+      // Sub-linear: never past the capacity ladder it is derived from, and
+      // strictly under it above the first rung. Proportional is the failure
+      // LEVEL_SCALE's comment records — commercial land that can never fill.
+      const climb = trips / SHOP_THROUGHPUT;
+      expect(climb).toBeLessThanOrEqual(capacity + 1e-9);
+      if (level > 0) expect(climb).toBeLessThan(capacity);
+    }
+  });
+
+  it('leaves the first rung at exactly 1, so a fresh save does not move', () => {
+    // The ladder's whole compatibility claim. A city with nothing above level 0
+    // is priced, served and supplied exactly as it was before TRADE_LADDER
+    // existed, so the opening minute is untouched by any of this.
+    expect(TRADE_LADDER[0]).toBe(1);
+    expect(SHOP_TRIPS[0]).toBeCloseTo(SHOP_THROUGHPUT, 12);
+    expect(SHOP_SUPPLY[0]).toBeCloseTo(SUPPLY_DRAW, 12);
+    expect(INDUSTRY_OUTPUT[0]).toBeCloseTo(INDUSTRIAL_OUTPUT, 12);
   });
 
   it('leave the labour market where ZONE_SHARE put it, at every level', () => {
