@@ -44,7 +44,7 @@ import {
   UNIVERSITY_SITES_PER_DISTRICT,
 } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { built, housed, making, mix, trading } from './levels';
+import { built, housed, making, mix, trading, zonedAt, zoning } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 
@@ -266,14 +266,14 @@ describe('land value', () => {
   it('leaves a built-out city earning exactly what flat rent earned it', () => {
     for (const districts of [1, 4, 12, 25, MAX_DISTRICTS]) {
       const plots = districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT;
-      const s = state({ districts, ...housed(plots) });
+      const s = state({ ...zoning(districts), ...housed(plots) });
       expect(landValue(s)).toBeCloseTo(1, 12);
     }
   });
 
   it('is one for a city with no housing at all', () => {
     expect(landValue(state())).toBe(1);
-    expect(landValue(state({ ...housed(0), districts: 4 }))).toBe(1);
+    expect(landValue(state({ ...housed(0), ...zoning(4) }))).toBe(1);
   });
 
   it('redistributes rather than adding: the plot means average to one', () => {
@@ -281,7 +281,7 @@ describe('land value', () => {
     // that broke the centring could not hide behind the city-wide mean.
     const districts = 12;
     const plots = districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT;
-    const s = state({ districts, ...housed(plots) });
+    const s = state({ ...zoning(districts), ...housed(plots) });
     let sum = 0;
     for (let i = 0; i < plots; i++) sum += parcelLandValue(s, i);
     expect(sum / plots).toBeCloseTo(1, 12);
@@ -292,13 +292,13 @@ describe('land value', () => {
     // city, different plot — the game's first spatially varying input.
     const districts = 4;
     const plots = districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT;
-    const s = state({ districts, ...housed(plots) });
+    const s = state({ ...zoning(districts), ...housed(plots) });
     let best = 0;
     let worst = 1;
     let bestPlot = 0;
     let worstPlot = 0;
     for (let i = 0; i < plots; i++) {
-      const score = housingCentrality(i, districts);
+      const score = housingCentrality(i, zonedAt(districts));
       if (score > best) {
         best = score;
         bestPlot = i;

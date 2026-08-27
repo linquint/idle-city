@@ -1195,6 +1195,104 @@ export const DEMAND_TERM_MAX = Math.max(
   ...DEMAND_TERMS.map((t) => Math.abs(t.weight) * (t.centred ? 0.5 : 1)),
 );
 
+// ------------------------------------------------------------------- zoning
+
+/**
+ * The least land a zone keeps in a district, in plots, however unwanted it is.
+ *
+ * A district still sells exactly 82 plots — that number is geometry, not
+ * balance, and it does not move. What moves is the split, and these are the
+ * stops at the bottom of it: no amount of sustained negative demand can zone a
+ * type out of a district entirely, because a district with nowhere at all to
+ * live is a district that can never recover the demand that would fix it.
+ *
+ * Read as *at least*, not exactly. The pool is drawn in whole parcels — see
+ * `districtPool` — so a floor lands on the first parcel boundary at or past
+ * these, which is 8 or 9 plots rather than 8 on the nose. Nothing multiplies a
+ * per-district constant any more (`homeCapacity` is a sum over districts now),
+ * so the exactness that FRONTAGE_TARGET needed is not needed here.
+ */
+export const ZONE_FLOOR = {
+  home: 8,
+  shop: 8,
+  industry: 4,
+} as const;
+
+/**
+ * Plots industry may survey on top of its floor, and the whole of its range.
+ *
+ * Industry does not draw from the shared pool, and cannot: three zones taking
+ * prefixes of one pool is a contradiction rather than a tuning problem. If
+ * residential can take nearly all of a pool of N, then at (N-1, 1, 0) commerce's
+ * first plot is forced onto the one cell residential leaves, at (N-1, 0, 1)
+ * industry's first plot is forced onto that same cell, and (0, 1, 1) — two plots
+ * surveyed of N — has them both claiming it. Two zones have no such
+ * contradiction, because one can fill from each end.
+ *
+ * So industry takes a reserve of its own and residential and commerce contest
+ * the rest. 9 plots on top of a floor of 4 keeps industry's ceiling at the 13 it
+ * has today, which is the number every goods constant was measured against.
+ *
+ * The consequence is worth stating rather than discovering: **an industry-led
+ * city is impossible by construction.** Industry tops out at 13 of 82 plots —
+ * 16% — where residential and commerce can each reach 61, or 74%. No amount of
+ * industrial demand makes industry the dominant zone inside the city. The outlet
+ * is the estates, which stand on land the city does not own and are counted
+ * apart from every plot total for exactly that reason.
+ *
+ * What industry gives up is not deleted. A district that surveys 6 of its 13
+ * releases the other 7 to residential and commerce when it freezes — see
+ * `freezeDistrict`. It cannot be released *live*, because commerce fills the
+ * pool from the back and a pool whose size moved with the industrial count would
+ * move every commercial plot in the district each time industry surveyed.
+ */
+export const INDUSTRY_RESERVE = 9;
+
+/**
+ * The demand a zone needs before the surveyor will zone it more land.
+ *
+ * Above the noise a settled city sits at — the disciplined policy ends a day at
+ * R -0.36 / C +0.53 / I +0.30 — so a city drifting near balance does not slowly
+ * rezone itself into whatever it happened to want last. It has to actually be
+ * short.
+ */
+export const SURVEY_DEMAND = 0.35;
+
+/**
+ * How built-out a zone has to be before more of it is worth zoning.
+ *
+ * The constant that stops the surveyor being a stall. Derived growth means the
+ * price of a plot falls when the allotment it is counted against grows, so a
+ * player who stops building while the surveyor runs is paid to wait — measured
+ * on the unmodified design, waiting five surveys beat building through them by
+ * 1.7x at three hours and 23x at twenty-four, because the saving is a fraction
+ * of a price that compounds while the forgone income is a flat rate.
+ *
+ * This closes it, and closes it by construction rather than by balance. One
+ * survey takes the zone from `n / A` to `n / (A + 1)`, which is *below* this
+ * gate — so the gate shuts itself and reopens only when the player builds again.
+ * A stall therefore harvests exactly one parcel of growth and no more, whatever
+ * it waits. There is no clock to wait out either: the surveyor is a predicate on
+ * the state, checked every tick like `autoAnnex`, not a periodic pass.
+ *
+ * 0.8 rather than ANNEX_MIN_OCCUPANCY's 0.7 because this gate fires far more
+ * often and against a much smaller denominator: a zone at its floor holds 8
+ * plots, so 0.7 and 0.8 are 5.6 and 6.4 of them, and the tighter one is what
+ * keeps a district from surveying on the strength of two buildings.
+ */
+export const SURVEY_FILL = 0.8;
+
+/**
+ * Surveys a single `catchUp` call may make, however long the absence.
+ *
+ * The same guard CATCHUP_MAX_ANNEXES and CATCHUP_MAX_ABANDONED are, and set for
+ * the same reason: a twelve-hour absence must not return a city whose zoning
+ * nobody watched change. Larger than either of theirs because a survey is a
+ * parcel rather than a district or a building, and because the surveyor is
+ * self-limiting — every survey shuts its own gate until the player builds.
+ */
+export const CATCHUP_MAX_SURVEYS = 8;
+
 // ------------------------------------------------------------------- pricing
 
 /**

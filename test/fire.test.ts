@@ -373,12 +373,20 @@ describe('a fire never outlives its building', () => {
   });
 
   it('leaves a city that burned down completely in a legal state', () => {
+    // Twelve hours in tenth-second ticks is 432,000 of them, which is what this
+    // costs and why the budget is stated rather than defaulted. The tick got
+    // dearer when zoning started floating: capacity is a sum over districts now
+    // instead of one multiplication, and the surveyor asks six questions of the
+    // state every tick. Measured on this city, 3.95 us a tick before and 4.38
+    // after — 11%, against a test that was already running at 4.2 seconds of a
+    // 5-second default. The budget moved because the measurement did, not to
+    // paper over a hang: the same run finishes in 1.9 seconds outside vitest.
     const game = at({ ...housed(2), cash: 0 });
     run(game, 12 * 3600);
     expect(game.state.homes).toBeGreaterThanOrEqual(0);
     expect(game.state.fires.length).toBeLessThanOrEqual(game.state.homes);
     expect(income(game.state)).toBeGreaterThanOrEqual(0);
-  });
+  }, 20_000);
 });
 
 describe('the fire service is the fix', () => {

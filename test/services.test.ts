@@ -46,7 +46,7 @@ import {
 import { Game } from '../src/sim/game';
 import { BUILDABLE_RESIDENTIAL_PER_DISTRICT, CityLayout } from '../src/sim/layout';
 import { createState, type GameState, type ZoneKind } from '../src/sim/state';
-import { built, housed, housedOn } from './levels';
+import { built, housed, housedOn, zonedAt } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -357,7 +357,7 @@ describe('the build gate', () => {
     // counted — and the university has a list of its own, one to a district.
     for (const districts of [1, 2, 5]) {
       const s = state({ districts });
-      const layout = new CityLayout().ensure(districts);
+      const layout = new CityLayout().ensure(zonedAt(districts));
       const civic = CIVIC_SERVICES.reduce((sum, svc) => sum + siteCapacity(s, svc.key), 0);
       expect(civic).toBe(layout.civicSites);
       expect(siteCapacity(s, 'university')).toBe(layout.universitySites);
@@ -498,7 +498,7 @@ describe('civic land', () => {
    */
   it('never lets a hospital and a house share a plot', () => {
     for (const districts of [1, 2, 4]) {
-      const layout = new CityLayout().ensure(districts);
+      const layout = new CityLayout().ensure(zonedAt(districts));
       const seen = new Set<string>();
       const key = (c: { x: number; z: number }): string => `${c.x},${c.z}`;
       const s = state({ districts });
@@ -527,7 +527,7 @@ describe('civic land', () => {
   it('places by index, never by build order', () => {
     // Towers, so the population gate allows a dozen buildings rather than three
     // and the two orders have something to disagree about.
-    const layout = new CityLayout().ensure(3);
+    const layout = new CityLayout().ensure(zonedAt(3));
     const patch = (): Partial<GameState> => ({ ...housed(19 * 3, 2), districts: 3, cash: 1e12 });
     const forwards = at(patch());
     for (let i = 0; i < 8; i++) for (const service of SERVICES) forwards.buildService(service);
@@ -563,8 +563,8 @@ describe('civic land', () => {
   });
 
   it('keeps a site put when the city expands', () => {
-    const small = new CityLayout().ensure(1);
-    const large = new CityLayout().ensure(9);
+    const small = new CityLayout().ensure(zonedAt(1));
+    const large = new CityLayout().ensure(zonedAt(9));
     for (let i = 0; i < small.civicSites; i++) {
       expect(large.civicSiteCell(i)).toEqual(small.civicSiteCell(i));
     }
@@ -573,7 +573,7 @@ describe('civic land', () => {
   it('cannot be spent past the sites the city owns', () => {
     const game = at({ ...housed(19, 3), cash: 1e15 });
     for (let i = 0; i < 500; i++) for (const service of SERVICES) game.buildService(service);
-    const layout = new CityLayout().ensure(game.state.districts);
+    const layout = new CityLayout().ensure(game.state);
     expect(civicBuildings(game.state)).toBeLessThanOrEqual(
       layout.civicSites + layout.universitySites,
     );
@@ -587,7 +587,7 @@ describe('the tier arc', () => {
     // survivable: a fully built city at the top tier with every site used must
     // still be able to build the next house.
     const districts = 9;
-    const layout = new CityLayout().ensure(districts);
+    const layout = new CityLayout().ensure(zonedAt(districts));
     const perType = Math.ceil(layout.civicSites / 3);
     const s = state({
       districts,

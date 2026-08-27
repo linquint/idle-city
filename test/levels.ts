@@ -1,4 +1,5 @@
-import { LEVEL_FOOTPRINT, LEVELS, MAX_DISTRICTS, MERGE_LEVEL } from '../src/sim/config';
+import { FRONTAGE_TARGET, LEVEL_FOOTPRINT, LEVELS, MAX_DISTRICTS, MERGE_LEVEL } from '../src/sim/config';
+import { districtLand, type Zoning } from '../src/sim/layout';
 import { cohortOf, type GameState, type LevelCohort } from '../src/sim/state';
 
 /**
@@ -149,3 +150,38 @@ export const powered = (): Partial<GameState> => ({
   plants: MAX_DISTRICTS,
   plantStaff: 1,
 });
+
+/**
+ * A city's zoning at the split every district had before zoning floated.
+ *
+ * What most tests want: they are about roads, sites, parcels or income, and the
+ * split is scenery. `defaultZoning`'s own reasoning applies — every leftover
+ * parcel taken by the zone the generator cut it from, which reproduces the old
+ * 24 / 45 / 13 cell for cell.
+ */
+export function zonedAt(districts: number): Zoning {
+  const surveyedR: number[] = [];
+  const surveyedC: number[] = [];
+  const surveyedI: number[] = [];
+  for (let i = 0; i < districts; i++) {
+    const land = districtLand(i);
+    const shopPlots = FRONTAGE_TARGET.commercial - land.floor.shop;
+    let shop = 0;
+    while (shop < land.limits.shared && (land.sharedBack[shop] as number) < shopPlots) shop++;
+    surveyedR.push(land.limits.shared - shop);
+    surveyedC.push(shop);
+    surveyedI.push(land.limits.works);
+  }
+  return { districts, surveyedR, surveyedC, surveyedI };
+}
+
+/** The same, folded into a partial state — for `{ ...city(9) }` in a fixture. */
+export const zoning = (districts: number): Partial<GameState> => {
+  const z = zonedAt(districts);
+  return {
+    districts,
+    surveyedR: [...z.surveyedR],
+    surveyedC: [...z.surveyedC],
+    surveyedI: [...z.surveyedI],
+  };
+};

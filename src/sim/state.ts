@@ -1,4 +1,21 @@
-import { LEVELS, OCCUPANCY_FULL, START_CASH, TAX_NEUTRAL } from './config.ts';
+import { FRONTAGE_TARGET, LEVELS, OCCUPANCY_FULL, START_CASH, TAX_NEUTRAL } from './config.ts';
+import { districtLand } from './layout.ts';
+
+/**
+ * The split a district opens on: the one every district sold before zoning
+ * floated, in pool parcels.
+ *
+ * Here rather than in `economy.ts` because `createState` is what needs it and
+ * `economy` imports *this*. `layout` imports neither, so there is no cycle —
+ * it reads the seed and the district plans and nothing else.
+ */
+export function openZoning(index: number): { home: number; shop: number; industry: number } {
+  const land = districtLand(index);
+  const shopPlots = FRONTAGE_TARGET.commercial - land.floor.shop;
+  let shop = 0;
+  while (shop < land.limits.shared && (land.sharedBack[shop] as number) < shopPlots) shop++;
+  return { home: land.limits.shared - shop, shop, industry: land.limits.works };
+}
 
 /**
  * The three zones the player builds in, and the only three that can burn.
@@ -63,7 +80,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 10;
 
 /**
  * The entire game, in a handful of fields.
@@ -310,6 +327,32 @@ export interface GameState {
   fireHazard: number;
   /** Districts annexed. Always at least 1. */
   districts: number;
+  /**
+   * The city's zoning: pool parcels each zone has surveyed, per district.
+   *
+   * The one array in this save that grows with the city, and the exception is
+   * bought rather than assumed. A district sells 82 plots and the split between
+   * them is no longer a compile-time constant — it is written by the surveyor
+   * while the district is the frontier and frozen the moment the next one is
+   * annexed, so a city's zoning map is a record of what it wanted when each
+   * district was new. That history is not derivable from anything: two cities
+   * with the same counts today may have wanted opposite things a district ago.
+   *
+   * Bounded at MAX_DISTRICTS entries of a small integer each — it grows with
+   * *districts*, never with buildings, which is the line `LevelCohort` draws and
+   * this stays on the right side of. About two hundred bytes at a full map.
+   *
+   * Parcels rather than plots, because the pool is cut at parcel boundaries: a
+   * merge takes both halves of a parcel, so a split that fell inside one would
+   * hand each half to a different zone. Plot counts are derived from these and
+   * the seed — see `districtZonePlots` — which is what keeps them out of here.
+   *
+   * Entry i is district i's, and only the last entry ever changes. Everything
+   * before it is history, and history is why this is in the save at all.
+   */
+  surveyedR: number[];
+  surveyedC: number[];
+  surveyedI: number[];
   /** Lifetime earnings, for the ledger. */
   earned: number;
   /**
@@ -395,6 +438,13 @@ export function createState(now = Date.now()): GameState {
     fireCursor: 0,
     fireHazard: 0,
     districts: 1,
+    // A fresh district opens on exactly the split every district sold before
+    // zoning floated, so the opening minute, RENT, HOME_BASE and every pacing
+    // guard mean what they meant. What changed is that this is a starting point
+    // rather than a constant — the surveyor moves it both ways from here.
+    surveyedR: [openZoning(0).home],
+    surveyedC: [openZoning(0).shop],
+    surveyedI: [openZoning(0).industry],
     earned: 0,
     taxRate: TAX_NEUTRAL,
     freeTransport: false,

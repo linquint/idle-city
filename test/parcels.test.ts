@@ -34,7 +34,7 @@ import {
   worldZ,
 } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { housed, served } from './levels';
+import { housed, served, zonedAt } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game(state(patch));
@@ -164,7 +164,8 @@ describe('parcels are a pure function of the layout', () => {
 });
 
 describe('a building stands where its counts say it does', () => {
-  const layout = new CityLayout().ensure(4);
+  const city = zonedAt(4);
+  const layout = new CityLayout().ensure(city);
 
   it('never puts two buildings on the same plot, merged or not', () => {
     for (const zone of ZONES) {
@@ -174,7 +175,7 @@ describe('a building stands where its counts say it does', () => {
         const buildings = zoneCapacity(zone) - merged;
         const out = createPlacement();
         for (let slot = 0; slot < buildings; slot++) {
-          const place = layout.place(zone, slot, merged, out);
+          const place = layout.place(zone, slot, merged, city, out);
           const cells = layout.zoneCells(zone);
           const first = cells[place.plot];
           expect(first).toBeDefined();
@@ -206,9 +207,9 @@ describe('a building stands where its counts say it does', () => {
     for (let merged = 0; merged < 8; merged++) {
       const buildings = 24 - merged;
       for (let slot = merged + 1; slot < buildings - 1; slot++) {
-        const before = layout.place(ZONE.residential, slot + 1, merged, out);
+        const before = layout.place(ZONE.residential, slot + 1, merged, city, out);
         const key = { plot: before.plot, plots: before.plots };
-        const after = layout.place(ZONE.residential, slot, merged + 1, other);
+        const after = layout.place(ZONE.residential, slot, merged + 1, city, other);
         if (after.plots !== key.plots) continue;
         expect(after.plot).toBe(key.plot);
       }
@@ -419,13 +420,14 @@ describe("a building's level is a function of its slot", () => {
     // the same counts by different routes must have built the same city — that
     // is the whole of what "positions are derived" means, and it is the
     // property a stored coordinate would break without any other test noticing.
-    const layout = new CityLayout().ensure(2);
+    const city = zonedAt(2);
+    const layout = new CityLayout().ensure(city);
     const out = createPlacement();
 
     const positions = (s: Readonly<GameState>): string => {
       const parts: string[] = [];
       for (let slot = 0; slot < s.homes; slot++) {
-        const place = layout.place(ZONE.residential, slot, s.mergedR, out);
+        const place = layout.place(ZONE.residential, slot, s.mergedR, s, out);
         parts.push(`${place.plot}:${place.plots}:${levelAt(s.homeLevels, slot)}`);
       }
       return parts.join('|');

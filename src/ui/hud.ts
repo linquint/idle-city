@@ -184,6 +184,13 @@ const TICKER_SECONDS = 45;
 const TICKER_LINES = 4;
 
 /** What the ticker calls each zone, in the plural a count reads well against. */
+/** What the ticker calls each zone's land when the surveyor moves it. */
+const ZONE_LAND: Record<ZoneKind, string> = {
+  home: 'Housing',
+  shop: 'Commercial',
+  industry: 'Industrial',
+};
+
 const ZONE_PLURAL: Record<ZoneKind, string> = {
   home: 'homes',
   shop: 'shops',
@@ -723,6 +730,14 @@ export class Hud {
         return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} reopened`, tone: 'good' };
       case 'annexed':
         return { text: `District ${many(event.districts)} annexed`, tone: 'good' };
+      case 'surveyed':
+        return {
+          // What the zone holds now, not what was added: "commercial land now 31
+          // plots" is something a player can act on, and "one parcel surveyed"
+          // is trivia. The zone name carries which map colour just grew.
+          text: `${ZONE_LAND[event.zone]} land now ${fmtInt(event.plots)} plots`,
+          tone: 'good',
+        };
       case 'brownout':
         return {
           text: `Power short — occupancy capped at ${pct(event.cap)}`,
@@ -1284,8 +1299,8 @@ export class Hud {
     const level = levelAt(levels, ref.slot);
     const names = ZONE_LEVEL_NAMES[ref.kind];
     const at = this.layout
-      .ensure(s.districts)
-      .place(zoneOf(ref.kind), ref.slot, mergedOf(s, ref.kind), this.at);
+      .ensure(s)
+      .place(zoneOf(ref.kind), ref.slot, mergedOf(s, ref.kind), s, this.at);
     const district = Math.floor(at.plot / (ZONE_PLOTS[ref.kind] || 1));
 
     n.inspectTitle.textContent =
@@ -1319,7 +1334,7 @@ export class Hud {
       rows.push([
         'Land value',
         `${land >= 1 ? '+' : '−'}${Math.abs(Math.round((land - 1) * 100))}% · ${
-          Math.round(housingCentrality(at.plot, s.districts) * 100)
+          Math.round(housingCentrality(at.plot, s) * 100)
         }% central`,
       ]);
     }

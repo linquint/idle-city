@@ -26,6 +26,7 @@ import {
   shopCapacity,
   terminalCapacity,
 } from './economy';
+import { districtLand } from './layout';
 import {
   cohortOf,
   createState,
@@ -34,9 +35,10 @@ import {
   type FireKind,
   type GameState,
   type LevelCohort,
+  openZoning,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v9';
+export const SAVE_KEY = 'idle-city/save/v10';
 
 /**
  * Keys this game has written in the past, newest first.
@@ -46,6 +48,7 @@ export const SAVE_KEY = 'idle-city/save/v9';
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v9',
   'idle-city/save/v8',
   'idle-city/save/v7',
   'idle-city/save/v6',
@@ -121,6 +124,18 @@ function migrateCohort(raw: unknown, standing: number, fallback: number): LevelC
   levels[0] = (levels[0] ?? 0) + Math.max(0, standing - cohortTotal(levels));
   return levels;
 }
+
+/**
+ * The split a district had before zoning floated: 24 housing, 45 commercial, 13
+ * industrial, expressed in the pool parcels that reproduce it.
+ *
+ * Every leftover parcel taken by the zone the generator cut it from — housing
+ * takes the whole front of the shared pool and commerce the whole back, which
+ * between them is all of it. Derived from the pool rather than from the tuple,
+ * so a district whose parcels fall differently still lands on its own old split
+ * rather than on a number that was right for the average district.
+ */
+const defaultZoning = openZoning;
 
 const FIRE_KINDS: readonly FireKind[] = ['home', 'shop', 'industry'];
 
@@ -396,6 +411,11 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     fireCursor: Math.max(0, Math.floor(num(r['fireCursor'], 0))),
     fireHazard: Math.max(0, num(r['fireHazard'], 0)),
     districts,
+    // Filled in below, once the district count is legal — the arrays are one
+    // entry per district and there is no reading them before that is settled.
+    surveyedR: [],
+    surveyedC: [],
+    surveyedI: [],
     earned: Math.max(0, num(r['earned'], 0)),
     // Policy, defaulted to neutral. A save older than v6 was played on a build
     // that had no rate at all, and neutral is exactly what it was earning at.
@@ -409,6 +429,50 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     autoDevelop: r['autoDevelop'] === true,
     savedAt: num(r['savedAt'], now),
   };
+
+  /**
+   * Zoning, and what a save written before it existed is entitled to.
+   *
+   * A v9 city was zoned 24 / 45 / 13 in every district, and that is exactly what
+   * the pool's *default* split reproduces — the leftover parcels of each zone
+   * taken by the zone the generator cut them from. So an older save reopens on
+   * the same land, plot for plot, in the same order: measured over sixty
+   * districts, `districtPool` reconstructs `plan.residential`, `plan.commercial`
+   * and `plan.industrial` cell for cell at that split. Nothing moves.
+   *
+   * That is worth more than it sounds. v8's water moved every building in every
+   * returning city and the note on it said there was no migration that avoided
+   * it; this one had the same shape and does not, because the pool was arranged
+   * so the old split is a point inside it rather than a special case beside it.
+   *
+   * A v10 save carries its own arrays and is clamped rather than trusted: a
+   * doctored one claiming more parcels than a district holds gets the district's
+   * land, and one whose arrays are short gets the default for the districts it
+   * did not describe. `zoningAt` clamps again on every read, because this is the
+   * one field that indexes into a parcel list.
+   */
+  const zoned = version >= 10 ? r['surveyedR'] : undefined;
+  const zonedC = version >= 10 ? r['surveyedC'] : undefined;
+  const zonedI = version >= 10 ? r['surveyedI'] : undefined;
+  for (let i = 0; i < districts; i++) {
+    const fallback = defaultZoning(i);
+    state.surveyedR.push(count(Array.isArray(zoned) ? zoned[i] ?? fallback.home : fallback.home));
+    state.surveyedC.push(count(Array.isArray(zonedC) ? zonedC[i] ?? fallback.shop : fallback.shop));
+    state.surveyedI.push(count(Array.isArray(zonedI) ? zonedI[i] ?? fallback.industry : fallback.industry));
+  }
+  // Clamped to the land, in the same order the pool is drawn: housing takes the
+  // front of the shared pool, so it is bounded first and commerce by what is
+  // left. A save that over-claimed both loses it from commerce, which is the
+  // half a returning player is least likely to notice — the high street is at
+  // the back of the pool and the plots at risk are the ones deepest into
+  // housing land.
+  for (let i = 0; i < districts; i++) {
+    const limits = districtLand(i).limits;
+    const home = Math.min(state.surveyedR[i] ?? 0, limits.shared);
+    state.surveyedR[i] = home;
+    state.surveyedC[i] = Math.min(state.surveyedC[i] ?? 0, limits.shared - home);
+    state.surveyedI[i] = Math.min(state.surveyedI[i] ?? 0, limits.works);
+  }
 
   // Buildings before civic counts: `serviceAllowed` is measured against the
   // population, so homes have to be legal before it can be trusted. Civic

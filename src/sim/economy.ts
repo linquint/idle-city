@@ -17,6 +17,9 @@ import {
   ABANDON_SPREAD_SECONDS,
   DEMAND_SCALE,
   DEMAND_TERMS,
+  SURVEY_DEMAND,
+  SURVEY_FILL,
+  ZONE_SHARE,
   type DemandTerm,
   DEMAND_TAU,
   DISTRICT_BONUS,
@@ -110,10 +113,14 @@ import {
 import { ZONE, type Zone } from './citygen.ts';
 import { AIRPORT_SITED, ESTATE_CELLS } from './estates.ts';
 import {
-  BUILDABLE_COMMERCIAL_PER_DISTRICT,
-  BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_PARKS_PER_DISTRICT,
-  BUILDABLE_RESIDENTIAL_PER_DISTRICT,
+  SELLABLE_PER_DISTRICT,
+  zonePlots,
+  districtLand,
+  zoningAt,
+  sharedSpare,
+  worksSpare,
+  type DistrictZoning,
   CIVIC_SITES_PER_DISTRICT,
   POWER_SITES_PER_DISTRICT,
   LANDMARK_LARGE_SITES_PER_DISTRICT,
@@ -126,7 +133,7 @@ import {
   parcelBook,
   UNIVERSITY_SITES_PER_DISTRICT,
 } from './layout.ts';
-import type { GameState, LevelCohort, ZoneKind } from './state.ts';
+import { openZoning, type GameState, type LevelCohort, type ZoneKind } from './state.ts';
 
 /** Pure reads over a state. No mutation lives in this file. */
 
@@ -470,13 +477,28 @@ export const civicBuildings = (s: GameState): number =>
  * once every pair that can merge has. Bounding buildings instead would let a
  * merging district buy back the plots it had just consumed.
  */
-export const homeCapacity = (s: GameState): number =>
-  s.districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT;
+export const homeCapacity = (s: GameState): number => zonePlots(s, ZONE.residential);
 
-export const shopCapacity = (s: GameState): number =>
-  s.districts * BUILDABLE_COMMERCIAL_PER_DISTRICT;
-export const industryCapacity = (s: GameState): number =>
-  s.districts * BUILDABLE_INDUSTRIAL_PER_DISTRICT;
+export const shopCapacity = (s: GameState): number => zonePlots(s, ZONE.commercial);
+export const industryCapacity = (s: GameState): number => zonePlots(s, ZONE.industrial);
+
+/**
+ * Sellable plots the city owns and has zoned to nothing.
+ *
+ * Only the frontier district ever holds any: freezing allocates a district's
+ * remainder, so every settled district holds all 82 of its plots in one zone or
+ * another. So this is bounded by one district's pool however large the city
+ * gets, which is what keeps it out of the annexation gate's way — see
+ * `plotCapacity`.
+ */
+export const scrubPlots = (s: GameState): number =>
+  Math.max(
+    0,
+    s.districts * SELLABLE_PER_DISTRICT -
+      homeCapacity(s) -
+      shopCapacity(s) -
+      industryCapacity(s),
+  );
 
 /** A zone's plot capacity, through one key. */
 export const capacityOf = (s: GameState, kind: ZoneKind): number =>
@@ -506,14 +528,14 @@ export const hasFreePlot = (s: GameState, kind: ZoneKind): boolean =>
  */
 export const canMergeParcel = (s: GameState, kind: ZoneKind, ready: number): boolean => {
   const merged = mergedOf(s, kind);
-  const book = parcelBook(zoneOf(kind), s.districts);
+  const book = parcelBook(zoneOf(kind), s);
   if (merged >= book.pairs(s.districts)) return false;
   return ready >= book.pairFront(merged) + 2;
 };
 
 /** Parcels of a zone that could ever merge. The ceiling on `mergedR`. */
 export const mergeCapacity = (s: GameState, kind: ZoneKind): number =>
-  parcelBook(zoneOf(kind), s.districts).pairs(s.districts);
+  parcelBook(zoneOf(kind), s).pairs(s.districts);
 
 /**
  * Park land. Courtyard plots — the interior of a deep block — so it is the one
@@ -535,6 +557,14 @@ export const plotCapacity = (s: GameState): number =>
   homeCapacity(s) +
   shopCapacity(s) +
   industryCapacity(s) +
+  // Unzoned land counts. It is land the city bought and has not decided about,
+  // and leaving it out would make the annexation gate a share of whatever the
+  // surveyor happened to have zoned — a city that zoned a third of its frontier
+  // and built it would read as nearly full and annex on the strength of eight
+  // buildings. Counting it keeps the gate what it has always been: the share of
+  // the land the city owns that has something working on it. Only the frontier
+  // district ever carries any, so the drag is one district's worth at most.
+  scrubPlots(s) +
   civicSiteCapacity(s) +
   universitySiteCapacity(s);
 
@@ -861,7 +891,7 @@ export const landmarkSiteCapacity = (s: GameState, key: Landmark['key']): number
 export const landmarkCoverage = (s: GameState): number => {
   const plots = housingPlots(s);
   if (plots <= 0) return 0;
-  return Math.min(1, landmarkPlotsCovered(s.museums, s.stadiums, plots, s.districts) / plots);
+  return Math.min(1, landmarkPlotsCovered(s.museums, s.stadiums, plots, s) / plots);
 };
 
 export interface LandmarkReading {
@@ -1373,6 +1403,199 @@ export const reachableWorkers = (s: GameState): number =>
 export const labourReach = (s: GameState): number =>
   Math.max(0, reachableWorkers(s) - jobs(s)) * transitCoverage(s) * TRANSIT_LABOUR_DRAW;
 
+// -------------------------------------------------------------------- zoning
+
+/**
+ * The district the surveyor works on: the newest one.
+ *
+ * Every district but this one is frozen. That is not a rule about surveying so
+ * much as a rule about lists: a zone's plots are the districts concatenated, so
+ * a list may only grow at its end, and the frontier's segment is the end.
+ * Rezoning district 0 under a city of twelve would insert plots before district
+ * 1's and shift every home past them onto different ground.
+ *
+ * What it buys is worth more than what it costs: a district's split is written
+ * while it is the frontier and fixed when the next arrives, so the zoning map
+ * ends up a record of what the city wanted when each district was new.
+ */
+export const frontierDistrict = (s: GameState): number => Math.max(0, s.districts - 1);
+
+/** How full a zone is, against the land it currently holds. What `SURVEY_FILL` reads. */
+export const zoneFill = (s: GameState, kind: ZoneKind): number => {
+  const capacity = capacityOf(s, kind);
+  if (capacity <= 0) return 1;
+  return plotsOf(s, kind) / capacity;
+};
+
+/**
+ * Whether the surveyor will zone one more parcel to a zone, right now.
+ *
+ * A predicate on the state, checked every tick like `autoAnnex`, rather than a
+ * periodic pass — and that is what closes the stall the derived price curve
+ * would otherwise open. With a clock there is always something to wait for: a
+ * survey lowers the price of the next building, so a player who stops building
+ * for twenty seconds is paid for it. With no clock the survey lands on the same
+ * tick as the purchase that earned it and there is no interval to sit out.
+ *
+ * Three conditions, and the middle one is the load-bearing one:
+ *
+ *   - the city has to actually want the type, past SURVEY_DEMAND rather than
+ *     merely above zero, so a city drifting near balance does not slowly rezone
+ *     itself into whatever it last happened to want;
+ *   - the zone has to be *built out* past SURVEY_FILL. One survey then takes it
+ *     from `n / A` to `n / (A + 1)`, which is under the gate, so the gate shuts
+ *     itself and reopens only when the player builds again. A stall therefore
+ *     harvests exactly one parcel of price and no more, whatever it waits;
+ *   - and there has to be land. Residential and commercial share one pool from
+ *     opposite ends, so what bounds them is their two counts together.
+ */
+export const willSurvey = (s: GameState, kind: ZoneKind): boolean => {
+  if (s.districts <= 0) return false;
+  if (demandOf(s, kind) < SURVEY_DEMAND) return false;
+  if (zoneFill(s, kind) < SURVEY_FILL) return false;
+  const at = frontierDistrict(s);
+  return kind === 'industry' ? worksSpare(s, at) > 0 : sharedSpare(s, at) > 0;
+};
+
+/**
+ * Whether the surveyor will take a parcel *back* from a zone, right now.
+ *
+ * The other half, and the half that lets a split invert rather than ratchet. A
+ * zone that only ever gains land can only move toward whatever the city wanted
+ * first, and the freeze would then make that permanent — so a district that
+ * spent its opening hour zoning commerce could never become a housing district
+ * however hard the demand argued. Releasing is what makes "the split can invert"
+ * true rather than aspirational.
+ *
+ * Three conditions, and the third is what keeps it safe:
+ *
+ *   - the city has to be *oversupplied* past SURVEY_DEMAND, symmetrically with
+ *     surveying, so land does not slosh back and forth around zero;
+ *   - the zone has to be above its floor. ZONE_FLOOR is the stop: no amount of
+ *     sustained negative demand zones a type out of a district, because a
+ *     district with nowhere to live can never recover the demand that would fix
+ *     it;
+ *   - and the parcel being given up has to be **empty**. Buildings fill a zone
+ *     from the front and the frontier district's parcels are the back of the
+ *     list, so the last parcel is the last thing built on — releasing it while
+ *     something stands there would take the ground out from under a building.
+ *     This is the condition that makes releasing safe at all.
+ *
+ * What it releases goes back to the shared pool for the other zone to take, and
+ * the parcel keeps its identity: residential's k-th parcel is the k-th of the
+ * pool whether it has been given up and taken back once or never. So a plot
+ * released and re-zoned is the same plot, not a new one.
+ */
+export const willRelease = (s: GameState, kind: ZoneKind): boolean => {
+  if (s.districts <= 0) return false;
+  if (demandOf(s, kind) > -SURVEY_DEMAND) return false;
+  const at = frontierDistrict(s);
+  const zoning = zoningAt(s, at);
+  const taken = kind === 'home' ? zoning.home : kind === 'shop' ? zoning.shop : zoning.industry;
+  if (taken <= 0) return false;
+  // The parcel's size straight off the prefix tables, never by rebuilding the
+  // run. `reverseParcels` allocates a copy of a district's whole pool and this
+  // is on the tick path — measured, doing it here took a twelve-hour catch-up
+  // past a five-second test timeout. The difference of two prefix entries is
+  // the same number for nothing.
+  const land = districtLand(at);
+  const table =
+    kind === 'industry' ? land.worksFront
+    : kind === 'shop' ? land.sharedBack
+    : land.sharedFront;
+  const size = (table[taken] as number) - (table[taken - 1] as number);
+  return plotsOf(s, kind) <= capacityOf(s, kind) - size;
+};
+
+/**
+ * What a district's split would be if it were zoned to the city's own
+ * equilibrium, in pool parcels.
+ *
+ * ZONE_SHARE solves the tier-0 job/worker balance at R 0.48 / C 0.31 / I 0.21,
+ * and laid over the plots residential and commerce actually contest that is
+ * about 42 housing plots against 27 of commerce. Worth saying plainly because it
+ * is the answer to a question this whole cycle started from: the budget the game
+ * already solves wants *more housing than commerce*, and the 24-against-45 a
+ * district used to sell was inverted against it — the split was solved on zoned
+ * land and then decided by which of it happened to front a street.
+ *
+ * What reads this is `annexZoning`, and only for the half-step: a new district
+ * opens halfway between what the city has been choosing and this, so a run's
+ * character carries forward without locking itself in. Inheriting outright would
+ * be a feedback loop — the first hour's zoning would decide the fortieth
+ * district's — and starting at neutral would throw the choice away every time.
+ */
+export const neutralZoning = (index: number): DistrictZoning => {
+  const land = districtLand(index);
+  const share = ZONE_SHARE.residential / (ZONE_SHARE.residential + ZONE_SHARE.commercial);
+  const home = Math.round(land.limits.shared * share);
+  return {
+    home,
+    shop: land.limits.shared - home,
+    // Industry takes its whole reserve, because ZONE_SHARE would ask for more
+    // than the reserve holds: 0.21 of 82 plots is 17, and INDUSTRY_RESERVE caps
+    // it at 13. So "neutral" for industry is simply all of it, which is also
+    // exactly what a district sold before zoning floated.
+    industry: land.limits.works,
+  };
+};
+
+/**
+ * The zoning a district opens on: halfway between the city's own and neutral.
+ *
+ * Halfway rather than inherited, and the difference is what keeps a run from
+ * deciding itself in its first hour. A city that has been surveying commerce
+ * hard opens its next district leaning commercial — the character carries — but
+ * pulled a step back toward ZONE_SHARE's equilibrium, so the next district's
+ * surveyor has room to disagree with the last one's. Inheriting outright is a
+ * feedback loop; opening at neutral throws the choice away on every expansion.
+ *
+ * The city's own split is read as a mean over the districts it already holds, in
+ * parcels rather than plots so the two sides of the average are the same unit.
+ */
+export const annexZoning = (s: GameState): DistrictZoning => {
+  const index = s.districts;
+  const neutral = neutralZoning(index);
+  if (s.districts <= 0) return neutral;
+  let home = 0;
+  let shop = 0;
+  let industry = 0;
+  for (let i = 0; i < s.districts; i++) {
+    const at = zoningAt(s, i);
+    home += at.home;
+    shop += at.shop;
+    industry += at.industry;
+  }
+  const limits = districtLand(index).limits;
+  const half = (mine: number, theirs: number, cap: number): number =>
+    Math.max(0, Math.min(cap, Math.round((mine / s.districts + theirs) / 2)));
+  const openHome = half(home, neutral.home, limits.shared);
+  return {
+    home: openHome,
+    shop: half(shop, neutral.shop, limits.shared - openHome),
+    industry: half(industry, neutral.industry, limits.works),
+  };
+};
+
+/**
+ * The split a district opens on when the city has never zoned anything: the one
+ * every district sold before zoning floated.
+ *
+ * A fresh city therefore opens on exactly the land it opened on before any of
+ * this existed — 24 housing, 45 commercial, 13 industrial — which is what keeps
+ * the opening minute, `RENT`, `HOME_BASE` and every pacing guard meaning what
+ * they meant. What changed is that it is now a *starting point* rather than a
+ * constant: the surveyor moves it both ways from here.
+ *
+ * Opening at the floors was built first and is a soft-lock. A district zoned
+ * 8 / 8 / 4 fills in a couple of minutes and then sits there: residential demand
+ * reads -0.28 with eight homes up and no services, commerce is deeply
+ * oversupplied at eight shops against thirty residents, and industry reaches
+ * +0.09 against a SURVEY_DEMAND of 0.35. Nothing clears the gate, so nothing is
+ * ever zoned, so the city stops at twenty plots with no way out.
+ */
+export const defaultZoning = (index: number): DistrictZoning => openZoning(index);
+
 export interface DemandTargets {
   readonly r: number;
   readonly c: number;
@@ -1619,8 +1842,8 @@ export const landValue = (s: GameState): number => {
   const plots = plotsOf(s, 'home');
   if (plots <= 0) return 1;
   return valueOf(
-    housingCentralityMean(plots, s.districts),
-    housingCentralityBase(s.districts),
+    housingCentralityMean(plots, s),
+    housingCentralityBase(s),
   );
 };
 
@@ -1635,8 +1858,8 @@ export const landValue = (s: GameState): number => {
 export const parcelLandValue = (s: GameState, plot: number, plots = 1): number => {
   const span = Math.max(1, Math.floor(plots));
   let score = 0;
-  for (let i = 0; i < span; i++) score += housingCentrality(plot + i, s.districts);
-  return valueOf(score / span, housingCentralityBase(s.districts));
+  for (let i = 0; i < span; i++) score += housingCentrality(plot + i, s);
+  return valueOf(score / span, housingCentralityBase(s));
 };
 
 /**

@@ -75,7 +75,7 @@ export class Courtyards {
       `${state.districts}:${state.parks}:${state.cityHall}:${state.plants}:${built.join(',')}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
-    this.layout.ensure(state.districts);
+    this.layout.ensure(state);
 
     const courtyards = this.layout.courtyards;
     // Parks are the front of the courtyard list, so the plots still standing
@@ -191,7 +191,7 @@ export class Parks {
     const stamp = `${state.districts}:${state.parks}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
-    this.layout.ensure(state.districts);
+    this.layout.ensure(state);
 
     const n = Math.min(state.parks, state.districts * PARKS_PER_DISTRICT);
     this.pads.ensure(n);
@@ -325,7 +325,7 @@ export class Zones {
         : `demand:${counts}:${quantise(state.demandR)}:${quantise(state.demandC)}:${quantise(state.demandI)}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
-    this.layout.ensure(state.districts);
+    this.layout.ensure(state);
 
     const residential = this.layout.zoneCells(ZONE.residential);
     const commercial = this.layout.zoneCells(ZONE.commercial);

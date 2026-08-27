@@ -37,7 +37,7 @@ import {
   SPARE_PLOTS_PER_DISTRICT,
 } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { built, housed, housedOn } from './levels';
+import { built, housed, housedOn, zonedAt } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -85,7 +85,7 @@ describe('park land', () => {
   });
 
   it('gives every park its own plot, and never one already spoken for', () => {
-    const layout = new CityLayout().ensure(9);
+    const layout = new CityLayout().ensure(zonedAt(9));
     const seen = new Set<string>();
     for (let i = 0; i < 9 * BUILDABLE_PARKS_PER_DISTRICT; i++) {
       const cell = layout.parkCell(i);
