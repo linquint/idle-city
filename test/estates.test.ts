@@ -249,10 +249,20 @@ describe('what an estate is worth', () => {
   });
 
   it('pushes residential demand up and industrial demand down', () => {
-    // At tower housing and the district count the highway unlocks at, which is
-    // the one place in the sweep where none of the three signals is on a bound
-    // — see tools/estates.calibrate.mjs. A pinned signal says nothing.
-    const bare = works(2, HIGHWAY_MIN_DISTRICTS);
+    // At arcology housing and the district count the highway unlocks at, which
+    // is a place in the sweep where none of the three signals is on a bound —
+    // see tools/estates.calibrate.mjs. A pinned signal says nothing.
+    //
+    // This row used to read tower housing, and TRADE_LADDER moved it. The goods
+    // gap is a *difference* of two laddered terms — a district draws 180 and
+    // supplies 117, so it is 65% covered — and scaling both sides scales the
+    // shortfall the city was already carrying. Measured at 14 districts, built
+    // out to frontage: industrial demand runs +1.00 / +1.00 / +1.00 / +0.69 /
+    // +0.34 up the ladder where it ran +1.00 / +0.71 / +0.16 / +0.04 / +0.01
+    // before, so the first rung with headroom is now the fourth. The guard on
+    // the line below is what caught the move rather than letting the assertion
+    // quietly pass against a saturated signal.
+    const bare = works(3, HIGHWAY_MIN_DISTRICTS);
     expect(Math.abs(demandTargets(bare).i)).toBeLessThan(1);
     const built = { ...bare, estates: 8 };
     const before = demandTargets(bare);

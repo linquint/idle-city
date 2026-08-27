@@ -10,6 +10,7 @@ import {
   INDUSTRY_OUTPUT,
   JOBS_PER_COMMERCIAL,
   JOBS_PER_INDUSTRIAL,
+  LEVEL_CAPACITY,
   LEVEL_FOOTPRINT,
   LEVELS,
   PRICE_DISCOUNT_MAX,
@@ -21,6 +22,7 @@ import {
   SHOP_THROUGHPUT,
   SHOP_TRIPS,
   SUPPLY_DRAW,
+  TRADE_LADDER,
   ZONE_LEVEL_NAMES,
 } from '../src/sim/config';
 import {
@@ -333,17 +335,63 @@ describe('commercial and industrial levels', () => {
     cohortAgainst(kind === 'shop' ? s.shopLevels : s.industryLevels, ladder) /
     cohortFootprint(kind === 'shop' ? s.shopLevels : s.industryLevels);
 
-  it('employ, serve and make the same per plot at every level', () => {
+  it('employ the same per plot at every level', () => {
+    // The half of the old claim that is still the design. Jobs are what the
+    // ZONE_SHARE equilibrium is solved against, and a ladder on them freezes the
+    // job/worker arc at level 0 — see SHOP_JOBS for the measurement that killed
+    // the attempt. Flat, at every rung, forever.
     for (let level = 0; level < LEVELS; level++) {
       const shops = state({ ...trading(8, level), occupancyC: 1 });
       expect(perPlot(shops, 'shop', SHOP_JOBS)).toBeCloseTo(JOBS_PER_COMMERCIAL, 9);
-      expect(perPlot(shops, 'shop', SHOP_TRIPS)).toBeCloseTo(SHOP_THROUGHPUT, 9);
-      expect(perPlot(shops, 'shop', SHOP_SUPPLY)).toBeCloseTo(SUPPLY_DRAW, 9);
 
       const works = state({ ...making(6, level), occupancyI: 1 });
       expect(perPlot(works, 'industry', INDUSTRY_JOBS)).toBeCloseTo(JOBS_PER_INDUSTRIAL, 9);
-      expect(perPlot(works, 'industry', INDUSTRY_OUTPUT)).toBeCloseTo(INDUSTRIAL_OUTPUT, 9);
     }
+  });
+
+  it('serve and make more per plot as they climb, sub-linearly', () => {
+    // The half that changed, and the assumption this test used to encode. Trips
+    // balance against residents, which climb LEVEL_CAPACITY's 300x per plot, so
+    // a flat trade ladder made the city want 45.7x the commercial land a
+    // district sells. TRADE_LADDER is the middle path; what this asserts is that
+    // it *is* a middle — strictly climbing, and strictly slower than capacity.
+    let previousTrips = 0;
+    let previousOutput = 0;
+    for (let level = 0; level < LEVELS; level++) {
+      const capacity = (LEVEL_CAPACITY[level] as number) / (LEVEL_CAPACITY[0] as number);
+
+      const shops = state({ ...trading(8, level), occupancyC: 1 });
+      const trips = perPlot(shops, 'shop', SHOP_TRIPS);
+      const supply = perPlot(shops, 'shop', SHOP_SUPPLY);
+      expect(trips).toBeGreaterThan(previousTrips);
+      expect(trips).toBeCloseTo(SHOP_THROUGHPUT * (TRADE_LADDER[level] as number), 9);
+      // Supply and output take the same ladder, as a matched pair.
+      expect(supply / SUPPLY_DRAW).toBeCloseTo(trips / SHOP_THROUGHPUT, 9);
+      previousTrips = trips;
+
+      const works = state({ ...making(6, level), occupancyI: 1 });
+      const output = perPlot(works, 'industry', INDUSTRY_OUTPUT);
+      expect(output).toBeGreaterThan(previousOutput);
+      expect(output / INDUSTRIAL_OUTPUT).toBeCloseTo(trips / SHOP_THROUGHPUT, 9);
+      previousOutput = output;
+
+      // Sub-linear: never past the capacity ladder it is derived from, and
+      // strictly under it above the first rung. Proportional is the failure
+      // LEVEL_SCALE's comment records — commercial land that can never fill.
+      const climb = trips / SHOP_THROUGHPUT;
+      expect(climb).toBeLessThanOrEqual(capacity + 1e-9);
+      if (level > 0) expect(climb).toBeLessThan(capacity);
+    }
+  });
+
+  it('leaves the first rung at exactly 1, so a fresh save does not move', () => {
+    // The ladder's whole compatibility claim. A city with nothing above level 0
+    // is priced, served and supplied exactly as it was before TRADE_LADDER
+    // existed, so the opening minute is untouched by any of this.
+    expect(TRADE_LADDER[0]).toBe(1);
+    expect(SHOP_TRIPS[0]).toBeCloseTo(SHOP_THROUGHPUT, 12);
+    expect(SHOP_SUPPLY[0]).toBeCloseTo(SUPPLY_DRAW, 12);
+    expect(INDUSTRY_OUTPUT[0]).toBeCloseTo(INDUSTRIAL_OUTPUT, 12);
   });
 
   it('leave the labour market where ZONE_SHARE put it, at every level', () => {

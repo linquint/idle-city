@@ -168,8 +168,16 @@ describe('the catch-up guard', () => {
   it('is unlimited while the player is watching', () => {
     // A district that arrives while you are looking at it is a thing that
     // happened; the guard is about the ones that arrive while you are not.
+    //
+    // The window is 600s rather than the 200s this watched before TRADE_LADDER,
+    // and the reason is a real slowdown rather than a flaky bound: the gate is a
+    // *share*, so a third district is earned by filling the second, and a city
+    // whose commerce is worth more per plot buys fewer shops to fill it with.
+    // Measured, the first two arrive inside a second — the city starts past the
+    // gate — and the third at 310s where it used to arrive inside 200s. What is
+    // asserted is unchanged: the cap does not apply while the player is here.
     const game = at(ready({ cash: 1e30, autoDevelop: true, cityHall: true }));
-    for (let i = 0; i < 2_000; i++) game.advance(0.1);
+    for (let i = 0; i < 6_000; i++) game.advance(0.1);
     expect(game.state.districts).toBeGreaterThan(1 + CATCHUP_MAX_ANNEXES);
   });
 
