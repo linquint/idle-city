@@ -416,6 +416,9 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     surveyedR: [],
     surveyedC: [],
     surveyedI: [],
+    // Seconds, so floored at zero and nothing else: a save claiming an enormous
+    // bank only gets the passes the gates below it will actually allow.
+    surveyClock: Math.max(0, num(r['surveyClock'], 0)),
     earned: Math.max(0, num(r['earned'], 0)),
     // Policy, defaulted to neutral. A save older than v6 was played on a build
     // that had no rate at all, and neutral is exactly what it was earning at.

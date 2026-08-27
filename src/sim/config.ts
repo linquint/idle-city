@@ -1268,19 +1268,66 @@ export const SURVEY_DEMAND = 0.35;
  * 1.7x at three hours and 23x at twenty-four, because the saving is a fraction
  * of a price that compounds while the forgone income is a flat rate.
  *
- * This closes it, and closes it by construction rather than by balance. One
- * survey takes the zone from `n / A` to `n / (A + 1)`, which is *below* this
- * gate — so the gate shuts itself and reopens only when the player builds again.
- * A stall therefore harvests exactly one parcel of growth and no more, whatever
- * it waits. There is no clock to wait out either: the surveyor is a predicate on
- * the state, checked every tick like `autoAnnex`, not a periodic pass.
+ * This closes it, and closes it by construction rather than by balance. A move
+ * takes the zone from `n / A` to `n / (A + size)`, so the fill ratio falls
+ * strictly and the gate shuts itself; it reopens only when the player builds
+ * again. A zone that was already *past* the gate may take a second parcel on the
+ * way under it — 20 built of 24 reads 0.833, and one plot more of land reads
+ * exactly 0.800 — so the bound is a parcel or two rather than exactly one.
+ * Measured, a city that stops building mid-move gains at most four plots and
+ * then stops. There is no clock to wait out either: the surveyor is a predicate
+ * on the state, checked every tick like `autoAnnex`, not a periodic pass.
  *
  * 0.8 rather than ANNEX_MIN_OCCUPANCY's 0.7 because this gate fires far more
  * often and against a much smaller denominator: a zone at its floor holds 8
  * plots, so 0.7 and 0.8 are 5.6 and 6.4 of them, and the tighter one is what
  * keeps a district from surveying on the strength of two buildings.
+ *
+ * What the whole of it bought, and it is the debt TRADE_LADDER's comment left
+ * open. The demand-neutral build-out of one district, per level held, against a
+ * 70% annexation gate:
+ *
+ *   level              flat ladder   sqrt ladder, fixed land   with zoning
+ *   detached housing         55.1%                     55.1%        100.0%
+ *   apartments               10.1%                     11.2%          9.0%
+ *   towers                   89.9%                     24.7%        102.2%
+ *   arcologies               78.7%                     24.7%         94.4%
+ *   megastructures           76.4%                     40.4%         92.1%
+ *
+ * The middle column is what the capacity ladder cost on land fixed at 24 / 45 /
+ * 13, and the right is that same ladder against land that follows demand. A
+ * district of towers that wants eight commercial plots rather than twenty-three
+ * now *zones* itself for eight and fills them, which is the argument the ladder
+ * was accepted on. The apartments row is a probe artefact and reads about 10%
+ * in all three columns.
  */
 export const SURVEY_FILL = 0.8;
+
+/**
+ * Seconds between the surveyor's passes.
+ *
+ * A clock, and it is here for step-size invariance rather than for pacing. The
+ * surveyor was built without one — a predicate on the state, acted on every tick
+ * like `autoAnnex` — and that is not invariant: a pass per *tick* means a
+ * 60-second catch-up step makes one move where six hundred tenth-second ticks
+ * make up to six hundred. Measured, an hour away rezoned a district to 11
+ * parcels where an hour watched reached 13.
+ *
+ * So it accumulates, in the shape `fireHazard` and the levelling drift already
+ * use: seconds bank up and whole passes are spent out of the bank, which gives
+ * the same answer at any step size the loop is run at.
+ *
+ * The clock does *not* reopen the stall, and the reason is worth being precise
+ * about because the first design removed it for exactly that fear. What kills
+ * the stall is SURVEY_FILL: a move drops the zone under its own gate, so waiting
+ * harvests a parcel or two whenever it happens and no more. The clock decides
+ * when that lands, never how much of it there is.
+ *
+ * 20 seconds against demand's 25: fast enough that a zone that has just filled
+ * does not wait a visible beat for the land it has earned, slow enough that the
+ * signal it reads has moved between passes.
+ */
+export const SURVEY_SECONDS = 20;
 
 /**
  * Surveys a single `catchUp` call may make, however long the absence.

@@ -20,6 +20,7 @@ import {
   SURVEY_DEMAND,
   SURVEY_FILL,
   ZONE_SHARE,
+  FRONTAGE_TARGET,
   type DemandTerm,
   DEMAND_TAU,
   DISTRICT_BONUS,
@@ -116,6 +117,7 @@ import {
   BUILDABLE_PARKS_PER_DISTRICT,
   SELLABLE_PER_DISTRICT,
   zonePlots,
+  districtZonePlots,
   districtLand,
   zoningAt,
   sharedSpare,
@@ -1489,22 +1491,7 @@ export const willSurvey = (s: GameState, kind: ZoneKind): boolean => {
 export const willRelease = (s: GameState, kind: ZoneKind): boolean => {
   if (s.districts <= 0) return false;
   if (demandOf(s, kind) > -SURVEY_DEMAND) return false;
-  const at = frontierDistrict(s);
-  const zoning = zoningAt(s, at);
-  const taken = kind === 'home' ? zoning.home : kind === 'shop' ? zoning.shop : zoning.industry;
-  if (taken <= 0) return false;
-  // The parcel's size straight off the prefix tables, never by rebuilding the
-  // run. `reverseParcels` allocates a copy of a district's whole pool and this
-  // is on the tick path — measured, doing it here took a twelve-hour catch-up
-  // past a five-second test timeout. The difference of two prefix entries is
-  // the same number for nothing.
-  const land = districtLand(at);
-  const table =
-    kind === 'industry' ? land.worksFront
-    : kind === 'shop' ? land.sharedBack
-    : land.sharedFront;
-  const size = (table[taken] as number) - (table[taken - 1] as number);
-  return plotsOf(s, kind) <= capacityOf(s, kind) - size;
+  return canGiveUp(s, kind);
 };
 
 /**
@@ -1538,6 +1525,74 @@ export const neutralZoning = (index: number): DistrictZoning => {
     // exactly what a district sold before zoning floated.
     industry: land.limits.works,
   };
+};
+
+/**
+ * The two zones that contest the shared pool, in the order they read it.
+ *
+ * Industry is not one of them and cannot be — see INDUSTRY_RESERVE for the
+ * contradiction three claimants on one pool run into.
+ */
+const POOL_ZONES: readonly ZoneKind[] = ['home', 'shop'];
+
+export interface Transfer {
+  readonly to: ZoneKind;
+  readonly from: ZoneKind;
+}
+
+/**
+ * Whether one pool zone should take a parcel off the other, right now.
+ *
+ * The rule a *shared* pool actually needs, and the one absolute thresholds
+ * cannot express. A district opens with its whole pool allocated, so "housing is
+ * short" is not on its own a thing the surveyor can act on — there is no spare
+ * land to zone, only commercial land to take. Waiting for commerce to go
+ * genuinely oversupplied before housing may grow means the split moves on the
+ * rare tick when one zone is short *and* the other is in surplus, and mostly
+ * sits still: measured over 24 hours, two opposite play patterns ended 29.3R /
+ * 38.7C and 31.8R / 36.3C a district, which is a difference nobody would notice.
+ *
+ * So the pool goes to whichever zone wants it more, by a margin. Three
+ * conditions, and they are the same three surveying has:
+ *
+ *   - the *gap* between the two signals has to clear SURVEY_DEMAND, not each
+ *     signal separately. That is what makes it a contest rather than two
+ *     independent appetites;
+ *   - the zone gaining has to be built out past SURVEY_FILL, so the gate still
+ *     shuts behind every move and a stall is still worth exactly one parcel;
+ *   - and the zone losing has to have an empty parcel at the end of its run.
+ *     Buildings fill from the front and the frontier's parcels are the back of
+ *     the list, so this is the condition that keeps a transfer from taking the
+ *     ground out from under a building.
+ *
+ * Floors bound it on the losing side exactly as they bound a release.
+ */
+export const willTransfer = (s: GameState): Transfer | null => {
+  if (s.districts <= 0) return null;
+  for (const to of POOL_ZONES) {
+    const from = to === 'home' ? 'shop' : 'home';
+    if (demandOf(s, to) - demandOf(s, from) < SURVEY_DEMAND) continue;
+    if (zoneFill(s, to) < SURVEY_FILL) continue;
+    // Spare pool is taken first and needs no victim — `willSurvey` has already
+    // had its turn by the time this runs, so reaching here means there is none.
+    if (canGiveUp(s, from)) return { to, from };
+  }
+  return null;
+};
+
+/** Whether a zone's last parcel is above its floor and has nothing on it. */
+const canGiveUp = (s: GameState, kind: ZoneKind): boolean => {
+  const at = frontierDistrict(s);
+  const zoning = zoningAt(s, at);
+  const taken = kind === 'home' ? zoning.home : kind === 'shop' ? zoning.shop : zoning.industry;
+  if (taken <= 0) return false;
+  const land = districtLand(at);
+  const table =
+    kind === 'industry' ? land.worksFront
+    : kind === 'shop' ? land.sharedBack
+    : land.sharedFront;
+  const size = (table[taken] as number) - (table[taken - 1] as number);
+  return plotsOf(s, kind) <= capacityOf(s, kind) - size;
 };
 
 /**
@@ -1764,12 +1819,77 @@ export const priceModifier = (d: number): number => {
  * exponent drops by one, and a city that had consumed exactly as much land as
  * before would find housing cheaper for having grown.
  */
+/**
+ * What filling one district's whole allotment of a zone multiplies its price by.
+ *
+ * The curve's anchor, and it is today's numbers rather than a new choice:
+ * 1.14 ** 24 for housing, 1.14 ** 45 for commerce, 1.14 ** 13 for industry — the
+ * price multiple a district's frontage already carried before zoning floated.
+ * 23.2, 363.7 and 5.5.
+ */
+export const ZONE_FILL_MULTIPLE = {
+  home: HOME_GROWTH ** FRONTAGE_TARGET.residential,
+  shop: SHOP_GROWTH ** FRONTAGE_TARGET.commercial,
+  industry: INDUSTRY_GROWTH ** FRONTAGE_TARGET.industrial,
+} as const;
+
+/**
+ * How many districts' worth of a zone the city has filled, as a real number.
+ *
+ * The exponent the cost curve now compounds over, and the whole of what
+ * "derived from the allotment" means: each district contributes the *share* of
+ * its own allotment that is built on, so filling any district multiplies the
+ * price by `ZONE_FILL_MULTIPLE` whatever that district's allotment happens to
+ * be. A district zoned 22 commercial plots and one zoned 52 cost the same amount
+ * to fill; what differs is how much land you got for it.
+ *
+ * Per district rather than city-wide, and that is what makes annexation
+ * price-neutral. A new district appends a term whose numerator is zero, so
+ * nothing already priced can move — where a city-wide allotment would have made
+ * every existing plot's price jump the moment the average changed. Measured on
+ * the city-wide form: a commerce-led city annexing at halfway-to-neutral paid
+ * x2.42 on its next shop and a housing-led one got a x0.02 windfall, which is a
+ * 98% discount for starving commerce and then expanding.
+ *
+ * At the split every district sold before this existed, every allotment is the
+ * old constant and this is exactly `plots / 24`, `plots / 45`, `plots / 13`. So
+ * the curve is `BASE * 1.14 ** n` to the last digit and no constant in this file
+ * had to move.
+ *
+ * Summed in one pass and exponentiated once, because a `Math.pow` per district
+ * on the tick path is a microsecond a call and auto-development calls it
+ * twenty-odd times a tick.
+ */
+export const zoneFillMultiples = (s: GameState, kind: ZoneKind): number => {
+  let taken = plotsOf(s, kind);
+  if (taken <= 0) return 0;
+  const zone = zoneOf(kind);
+  let districts = 0;
+  for (let i = 0; i < s.districts && taken > 0; i++) {
+    const allotment = districtZonePlots(s, i, zone);
+    if (allotment <= 0) continue;
+    const here = Math.min(taken, allotment);
+    districts += here / allotment;
+    taken -= here;
+  }
+  // Land the city has built on and since rezoned away from — the surveyor can
+  // release a parcel only when it is empty, so this is bounded by a doctored
+  // save rather than by play. Charged at the last district's rate so the curve
+  // stays strictly increasing in plots taken.
+  if (taken > 0) districts += taken / Math.max(1, SELLABLE_PER_DISTRICT);
+  return districts;
+};
+
+/** The compounded part of a zone's price, before demand touches it. */
+const compoundedCost = (s: GameState, kind: ZoneKind, base: number): number =>
+  base * Math.exp(Math.log(ZONE_FILL_MULTIPLE[kind]) * zoneFillMultiples(s, kind));
+
 export const homeCost = (s: GameState): number =>
-  HOME_BASE * HOME_GROWTH ** plotsOf(s, 'home') * priceModifier(s.demandR);
+  compoundedCost(s, 'home', HOME_BASE) * priceModifier(s.demandR);
 export const shopCost = (s: GameState): number =>
-  SHOP_BASE * SHOP_GROWTH ** plotsOf(s, 'shop') * priceModifier(s.demandC);
+  compoundedCost(s, 'shop', SHOP_BASE) * priceModifier(s.demandC);
 export const industryCost = (s: GameState): number =>
-  INDUSTRY_BASE * INDUSTRY_GROWTH ** plotsOf(s, 'industry') * priceModifier(s.demandI);
+  compoundedCost(s, 'industry', INDUSTRY_BASE) * priceModifier(s.demandI);
 
 /**
  * Parks are not demand-priced either, and earn nothing at all. What they buy is

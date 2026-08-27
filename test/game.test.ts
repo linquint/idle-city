@@ -322,9 +322,16 @@ describe('offline progress', () => {
         expect(game.state.shops).toBe(shops);
       }
     }
-    // And it really was oversupplied for most of the run, so the assertion above
+    // And it really was oversupplied for a good stretch, so the assertion above
     // was doing work rather than never firing.
-    expect(surcharged).toBeGreaterThan(1_000);
+    //
+    // 200 rather than the 1,000 this watched before zoning floated, and the
+    // window shrank for a reason worth naming: housing can now take commercial
+    // land when it wants it more, so a city short of homes and long on shops
+    // rezones its way out of the oversupply instead of waiting to grow out of
+    // it. Measured, the surcharge lasts about 360 ticks where it lasted over a
+    // thousand. What is asserted is unchanged — while it lasts, nothing buys.
+    expect(surcharged).toBeGreaterThan(200);
   });
 });
 

@@ -10,6 +10,7 @@ import {
   INDUSTRY_OUTPUT,
   JOBS_PER_COMMERCIAL,
   JOBS_PER_INDUSTRIAL,
+  FRONTAGE_TARGET,
   LEVEL_CAPACITY,
   LEVEL_FOOTPRINT,
   LEVELS,
@@ -39,7 +40,7 @@ import {
   workers,
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
-import { built, housed, making, trading } from './levels';
+import { built, housed, making, trading, zoning } from './levels';
 import { createState, type GameState } from '../src/sim/state';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
@@ -93,19 +94,32 @@ describe('cost curves', () => {
   });
 
   it('keep the discounted floor an exponential, not a rebate', () => {
+    // On a city with the land to hold what it is being asked to price. The
+    // curve compounds over the share of each district's *own* allotment that is
+    // built on, so quoting 120 homes against a single district's 24 plots is
+    // asking what a plot costs that the city does not own — which the curve
+    // answers, at a rate this test has no business pinning. See
+    // `zoneFillMultiples`; `test/zoning.test.ts` covers the over-capacity tail.
+    const enough = (plots: number, per: number): Partial<GameState> =>
+      zoning(Math.max(1, Math.ceil(plots / per)));
     for (const n of [0, 7, 40, 120]) {
       const floor = 1 - PRICE_DISCOUNT_MAX;
-      expect(homeCost(state({ homes: n, demandR: 1 }))).toBeCloseTo(
+      const rel = (got: number, want: number): void => {
+        // Relative: the curve reaches 1e9 by 120 plots of commerce, and an
+        // absolute 5e-7 there asks for more precision than a double carries.
+        expect(Math.abs(got / want - 1)).toBeLessThan(1e-12);
+      };
+      rel(
+        homeCost(state({ ...enough(n, FRONTAGE_TARGET.residential), homes: n, demandR: 1 })),
         HOME_BASE * HOME_GROWTH ** n * floor,
-        6,
       );
-      expect(shopCost(state({ shops: n, demandC: 1 }))).toBeCloseTo(
+      rel(
+        shopCost(state({ ...enough(n, FRONTAGE_TARGET.commercial), shops: n, demandC: 1 })),
         SHOP_BASE * SHOP_GROWTH ** n * floor,
-        6,
       );
-      expect(industryCost(state({ industry: n, demandI: 1 }))).toBeCloseTo(
+      rel(
+        industryCost(state({ ...enough(n, FRONTAGE_TARGET.industrial), industry: n, demandI: 1 })),
         INDUSTRY_BASE * INDUSTRY_GROWTH ** n * floor,
-        6,
       );
     }
   });

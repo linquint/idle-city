@@ -29,6 +29,13 @@ export const PALETTE = {
   // reads as a parade from the play camera rather than as one long block.
   awning: 0xb9c2cf,
   sodium: 0xf0a64b,
+  // Survey ground: sellable frontage the city owns and has zoned to nothing.
+  // A dry, pale earth against the courtyard's grey — it has to read as *land*
+  // rather than as an empty civic square, because the two are next to each other
+  // in the same block and mean opposite things: one is held back forever and the
+  // other is what the city is about to decide. Only the frontier district ever
+  // carries any, so this is the colour of the edge of the map.
+  scrub: 0xa8a086,
   // Zone overlay (the Z key). Distinct at dusk and distinct from each other,
   // which matters more here than fitting the city's own palette.
   zoneResidential: 0x6fbf8b,

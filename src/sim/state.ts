@@ -353,6 +353,16 @@ export interface GameState {
   surveyedR: number[];
   surveyedC: number[];
   surveyedI: number[];
+  /**
+   * Seconds banked toward the surveyor's next pass.
+   *
+   * The integrator that makes rezoning step-size invariant, in the same shape
+   * `fireHazard` uses for ignition and `driftR` for levelling. A pass per tick is
+   * not invariant — one 60-second catch-up step would make one move where six
+   * hundred tenth-second ticks make hundreds — so seconds accumulate here and
+   * whole passes are spent out of the bank. See SURVEY_SECONDS.
+   */
+  surveyClock: number;
   /** Lifetime earnings, for the ledger. */
   earned: number;
   /**
@@ -442,6 +452,7 @@ export function createState(now = Date.now()): GameState {
     // zoning floated, so the opening minute, RENT, HOME_BASE and every pacing
     // guard mean what they meant. What changed is that this is a starting point
     // rather than a constant — the surveyor moves it both ways from here.
+    surveyClock: 0,
     surveyedR: [openZoning(0).home],
     surveyedC: [openZoning(0).shop],
     surveyedI: [openZoning(0).industry],

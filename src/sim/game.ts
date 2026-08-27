@@ -5,6 +5,7 @@ import {
   CATCHUP_MAX_ABANDONED,
   CATCHUP_MAX_ANNEXES,
   CATCHUP_MAX_SURVEYS,
+  SURVEY_SECONDS,
   CATCHUP_MAX_LOSSES,
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
@@ -32,6 +33,7 @@ import {
   frontierDistrict,
   willSurvey,
   willRelease,
+  willTransfer,
   capacityOf,
   airportCost,
   canBuildAirport,
@@ -450,7 +452,7 @@ export class Game {
     this.igniteFires(dt);
     // The surveyor before annexation, so a district that is about to freeze gets
     // the last word on its own split before the next one arrives and fixes it.
-    this.survey();
+    this.survey(dt);
     // Annexation before auto-development, so a district that arrives this tick
     // is land the same tick can start building on rather than land that waits a
     // tenth of a second — the same reasoning fires already follow.
@@ -1295,7 +1297,25 @@ export class Game {
    * because a survey drops its own zone under SURVEY_FILL and shuts the gate
    * behind it; the counter below is only for the length of a `catchUp`.
    */
-  private survey(): void {
+  private survey(dt: number): void {
+    const s = this.inner;
+    // Banked rather than run per tick. A pass per tick is a rate that depends on
+    // the step size, which is the one thing offline catch-up cannot have — see
+    // SURVEY_SECONDS. Whole passes are spent out of the bank and the remainder
+    // stays for next time, so sixty ticks of a second and one step of a minute
+    // make the same number of moves.
+    s.surveyClock += Math.max(0, dt);
+    let passes = Math.floor(s.surveyClock / SURVEY_SECONDS);
+    if (passes <= 0) return;
+    s.surveyClock -= passes * SURVEY_SECONDS;
+    // Bounded for the same reason CATCHUP_MAX_STEPS is: an absurd `dt` from a
+    // clock that jumped must not turn into an unbounded loop.
+    passes = Math.min(passes, CATCHUP_MAX_SURVEYS);
+    for (let pass = 0; pass < passes; pass++) this.surveyPass();
+  }
+
+  /** One pass of the surveyor: at most one move per zone, plus one transfer. */
+  private surveyPass(): void {
     const s = this.inner;
     for (const kind of ZONE_KINDS) {
       if (this.surveysLeft <= 0) return;
@@ -1315,6 +1335,26 @@ export class Game {
         count: 1,
       });
     }
+
+    // And last, the contest. A district opens with its pool fully allocated, so
+    // for most of its life the only way housing grows is by taking commercial
+    // land and the other way about — which the absolute gates above cannot ask
+    // for, because neither zone need be in surplus for one to want it more.
+    // After them, so spare land is always spent before anything is taken.
+    if (this.surveysLeft <= 0) return;
+    const swap = willTransfer(s);
+    if (swap === null) return;
+    this.surveysLeft--;
+    this.zone(swap.from, -1);
+    this.zone(swap.to, 1);
+    this.surveyed++;
+    this.emit({
+      kind: 'surveyed',
+      at: s.elapsed,
+      zone: swap.to,
+      plots: capacityOf(s, swap.to),
+      count: 1,
+    });
   }
 
   /** Moves the frontier district's parcel count for one zone. */
