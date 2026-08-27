@@ -195,6 +195,20 @@ export interface GameState {
   cruiseTerminals: number;
   cargoTerminals: number;
   /**
+   * Power plants, one per district's reserved 2x2 square.
+   *
+   * A count and a staffing ramp, in the same shape as a civic building and for
+   * the same reasons — but not a `Service`: it has no coverage, carries no
+   * happiness weight and is not on the 2x2 civic interleave. What it feeds is
+   * `powerCap`, a ratio of supply to draw that caps occupancy, which is the
+   * city's second resource and the first thing in the game that can be short.
+   *
+   * Where a plant stands falls out of its ordinal exactly as everything else
+   * does: one square a district, so the i-th plant is on the i-th district's.
+   */
+  plants: number;
+  plantStaff: number;
+  /**
    * The city hall. One per city, on district 0's reserved 2x2 square.
    *
    * A boolean and nothing else, which is the whole of what it is: it holds no
@@ -340,6 +354,8 @@ export function createState(now = Date.now()): GameState {
     stadiums: 0,
     cruiseTerminals: 0,
     cargoTerminals: 0,
+    plants: 0,
+    plantStaff: 0,
     cityHall: false,
     highway: false,
     estates: 0,

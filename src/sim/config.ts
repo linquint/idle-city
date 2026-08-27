@@ -81,17 +81,17 @@ export const TARGET_PLOTS = 144;
  * exactly:
  *
  *   24 + 45 + 13 for sale
- *    + 9 x 4  2x2 squares   (6 civic, 1 small landmark, 1 city hall, 1 spare)
+ *    + 9 x 4  2x2 squares   (6 civic, 1 small landmark, 1 city hall, 1 power)
  *    + 2 x 9  3x3 squares   (1 university, 1 large landmark)
  *    + 4      courtyard parks
  *    + 4      courtyard spare
  *   = 144
  *
- * so a district carries eight deliberately empty plots — one 2x2 square and four
- * courtyard plots — which is the land the next few features get to use without
- * this budget being re-cut under them again. It carried twelve until the city
- * hall took one of the two spare squares, which is exactly what they were held
- * back for.
+ * so a district now carries four deliberately empty plots, all of them courtyard.
+ * It carried twelve when the span widened: the city hall took one of the two
+ * spare 2x2 squares and the power plant took the other, which is exactly what
+ * they were held back for. There is no 2x2 slack left, and the next feature that
+ * wants a square has to say where it is coming from.
  *
  * Measured over 20,000 street plans under exactly this reservation order, and
  * the tuple is the one the numbers picked rather than one they were fitted to:
@@ -131,10 +131,10 @@ export const FRONTAGE_TARGET = {
   industrial: 13,
   /**
    * 2x2 quads a district claims, all of them reserved before the build lists
-   * are drawn. Six go to civic, one to a small landmark, one to the city hall,
-   * and the rest are spare — reserving the whole claim rather than only the
+   * are drawn. Six go to civic, one to a small landmark, one to the city hall
+   * and one to a power plant — reserving the whole claim rather than only the
    * squares something stands on is what keeps `homeCapacity` independent of
-   * build order.
+   * build order. There is nothing spare in it any more.
    */
   squares: 9,
   /** 2x2 civic sites per district. 6 x 4 = 24 plots, mostly dead interior. */
@@ -159,6 +159,22 @@ export const FRONTAGE_TARGET = {
    * A returning player would watch their city rearrange itself.
    */
   cityHallSites: 1,
+  /**
+   * 2x2 power plant sites per district, sliced after the city hall.
+   *
+   * The last of the nine, and worth stating plainly: this spends the slack.
+   * A district reserved twelve empty plots when the span widened — two 2x2
+   * squares and four courtyard plots — and the note on that said they were the
+   * land the next few features would get to use without the budget being re-cut.
+   * The city hall took one square and this takes the other, so what is left is
+   * four courtyard plots and nothing else. A tenth square would move
+   * FRONTAGE_TARGET.squares, which moves the sampler's acceptance rate, which is
+   * a district-generation change rather than a feature.
+   *
+   * One a district is not a coincidence either — it is the constraint that sets
+   * POWER_EXPONENT. See that constant for the table.
+   */
+  powerSites: 1,
   /** 3x3 university quads per district. Exactly one, reserved before the rest. */
   universitySites: 1,
   /** 3x3 landmark quads per district. Reserved alongside the university. */
@@ -695,19 +711,23 @@ export const ANNEX_GROWTH = 3.4;
  * Left at 0.7 through the change that made annexation automatic, and measured
  * rather than assumed. Demand-neutral build-out, holding every home at one
  * level — a player who never buys into a surcharge. Re-measured through the
- * land-denominated coverage, the fifth level and the wider district:
+ * land-denominated coverage, the fifth level, the wider district and the grid:
  *
- *                    span 13   span 15
- *   detached housing   69.6%     64.2%
- *   apartments         68.6%     67.4%
- *   towers             67.1%     69.3%
- *   arcologies         65.7%     69.7%
- *   megastructures        —      69.1%
+ *                    span 13   span 15   with power
+ *   detached housing   69.6%     64.2%       69.7%
+ *   apartments         68.6%     67.4%       69.7%
+ *   towers             67.1%     69.3%       69.1%
+ *   arcologies         65.7%     69.7%       68.5%
+ *   megastructures        —      69.1%       69.1%
  *
  * Every rung sat under the gate before and every rung still does, so this is the
  * shape rather than a regression: a demand-neutral player does not annex. The
- * top three rungs sit closer to it than they did, which is the wider district's
- * extra commercial land counting on both sides of the ratio.
+ * last column is tighter than the one before it — 68.5% to 69.7% against 64.2%
+ * to 69.7% — and part of that is a correction to the probe rather than to the
+ * game: it now keeps the district lit, and a browned-out one is not
+ * demand-neutral. The power cap drags commercial and industrial occupancy down,
+ * their targets follow, and the old run bought 176 shops for a district of
+ * towers against the 109 it actually wants.
  *
  * Annexation in an actual run got slower, and it is worth stating plainly rather
  * than tuned away: a district is 44% bigger, so filling one to the gate takes
@@ -1217,7 +1237,9 @@ export const HAPPINESS_MIN_BUILD = 0.35;
  *
  * Closed-loop over 24 hours, the wage bill ends at 16.6% of gross under
  * auto-develop, 16.2% under the discount-chaser and 16.8% under the disciplined
- * policy, and no policy spends a second unable to make its wages. What it costs
+ * policy, and no policy spends a second unable to make its wages. Power plants
+ * joined the payroll after that measurement and take the same run to 20.6%,
+ * which is the number to judge a further addition against. What it costs
  * the pacing is small and worth stating: auto-develop's first annex moves 1.63h
  * -> 1.64h and its 24-hour treasury 5.4e10 -> 2.6e10, with the same 28 homes and
  * one shop fewer. See tools/economy.calibrate.mjs for the rest of that diff.
@@ -1345,6 +1367,161 @@ export const UPKEEP_RESERVE_SECONDS = 60;
  * is being paid instead is staffing, and the services panel is where that shows.
  */
 export const UPKEEP_KEEP_SHARE = 0.1;
+
+// ------------------------------------------------------------------- power
+
+/**
+ * What one plot draws, per zone, at the bottom of the level ladder.
+ *
+ * The city's second resource, and the first thing in the game that can be
+ * *short*. Power is not a demand signal like R/C/I — it is a ratio of supply to
+ * draw, derived rather than integrated, because occupancy already lags on a
+ * 120-second constant and a second lag stacked on top of it would make the whole
+ * system sluggish and unreadable. See `powerCap`, which is where the ratio lands.
+ *
+ * Industry draws three times what housing does and commerce half again, which is
+ * the one part of this that is a judgement rather than a measurement: a works is
+ * the heaviest thing on the grid, a shop lit and refrigerated all day is next,
+ * and a house is the unit. What the ratios have to be is *different enough to
+ * matter* — a city that zoned nothing but industry should feel the difference —
+ * and small enough that the mix does not swamp the level ladder, which is the
+ * term that actually decides how much power a city needs.
+ *
+ * A district at level 0 therefore draws 24 x 1 + 45 x 1.5 + 13 x 3 = 130.5,
+ * which is the number POWER_BASE and POWER_PER_PLANT are both set against.
+ *
+ * Per *plot*, and per plot of what is standing rather than of what is occupied.
+ * A boarded-up house draws nothing because it holds no level and so is in no
+ * cohort; an empty one draws its full share, because the grid is sized to the
+ * building and not to the tenant. That is what keeps a shortfall a shortfall:
+ * if draw fell with occupancy the brownout would cure itself and there would be
+ * no decision in it.
+ */
+export const POWER_PER_PLOT = {
+  residential: 1,
+  commercial: 1.5,
+  industrial: 3,
+} as const;
+
+/**
+ * How much faster than the level ladder a plot's draw climbs.
+ *
+ * Above 1 by design — "a megastructure is not four arcologies' worth of anything
+ * else" — and the interesting part is that the *land* sets the ceiling. A
+ * district holds exactly one 2x2 square for a power plant (see
+ * FRONTAGE_TARGET.powerSites), so the exponent is only viable if one plant can
+ * still carry a district built out at the top of the ladder.
+ *
+ * Measured, in plants a district needs at POWER_PER_PLANT, against the 1.00 its
+ * square holds:
+ *
+ *   exponent     L0     L1     L2     L3     L4
+ *   1.00       0.19   0.19   0.19   0.19   0.19
+ *   1.10       0.19   0.21   0.25   0.29   0.33
+ *   1.20       0.19   0.25   0.33   0.44   0.58
+ *   1.25       0.19   0.26   0.38   0.55   0.78
+ *   1.30       0.19   0.28   0.44   0.68   1.03   <- does not fit
+ *   1.40       0.19   0.32   0.59   1.05   1.83   <- does not fit
+ *
+ * So 1.25 is not a taste, it is the last rung that fits: at 1.30 a fully built
+ * megastructure district needs more plant than its land can hold and the city
+ * browns out permanently at the top of a ladder it was allowed to climb. At 1.00
+ * the term does nothing at all — a district needs the same fifth of a plant
+ * whatever is standing on it, so the resource would never once be short.
+ *
+ * What 1.25 buys is a four-fold climb in what a district needs across the
+ * ladder, with 22% headroom left at the end of it. The pressure arrives with
+ * every promotion wave rather than with expansion, which is the right way round:
+ * annexing land brings its own square with it.
+ */
+export const POWER_EXPONENT = 1.25;
+
+/**
+ * What one plant makes, per unit of the standard the city is built to.
+ *
+ * Scaled by `cityScale` rather than flat, and it is the same argument
+ * ESTATE_YIELD's `industryScale` makes: a plant has no level of its own to climb
+ * — no education gate, no merge, no cohort in the save — so it is built to
+ * whatever standard the city around it is built to. A flat figure would make one
+ * plant the whole grid at the bottom of the ladder and a rounding error at the
+ * top, which is the shape every constant in this file that ignores the ladder
+ * ends up with.
+ *
+ * 700 is set against the land: a district holds one square, and a district built
+ * out at megastructures has to fit inside it with room to spare. At 700 it needs
+ * 0.78 of a plant, so a fully built city of forty-nine districts runs at a
+ * supply ratio of about 1.29 with every square used. Raising it would leave the
+ * land gate never binding at all; lowering it puts the top of the ladder out of
+ * reach of the ground it stands on.
+ */
+export const POWER_PER_PLANT = 700;
+
+/**
+ * The grid the city is on before it builds one of its own.
+ *
+ * Exactly the job EXPORT_BASE does for industrial demand, and there for the same
+ * reason: without it a fresh save is short of a resource it has no way to make
+ * yet, occupancy is capped at POWER_FLOOR from the first tick, and the opening
+ * is a brownout nobody caused. The city starts connected to somebody else's
+ * grid and grows out of it.
+ *
+ * Flat, and deliberately not per-district. A baseline that grew with the map
+ * would never be outgrown and the resource would never be short. 400 covers a
+ * district at level 0 (130.5) three times over and one at apartments (739) not
+ * at all — so the first plant is what the first promotion wave asks for, which
+ * is about an hour in. That is the same beat the happiness gate teaches at
+ * eleven homes: something the city can suddenly not do, with the reason on
+ * screen and the fix one purchase away.
+ */
+export const POWER_BASE = 400;
+
+/**
+ * What share of its occupancy a city with no power at all keeps.
+ *
+ * The floor under the cap, and the guard on the death spiral the brief names:
+ * less power means less occupancy means fewer residents means less income means
+ * no plant. Without a floor that loop has a fixed point at zero.
+ *
+ * 0.35 rather than something smaller, and the number is derived rather than
+ * chosen. A blacked-out city that is otherwise perfectly happy sits at
+ * OCCUPANCY_FULL x this — 0.92 x 0.35 = 0.322 — and OCCUPANCY_EMPTY is 0.25, so
+ * it stays *above* the line where the vacancy clock starts. A brownout therefore
+ * costs a city its residents and its income and never its buildings. That is the
+ * distinction the whole feature rests on: the resource caps occupancy rather
+ * than zeroing income, and a city that empties can be refilled where one that
+ * rotted has to be rebuilt.
+ *
+ * An unhappy browned-out city does still rot, and that is left as it is: what is
+ * killing it is the unhappiness, and the power term is not there to insure
+ * against every other failure at once.
+ */
+export const POWER_FLOOR = 0.35;
+
+/**
+ * What a plant costs, and how hard it compounds.
+ *
+ * Steeper than the civic curve rather than gentler, which looks wrong for a
+ * building the city *must* have and is not: a plant is bounded by land at one a
+ * district, so the count can never run away, and the city's income grows
+ * quadratically in the district count while this grows exponentially in it. What
+ * a steep curve buys is that the last plants are a real decision at a point in
+ * the game where 130 for a hospital is not.
+ *
+ * Measured (tools/power.calibrate.mjs): a city left to develop itself is first
+ * short of power at 83.3 minutes, buys its first plant in the same tick, and
+ * never drops below a supply ratio of 0.99 for the rest of a 24-hour run. It
+ * ends on four plants of the five squares it owns, with the next one at 3,980
+ * against a ledger of 2.39e7 a second — so the price never once decides whether
+ * the lights stay on, which for mandatory infrastructure is the property that
+ * matters. On the biggest city the map allows the last plant is 5.01e10 against
+ * a ledger of 9.04e9 a second: five seconds of income, and still the dearest
+ * thing on the panel.
+ *
+ * What the plants cost to *run* is the larger number: they take the civic wage
+ * bill from 16.6% of gross income to 20.6% over the same run.
+ */
+export const POWER_PLANT_BASE = 900;
+export const POWER_PLANT_GROWTH = 1.45;
 
 // -------------------------------------------------------------- city hall
 

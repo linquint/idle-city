@@ -69,6 +69,12 @@ export const PALETTE = {
   // be findable rather than merely different.
   hall: 0xd3cfc4,
   hallRoof: 0x9a8fb8,
+  // A power plant is industrial rather than civic, so it wears the industry's
+  // own concrete and its stack colour — what tells it apart from a works is the
+  // silhouette (two cooling towers on a 2x2 square) and the lit vent between
+  // them, not a colour nothing else has.
+  plant: 0x4c5a71,
+  plantRoof: 0x38455a,
   // The waterfront. A quay is a deck the colour of the kerbs the city already
   // has, because it is the same thing: made ground with something standing on
   // it. Hulls are darker than anything on land so a ship reads against the

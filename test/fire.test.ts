@@ -22,7 +22,7 @@ import {
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { createState, type GameState } from '../src/sim/state';
-import { built, housed } from './levels';
+import { built, housed, powered } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -183,6 +183,10 @@ describe('ignition is reproducible', () => {
       fireStaff: 1,
       parks: 19,
       cash: 0,
+      // Lit. This is a test about ignition being reproducible, and a browned-out
+      // city boards buildings up and reopens them at a lower level — which is a
+      // difference between the two runs that has nothing to do with fire.
+      ...powered(),
     });
     const away = at(patch());
     const watched = at(patch());

@@ -1231,6 +1231,35 @@ function cityHallSet(scene: THREE.Scene, capacity: number): CivicMeshes {
   );
 }
 
+/** How tall a cooling tower stands above the plant's slab. */
+const PLANT_STACK_H = 6.5;
+
+/**
+ * A power plant: a low industrial slab with a lit vent standing off centre.
+ *
+ * Industrial concrete rather than a civic colour, because that is what it is —
+ * the one 2x2 building on the map that is not civic. What tells it apart from a
+ * works is that it is on a 2x2 square at all, and the lit stack: the fire
+ * station's bay doors are the only other civic surface that is a light rather
+ * than a colour, and the two are never on the same site.
+ *
+ * The mark is offset the same way the hospital's tower is and for the same
+ * reason: dead centre reads as a spire, which is the city hall's silhouette and
+ * has to stay the city hall's.
+ */
+function powerPlantSet(scene: THREE.Scene, capacity: number): CivicMeshes {
+  const vent = new Glow(PALETTE.sodium, 0.42);
+  return new CivicMeshes(
+    scene,
+    { body: PALETTE.plant, roof: PALETTE.plantRoof, height: 1.9 },
+    new THREE.BoxGeometry(1.8, PLANT_STACK_H, 1.8),
+    vent.material,
+    new THREE.Vector3(1.5, PLANT_STACK_H / 2, -1.5),
+    capacity,
+    vent,
+  );
+}
+
 /** One mesh set per service, in SERVICES order. */
 function civicSet(scene: THREE.Scene, service: Service, capacity: number): CivicMeshes {
   if (service.key === 'hospital') {
@@ -1376,12 +1405,12 @@ class Outline {
  * same box. Asserted in test/skyline.test.ts, so a later change cannot quietly
  * double the draw calls.
  *
- * Civic buildings, the city hall and landmarks are counted separately and are
- * not part of this: they stand on 2x2 and 3x3 sites, have no level ladder, and
- * are told apart by silhouette rather than by style. Nine types at three meshes
- * each — six services, the city hall and two landmark sizes — and the count
- * grows with the *table* rather than with the city. See `civicSet`,
- * `cityHallSet` and `landmarkSet`.
+ * Civic buildings, the city hall, power plants and landmarks are counted
+ * separately and are not part of this: they stand on 2x2 and 3x3 sites, have no
+ * level ladder, and are told apart by silhouette rather than by style. Ten types
+ * at three meshes each — six services, the city hall, the power plant and two
+ * landmark sizes — and the count grows with the *table* rather than with the
+ * city. See `civicSet`, `cityHallSet`, `powerPlantSet` and `landmarkSet`.
  */
 export const BUILDING_MESH_BUDGET = 24;
 
@@ -1402,7 +1431,7 @@ export class Buildings {
    */
   /**
    * Every building that stands on a reserved square: the six services, the city
-   * hall, and the two landmark sizes.
+   * hall, the power plants and the two landmark sizes.
    *
    * One list rather than two, because from here they are the same thing — a
    * count, a site list to index into, and a mesh set. What tells them apart is
@@ -1465,6 +1494,16 @@ export class Buildings {
         growth: new GrowthSchedule(duration),
         site: (i: number) => this.layout.cityHallSiteCell(i),
         count: (state: Readonly<GameState>) => (state.cityHall ? 1 : 0),
+        shown: 0,
+      },
+      // Power plants, one square a district and the i-th plant on the i-th — the
+      // same shape as a landmark and, like the hall, sliced clear of the civic
+      // interleave so nothing already standing moves.
+      {
+        meshes: powerPlantSet(scene, 8),
+        growth: new GrowthSchedule(duration),
+        site: (i: number) => this.layout.powerPlantCell(i),
+        count: (state: Readonly<GameState>) => state.plants,
         shown: 0,
       },
       // Landmarks stand on squares of their own, one of each size a district, so

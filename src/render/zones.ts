@@ -71,7 +71,8 @@ export class Courtyards {
 
   sync(state: Readonly<GameState>): void {
     const built = SERVICE_KEYS.map((key) => serviceCount(state, key));
-    const stamp = `${state.districts}:${state.parks}:${state.cityHall}:${built.join(',')}`;
+    const stamp =
+      `${state.districts}:${state.parks}:${state.cityHall}:${state.plants}:${built.join(',')}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
     this.layout.ensure(state.districts);
@@ -100,9 +101,13 @@ export class Courtyards {
     // on. Drawn for the same reason an empty civic site is: a reserved square
     // left bare reads as a hole in the block rather than as held ground.
     const halls = Math.max(0, this.layout.cityHallSites - (state.cityHall ? 1 : 0));
+    // Plant squares the city owns and has not built on. Unlike the hall's, these
+    // are all buildable — a district needs about 0.78 of a plant at the top of
+    // the level ladder — so this list empties as the city grows into it.
+    const plants = Math.max(0, this.layout.powerPlantSites - state.plants);
     let empty = 0;
     for (let i = 0; i < this.layout.civicSites; i++) if (!taken(i)) empty++;
-    this.pads.ensure(courtyards.length - laid + (empty + halls) * 4);
+    this.pads.ensure(courtyards.length - laid + (empty + halls + plants) * 4);
 
     const quad = (c: Coord): void => {
       write(c);
@@ -118,6 +123,9 @@ export class Courtyards {
     }
     for (let i = state.cityHall ? 1 : 0; i < this.layout.cityHallSites; i++) {
       quad(this.layout.cityHallSiteCell(i));
+    }
+    for (let i = state.plants; i < this.layout.powerPlantSites; i++) {
+      quad(this.layout.powerPlantCell(i));
     }
 
     this.pads.count = n;

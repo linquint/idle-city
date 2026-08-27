@@ -28,6 +28,7 @@ import {
   canAnnex,
   canBuildCityHall,
   canBuildHome,
+  canBuildPlant,
   canBuildIndustry,
   canBuildPark,
   canBuildService,
@@ -66,8 +67,12 @@ import {
   occupancyStep,
   occupancyTarget,
   parkCost,
+  plantCost,
   canBuildLandmark,
   landmarkCost,
+  powerCap,
+  powerDemand,
+  powerRatio,
   promoteRate,
   recoverRate,
   abandonRate,
@@ -216,6 +221,8 @@ export interface AwayReport {
   industry: number;
   parks: number;
   services: number;
+  /** Power plants opened while away. Reported for the reason services are. */
+  plants: number;
   /** Parcels merged while away, across every zone. */
   merges: number;
   /**
@@ -250,6 +257,7 @@ interface AutoBuilt {
   industry: number;
   parks: number;
   services: number;
+  plants: number;
 }
 
 const TICK = 1 / TICK_RATE;
@@ -338,6 +346,8 @@ export class Game {
   private blocked: string | null = null;
   /** Which services were covering the whole city last tick. Same reasoning. */
   private readonly covering = new Set<string>();
+  /** Whether the grid was covering the load last tick. Same reasoning again. */
+  private lit = true;
 
   constructor(state: GameState = createState()) {
     this.inner = state;
@@ -448,6 +458,17 @@ export class Game {
     else if (reason !== this.blocked && s.cash >= homeCost(s)) {
       this.blocked = reason;
       this.emit({ kind: 'blocked', at: s.elapsed, reason, count: 1 });
+    }
+
+    // The grid, on the same edge-triggered rule the coverages are on: it is a
+    // condition that becomes true and stays true, so the event is the crossing.
+    // Re-armed only by the ratio getting back over 1, so a city sitting short
+    // says so once rather than once a tick.
+    const ratio = powerRatio(s);
+    if (ratio >= 1) this.lit = true;
+    else if (this.lit && powerDemand(s) > 0) {
+      this.lit = false;
+      this.emit({ kind: 'brownout', at: s.elapsed, ratio, cap: powerCap(s), count: 1 });
     }
 
     // A city with no housing reads as fully covered — `coverage` is the share a
@@ -637,6 +658,10 @@ export class Game {
     s.schoolStaff = fill(s.schoolStaff, s.schools);
     s.universityStaff = fill(s.universityStaff, s.universities);
     s.depotStaff = fill(s.depotStaff, s.depots);
+    // Plants ramp like everything else on the payroll, so a plant opened this
+    // instant is not yet carrying the grid — and an unpaid wage bill takes it
+    // back the same way. See `powerSupply`, which reads this.
+    s.plantStaff = fill(s.plantStaff, s.plants);
   }
 
   /**
@@ -1036,6 +1061,25 @@ export class Game {
   }
 
   /**
+   * A power plant, on the 2x2 square its district reserves for one.
+   *
+   * Civic-shaped — a count, a staffing ramp, a cost curve and a wage bill — and
+   * not a `Service`: it has no coverage and carries no happiness weight. What it
+   * buys is the one thing a city can otherwise run out of. See `powerCap`.
+   */
+  buildPlant(): boolean {
+    const s = this.inner;
+    if (!canBuildPlant(s)) return false;
+    s.cash -= plantCost(s);
+    // Re-averaged rather than reset, exactly as a civic building's payroll is:
+    // the plants already running do not send their crews home because a new one
+    // opened, so the grid holds and then climbs to take the new one in.
+    s.plantStaff = staffAfterBuild(s.plantStaff, s.plants);
+    s.plants++;
+    return true;
+  }
+
+  /**
    * The city hall: one 2x2 square in district 0, and the right to have policies.
    *
    * It earns nothing, covers nothing and carries no happiness weight — the four
@@ -1207,6 +1251,7 @@ export class Game {
     this.log.clear();
     this.blocked = null;
     this.covering.clear();
+    this.lit = true;
   }
 
   /**
@@ -1228,7 +1273,7 @@ export class Game {
    */
   private autoDevelop(budget: number): AutoBuilt {
     const s = this.inner;
-    const built: AutoBuilt = { homes: 0, shops: 0, industry: 0, parks: 0, services: 0 };
+    const built: AutoBuilt = { homes: 0, shops: 0, industry: 0, parks: 0, services: 0, plants: 0 };
 
     for (let i = 0; i < budget; i++) {
       const options: Array<{ cost: number; buy: () => void }> = [];
@@ -1287,6 +1332,22 @@ export class Game {
           },
         });
       }
+      // Power is a shortfall like any other and belongs in the same pool, and it
+      // is the one an away city most needs: a brownout caps occupancy, and a
+      // city left developing itself into one would come back emptier than it was
+      // left with nothing on screen to say why. Ahead of the rest by price alone
+      // — the pool is cheapest-first — which is the right order anyway, since a
+      // service covering land nobody is living on buys nothing.
+      if (powerRatio(s) < 1 && canBuildPlant(s)) {
+        shortfalls.push({
+          cost: plantCost(s),
+          buy: () => {
+            s.plantStaff = staffAfterBuild(s.plantStaff, s.plants);
+            s.plants++;
+            built.plants++;
+          },
+        });
+      }
       // Recreation is a happiness term like the other three, so a shortfall in
       // it belongs in the same priority pool. Without this an away city would
       // be capped at 0.82 by the one amenity auto-development could not see,
@@ -1342,6 +1403,7 @@ export class Game {
       industry: this.inner.industry,
       parks: this.inner.parks,
       services: civicBuildings(this.inner),
+      plants: this.inner.plants,
       spend: this.autoSpend,
       wages: this.wagesPaid,
       districts: this.inner.districts,
@@ -1399,6 +1461,7 @@ export class Game {
       industry: s.industry - before.industry,
       parks: s.parks - before.parks,
       services: civicBuildings(s) - before.services,
+      plants: s.plants - before.plants,
       firesStarted: this.firesStarted - before.started,
       firesExtinguished: this.firesExtinguished - before.extinguished,
       firesLost: this.firesLost - before.lost,

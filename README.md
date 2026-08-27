@@ -26,6 +26,7 @@ compiles to about 10 kB gzipped on top of three.
 | `npm run economy:calibrate` | 24h demand/pricing sweep under four policies |
 | `npm run upkeep:calibrate` | What the civic wage bill is worth, swept over rate and growth |
 | `npm run landvalue:calibrate` | What centrality does to rent, swept over spread |
+| `npm run power:calibrate` | What the grid can carry, swept over the demand exponent |
 
 ## How it is put together
 
@@ -67,9 +68,12 @@ prints the distribution the target came from.
 Only the 108 of those 144 plots that front a street could ever be for sale, and
 not all of them are: two 3x3 squares go to the university and a landmark, and
 `civicSites` then claims every 2x2 it can find — six for civic buildings, one
-for a smaller landmark, one for the city hall, and one left deliberately empty.
-That leaves 24 housing, 45 commercial and 13 industrial plots a district, plus
-eight interior courtyard plots of which four carry parks. Because the road-adjacent R/I split is *not*
+for a smaller landmark, one for the city hall and one for a power plant. That
+leaves 24 housing, 45 commercial and 13 industrial plots a district, plus eight
+interior courtyard plots of which four carry parks. There is no 2x2 slack left:
+the district reserved two spare squares when the span widened and this cycle
+spent both, so the next feature that wants one has to say where it is coming
+from. Because the road-adjacent R/I split is *not*
 seed-invariant, `districtPlanAt` rejection-samples the district seed a second
 time until it is. Same trick, one level up.
 
@@ -217,6 +221,46 @@ so the order you build in decides which button is cheap next. A positive signal
 discounts that type's price and a negative one surcharges it, which is what
 stops "press whichever button is cheapest" from being the dominant strategy.
 
+### Power is a ratio, not a fourth signal
+
+The city's second resource, and the first thing in it that can be *short*.
+Every standing plot draws — 1 for housing, 1.5 for commerce, 3 for industry —
+and the draw climbs the level ladder **faster than the ladder does**, at
+`capacity ** POWER_EXPONENT`. Supply is `POWER_BASE`, the grid the city starts
+connected to and grows out of, plus one plant per district's reserved 2x2
+square, each built to the standard of the city around it the way an estate is
+built to the standard of its works.
+
+The exponent is not a taste — it is the last one the land can hold. A district
+reserves exactly one plant square, so the question is whether one plant still
+carries a district built out at the top of the ladder:
+
+| exponent | detached | apartments | towers | arcologies | megastructures |
+| --- | --- | --- | --- | --- | --- |
+| 1.00 | 0.19 | 0.19 | 0.19 | 0.19 | 0.19 |
+| 1.25 | 0.19 | 0.26 | 0.38 | 0.55 | **0.78** |
+| 1.30 | 0.19 | 0.28 | 0.44 | 0.68 | **1.03** — does not fit |
+
+At 1.00 the term does nothing; at 1.30 a fully built megastructure district
+needs more plant than its ground can hold and browns out permanently at the top
+of a ladder it was allowed to climb. 1.25 leaves 22% of headroom.
+
+Supply over draw is **derived, never integrated** — occupancy already lags on a
+120-second constant and demand on 25, and a third lagged signal feeding the
+first would make the whole loop unreadable. What the ratio does is *cap
+occupancy*, proportionally, with a floor: a browned-out city empties gradually
+and visibly rather than flipping to zero income. `POWER_FLOOR` is 0.35 and the
+number is derived rather than chosen — a blacked-out but otherwise happy city
+settles at `OCCUPANCY_FULL × 0.35 = 0.322` against an `OCCUPANCY_EMPTY` of 0.25,
+so a brownout costs a city its residents and never its buildings.
+
+Draw is charged on what is *standing*, not on who is in: if it fell with
+occupancy the brownout would cure itself and there would be no decision in it.
+A ruin draws nothing, because it holds no level. Auto-development buys a plant
+whenever the grid is short, for the reason everything else that compounds while
+away is guarded. Measured, a city left to run itself is first short at 83
+minutes and never drops below a supply ratio of 0.99.
+
 The guardrail is that the modifier is bounded by a *constant*. The discounted
 price floor is still `base × growth ** n × (1 - PRICE_DISCOUNT_MAX)` —
 exponential in n — so no amount of demand can make the next building cheaper
@@ -357,6 +401,14 @@ grows exponentially in it: at 1.08 a full map owes more in wages than it earns.
 `UPKEEP_ARREARS_TAU` (180s) is twice the staffing ramp, for the same reason
 recovery outpaces decay everywhere else in this game, and `UPKEEP_KEEP_SHARE`
 (0.1) is the floor that makes the way back slow rather than shut.
+
+`POWER_EXPONENT` (1.25) came from `npm run power:calibrate`, and it is the one
+constant in this game set by the *land* rather than by the economy — see the
+table above. `POWER_PER_PLANT` (700) is sized so a full map runs at a supply
+ratio of 1.29 with every square built on, and `POWER_BASE` (400) covers a
+district at level 0 three times over and one of apartments not at all, so the
+first plant is what the first promotion wave asks for. Plants are on the wage
+bill and take it from 16.6% of gross income to 20.6%.
 
 ## Saving
 

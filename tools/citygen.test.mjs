@@ -438,6 +438,7 @@ check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TAR
       (plan.sites.length +
         plan.landmarksSmall.length +
         plan.cityHalls.length +
+        plan.powerPlants.length +
         plan.spareSquares.length) *
         4 +
       (plan.universities.length + plan.landmarksLarge.length) * 9 +

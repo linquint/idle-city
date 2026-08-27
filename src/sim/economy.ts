@@ -44,6 +44,7 @@ import {
   LAND_VALUE_SPREAD,
   LANDMARKS,
   LANDMARK_MOOD,
+  LEVEL_CAPACITY,
   LEVEL_EDUCATION,
   LEVEL_FOOTPRINT,
   LEVEL_HOUSING,
@@ -61,6 +62,13 @@ import {
   OCCUPANCY_TAU,
   PARK_BASE,
   PARK_GROWTH,
+  POWER_BASE,
+  POWER_EXPONENT,
+  POWER_FLOOR,
+  POWER_PER_PLANT,
+  POWER_PER_PLOT,
+  POWER_PLANT_BASE,
+  POWER_PLANT_GROWTH,
   PLOTS_PER_PARK,
   PRICE_DISCOUNT_MAX,
   PRICE_SURCHARGE_MAX,
@@ -101,6 +109,7 @@ import {
   BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
+  POWER_SITES_PER_DISTRICT,
   LANDMARK_LARGE_SITES_PER_DISTRICT,
   LANDMARK_SMALL_SITES_PER_DISTRICT,
   coastalDistricts,
@@ -334,7 +343,13 @@ export const occupancyTarget = (s: GameState, kind: ZoneKind): number => {
     OCCUPANCY_FLOOR +
     (OCCUPANCY_FULL - OCCUPANCY_FLOOR) * mood +
     OCCUPANCY_DEMAND * clampDemand(demandOf(s, kind));
-  return Math.max(0, Math.min(1, wanted));
+  // Power is a *cap* rather than a third term, and multiplying rather than
+  // subtracting is what makes it one: a city short of power cannot fill its
+  // buildings however happy it is, and a city with power to spare gains nothing
+  // from the surplus. Applied to all three zones — a shop with no power does not
+  // trade either — and floored by POWER_FLOOR, which is what keeps the loop from
+  // having a fixed point at nothing.
+  return Math.max(0, Math.min(1, wanted)) * powerCap(s);
 };
 
 /** Fraction of the gap occupancy closes over `dt`. Same form as `demandStep`. */
@@ -1507,6 +1522,109 @@ export const income = (s: GameState): number => {
   );
 };
 
+// -------------------------------------------------------------------- power
+
+/**
+ * What one *building* draws at each level, in level-0 plots.
+ *
+ * The footprint times the level's own capacity ratio raised to POWER_EXPONENT.
+ * The footprint is there for the reason SHOP_JOBS carries it — a merged building
+ * stands on two plots and draws for both — and the exponent is what makes power
+ * different from every other per-plot ladder in this file: jobs, trips, supply
+ * and output are all flat per plot at every level, and this one is not.
+ *
+ * Derived from LEVEL_CAPACITY rather than typed, so the two can never drift.
+ */
+export const POWER_LADDER = LEVEL_CAPACITY.map(
+  (capacity, l) =>
+    (LEVEL_FOOTPRINT[l] ?? 1) *
+    (capacity / (LEVEL_CAPACITY[0] ?? 1)) ** POWER_EXPONENT,
+) as readonly number[];
+
+/** What one zone's standing stock draws. Ruins hold no level and so draw nothing. */
+const zoneDraw = (s: GameState, kind: ZoneKind, per: number): number =>
+  cohortAgainst(levelsOf(s, kind), POWER_LADDER) * per;
+
+/**
+ * What the city draws, per second, in level-0 plots.
+ *
+ * Standing stock rather than occupied stock, and that is the load-bearing
+ * choice: an empty house still draws its share because the grid is sized to the
+ * building, and if draw fell with occupancy a brownout would cure itself and
+ * there would be no decision in it. A *ruin* draws nothing, because it holds no
+ * level and so appears in no cohort.
+ *
+ * The estates draw too. They are industrial plots on land the city does not own,
+ * so they are added here rather than folded into the cohort — the same place and
+ * for the same reason `estateJobs` is added to `jobs` — and they are built to the
+ * standard of the city's own works, which is what `industryScale` says.
+ */
+export const powerDemand = (s: GameState): number =>
+  zoneDraw(s, 'home', POWER_PER_PLOT.residential) +
+  zoneDraw(s, 'shop', POWER_PER_PLOT.commercial) +
+  zoneDraw(s, 'industry', POWER_PER_PLOT.industrial) +
+  estatePlots(s) * POWER_PER_PLOT.industrial * industryScale(s) ** POWER_EXPONENT;
+
+/**
+ * What the city can make, per second.
+ *
+ * POWER_BASE is the grid it starts connected to and never loses — see that
+ * constant for why a fresh city must not be short of a resource it has no way to
+ * make yet. Plants are scaled by `cityScale` for the reason the estates are
+ * scaled by `industryScale`: a plant has no level of its own to climb, so it is
+ * built to the standard of the city around it.
+ *
+ * Staffing is a factor, so a plant that opened this instant is not carrying the
+ * grid yet — the same ninety-second ramp every civic building has, and the same
+ * thing an unpaid wage bill takes back.
+ */
+export const powerSupply = (s: GameState): number =>
+  POWER_BASE + s.plants * s.plantStaff * POWER_PER_PLANT * cityScale(s);
+
+/**
+ * Supply over draw. Above 1 the city has power to spare.
+ *
+ * Derived, never integrated, and that is a decision rather than an omission:
+ * occupancy already lags on a 120-second constant and demand on 25, so a third
+ * lagged signal feeding the first would make the whole loop sluggish and
+ * impossible to read. The ratio moves the instant a plant opens; what takes two
+ * minutes to answer is the occupancy it caps.
+ *
+ * One for a city that draws nothing, so an empty map is not short of anything.
+ */
+export const powerRatio = (s: GameState): number => {
+  const draw = powerDemand(s);
+  return draw <= 0 ? 1 : powerSupply(s) / draw;
+};
+
+/**
+ * What a shortfall does to occupancy: a cap, proportional, with a floor.
+ *
+ * The whole shape of the feature. A browned-out city empties gradually and
+ * visibly rather than flipping to zero income, so the failure is legible and
+ * reversible — and POWER_FLOOR is what stops the loop having a fixed point at
+ * nothing. See that constant for why 0.35 and not less: at OCCUPANCY_FULL it
+ * lands at 0.322 against an OCCUPANCY_EMPTY of 0.25, so a blacked-out but happy
+ * city loses its residents and keeps its buildings.
+ */
+export const powerCap = (s: GameState): number =>
+  POWER_FLOOR + (1 - POWER_FLOOR) * Math.max(0, Math.min(1, powerRatio(s)));
+
+/** Plant sites the city owns: one a district, and every one buildable. */
+export const plantCapacity = (s: GameState): number =>
+  s.districts * POWER_SITES_PER_DISTRICT;
+
+export const plantCost = (s: GameState): number =>
+  POWER_PLANT_BASE * POWER_PLANT_GROWTH ** s.plants;
+
+export const canBuildPlant = (s: GameState): boolean =>
+  s.plants < plantCapacity(s) && s.cash >= plantCost(s);
+
+/** Why the plant button is off. Land is the only gate a plant has. */
+export function plantBlocker(s: GameState): string | null {
+  return s.plants >= plantCapacity(s) ? 'No sites left' : null;
+}
+
 // ---------------------------------------------------------------- city hall
 
 /**
@@ -1638,6 +1756,14 @@ export const civicPayroll = (s: GameState, growth = UPKEEP_GROWTH): number => {
   // grows with the city, so it is a real line early and a rounding error late,
   // which is the right way round for the building that unlocks the away switch.
   if (s.cityHall) payroll += CITY_HALL_BASE;
+  // Plants are on the payroll and *do* have a staffing scalar, unlike the hall,
+  // so an unpaid wage bill browns the city out — which is the one place two of
+  // these features touch. The guard is that the loop is bounded at both ends:
+  // POWER_FLOOR holds occupancy at a third whatever the grid is doing, and
+  // UPKEEP_KEEP_SHARE keeps the treasury growing whatever the arrears are. See
+  // test/power.test.ts, where the pair is run together and has to climb out.
+  payroll +=
+    POWER_PLANT_BASE * compounded(growth, s.plants) * s.plantStaff;
   return payroll;
 };
 

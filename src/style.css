@@ -577,6 +577,20 @@ button.civic.transit:hover:not(:disabled) { border-color: #5fbfa4; }
 button.civic.transit .cost { color: #5fbfa4; }
 button.civic.transit:disabled { border-color: #1c2739; }
 
+/* Power is neither a gate nor an earner — it is the one thing the city can run
+   out of — so it wears the sodium the lights and the fire-station doors already
+   use. Nothing else on this row is warm. */
+button.civic.power { border-color: rgba(240, 166, 75, 0.4); }
+button.civic.power:hover:not(:disabled) { border-color: var(--sodium); }
+button.civic.power .cost { color: var(--sodium); }
+button.civic.power:disabled { border-color: #1c2739; }
+
+/* A service row goes green at full coverage; the power row goes *red* when the
+   grid is short, because the two say opposite things. Coverage is something to
+   finish and power is something to not run out of. */
+.svc.short .built,
+.svc.short .covers { color: #e0574b; }
+
 button.civic:disabled { border-color: #1c2739; }
 button.civic:disabled .cost,
 button.civic:disabled .built { color: var(--off); }

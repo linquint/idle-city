@@ -18,6 +18,7 @@ import {
   mergeCapacity,
   mergedCohort,
   parkCapacity,
+  plantCapacity,
   landmarkSiteCapacity,
   estateCapacity,
   serviceAllowed,
@@ -344,6 +345,12 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
      * version or later has to have bought one.
      */
     cityHall: version >= 9 ? r['cityHall'] === true : true,
+    // Power arrived with v9, so an older save has none — which is the state a
+    // city that has never built one is in, and the grid connection POWER_BASE
+    // gives every city is what keeps that from reading as a blackout on load.
+    // Clamped to the land below, like every other count.
+    plants: count(r['plants']),
+    plantStaff: share(r['plantStaff'], 0),
     highway: r['highway'] === true,
     estates: count(r['estates']),
     // v2 called them clinics, schools and stations and stood them on single
@@ -425,6 +432,9 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // is a fixed strip with the water already taken out of it, so this clamp can
   // bite on a save the current build's seed left less room for.
   state.estates = Math.min(state.estates, estateCapacity(state));
+  // One square a district, so a save carried over from a larger city sheds the
+  // plants whose ground it no longer owns.
+  state.plants = Math.min(state.plants, plantCapacity(state));
 
   const fitted = [
     fitZone(state.homes, state.abandonedR, r['homeLevels'], tier, state.mergedR, homeCapacity(state), mergeCapacity(state, 'home')),

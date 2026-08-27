@@ -405,8 +405,9 @@ describe('abandonment', () => {
   it('never writes off the last building of a zone', () => {
     const game = at({ ...housed(6), ...trading(15), happiness: 0, occupancyR: 0, occupancyC: 0, cash: 0 });
     // Long enough to have written off many times over: ABANDON_SPREAD_SECONDS
-    // is 1,200 and this is twenty-four hours of it.
-    for (let i = 0; i < 24; i++) run(game, 3_600);
+    // is 1,200, and a stock of six drains to its last building in about 1,900
+    // seconds of it. Six hours is three times over.
+    for (let i = 0; i < 6; i++) run(game, 3_600);
     expect(game.state.abandonedR).toBe(game.state.homes - 1);
     expect(game.state.abandonedC).toBe(game.state.shops - 1);
     expect(cohortTotal(game.state.homeLevels)).toBe(1);
@@ -415,7 +416,7 @@ describe('abandonment', () => {
 
   it('leaves a written-off city something to climb out on', () => {
     const game = at({ ...housed(6), ...trading(15), happiness: 0, occupancyR: 0, occupancyC: 0, cash: 0 });
-    for (let i = 0; i < 24; i++) run(game, 3_600);
+    for (let i = 0; i < 6; i++) run(game, 3_600);
     // The whole point of the last building: a ledger that is not zero. At the
     // occupancy floor one home is a third of a resident, which is a hospital in
     // about an hour and a half — slow enough to read as a consequence, and not

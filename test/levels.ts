@@ -1,4 +1,4 @@
-import { LEVEL_FOOTPRINT, LEVELS, MERGE_LEVEL } from '../src/sim/config';
+import { LEVEL_FOOTPRINT, LEVELS, MAX_DISTRICTS, MERGE_LEVEL } from '../src/sim/config';
 import { cohortOf, type GameState, type LevelCohort } from '../src/sim/state';
 
 /**
@@ -102,9 +102,16 @@ export const built = (
 });
 
 /**
- * Everything a city can be covered by: happiness near 1 *and* education past
- * every rung of LEVEL_EDUCATION, so promotion is gated only on what a test is
- * actually about.
+ * Everything a city can be covered by: happiness near 1, education past every
+ * rung of LEVEL_EDUCATION, *and* the grid — so promotion, occupancy and income
+ * are gated only on what a test is actually about.
+ *
+ * Power joined this list rather than getting a helper of its own, because it is
+ * the same kind of thing: something a city has to have and no test about the tax
+ * rate or the education gate wants to be short of. A browned-out city caps its
+ * occupancy at POWER_FLOOR, which holds it under LEVEL_UP_OCCUPANCY forever —
+ * so without this every test that expects a city to climb would be measuring
+ * the power cap instead.
  *
  * Deliberately far more of each than any land could hold — `migrate` is what
  * clamps a save, and a state built by hand for a test is not one.
@@ -121,4 +128,24 @@ export const served = (): Partial<GameState> => ({
   schoolStaff: 1,
   universityStaff: 1,
   parks: 200,
+  ...powered(),
+});
+
+/**
+ * Enough grid for anything: every plant the map could ever hold, fully staffed.
+ *
+ * Its own helper as well as part of `served`, because plenty of tests want a
+ * city that is *not* covered and is still lit — a test about the housing gate
+ * has no business also being a test about the power cap.
+ *
+ * MAX_DISTRICTS rather than the absurd over-provision every other field here
+ * uses, and the difference is upkeep: plants are on the payroll, so two hundred
+ * of them is a wage bill no test city could pay, and the arrears would decay
+ * the very staffing this helper exists to guarantee. One a district is what the
+ * land allows and what a fully built city of megastructures needs — see
+ * POWER_EXPONENT — so it is both realistic and sufficient.
+ */
+export const powered = (): Partial<GameState> => ({
+  plants: MAX_DISTRICTS,
+  plantStaff: 1,
 });

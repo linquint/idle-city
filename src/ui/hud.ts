@@ -41,6 +41,7 @@ import {
   canBuildHighway,
   canBuildShop,
   canBuildCityHall,
+  canBuildPlant,
   canBuildTerminal,
   cityHallBlocker,
   cityHallCost,
@@ -74,7 +75,13 @@ import {
   faresWaived,
   parkBlocker,
   parkCapacity,
+  plantBlocker,
+  plantCapacity,
+  plantCost,
   policyBlocker,
+  powerCap,
+  powerDemand,
+  powerRatio,
   levelAt,
   mergedOf,
   parkCost,
@@ -285,6 +292,15 @@ export class Hud {
     freeTransport: el<HTMLButtonElement>('free-transport'),
     freeFares: el('free-fares'),
     freeEffect: el('free-effect'),
+    plant: el<HTMLButtonElement>('build-plant'),
+    plantCost: el('build-plant-cost'),
+    plantAllowance: el('build-plant-built'),
+    power: el('power'),
+    powerBuilt: el('power-built'),
+    powerRatio: el('power-ratio'),
+    powerRow: el('power-built').parentElement as HTMLElement,
+    powerDraw: el('power-draw'),
+    powerEffect: el('power-effect'),
     transit: el('transit'),
     transitFares: el('transit-fares'),
     transitLabour: el('transit-labour'),
@@ -424,6 +440,7 @@ export class Hud {
     n.shop.addEventListener('click', () => this.act(() => this.game.buildShop()));
     n.industry.addEventListener('click', () => this.act(() => this.game.buildIndustry()));
     n.park.addEventListener('click', () => this.act(() => this.game.buildPark()));
+    n.plant.addEventListener('click', () => this.act(() => this.game.buildPlant()));
     for (const row of this.landmarkNodes) {
       row.button.addEventListener('click', () =>
         this.act(() => this.game.buildLandmark(row.landmark)),
@@ -676,6 +693,11 @@ export class Hud {
         return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} reopened`, tone: 'good' };
       case 'annexed':
         return { text: `District ${many(event.districts)} annexed`, tone: 'good' };
+      case 'brownout':
+        return {
+          text: `Power short — occupancy capped at ${pct(event.cap)}`,
+          tone: 'bad',
+        };
       case 'coverage': {
         const service = SERVICES.find((entry) => entry.key === event.service);
         return {
@@ -799,6 +821,27 @@ export class Hud {
       `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of housing land`,
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
+
+    // Power gets a block of its own because it is the one thing the city can run
+    // *out* of. Three numbers, and the third is the one that matters: what a
+    // shortfall is currently costing, in the units the player watches — a cap on
+    // how full the city can get. A ratio on its own would be a number with no
+    // consequence attached to it.
+    const ratio = powerRatio(s);
+    const cap = powerCap(s);
+    n.powerBuilt.textContent = `${fmtInt(s.plants)}/${fmtInt(plantCapacity(s))}`;
+    n.powerRatio.textContent =
+      s.plants <= 0 && ratio >= 1 ? 'on the grid alone' : `${pct(Math.min(9.99, ratio))} supplied`;
+    n.powerRow.classList.toggle('short', ratio < 1);
+    n.powerDraw.textContent = fmtInt(powerDemand(s));
+    n.powerEffect.textContent =
+      ratio >= 1 ? 'no effect on occupancy' : `occupancy capped at ${pct(cap)}`;
+    n.power.setAttribute(
+      'aria-label',
+      `Power: ${s.plants} plants supplying ${Math.round(Math.min(9.99, ratio) * 100)} percent of ` +
+        `a load of ${Math.round(powerDemand(s))}` +
+        (ratio < 1 ? `, occupancy capped at ${Math.round(cap * 100)} percent` : ''),
+    );
 
     // Transport gets a block of its own for the same reason education does: it
     // answers a different question from happiness. What it says is what the
@@ -1053,6 +1096,10 @@ export class Hud {
     n.parkAllowance.textContent = `${fmtInt(s.parks)}/${fmtInt(parkCapacity(s))}`;
     n.park.disabled = !canBuildPark(s);
     n.park.title = parkBlocker(s) ?? 'Lay out a park';
+    n.plantCost.textContent = fmt(plantCost(s));
+    n.plantAllowance.textContent = `${fmtInt(s.plants)}/${fmtInt(plantCapacity(s))}`;
+    n.plant.disabled = !canBuildPlant(s);
+    n.plant.title = plantBlocker(s) ?? 'Break ground on a power plant';
 
     // The bar shows what the annexation gate actually reads, which is the
     // *working* share: a plot with a ruin on it is developed but not active,
@@ -1207,6 +1254,7 @@ export class Hud {
     if (report.merges > 0) rows.push(['Buildings merged', fmtInt(report.merges)]);
     if (report.parks > 0) rows.push(['Parks laid out', fmtInt(report.parks)]);
     if (report.services > 0) rows.push(['Services opened', fmtInt(report.services)]);
+    if (report.plants > 0) rows.push(['Power plants opened', fmtInt(report.plants)]);
     if (report.districts > 0) rows.push(['Districts annexed', fmtInt(report.districts)]);
     if (report.spent > 1) rows.push(['Reinvested', fmt(report.spent)]);
     // Alongside the reinvestment rather than folded into the collection, because

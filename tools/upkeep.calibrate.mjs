@@ -34,7 +34,10 @@ import {
 import {
   canAnnex,
   canBuildCityHall,
+  canBuildPlant,
   cityHallCost,
+  plantCost,
+  powerRatio,
   canBuildHome,
   canBuildIndustry,
   canBuildPark,
@@ -284,6 +287,7 @@ const bootstrap = (game) => {
   const s = game.state;
   for (let guard = 0; guard < 16; guard++) {
     let bought = false;
+    if (powerRatio(s) < 1 && canBuildPlant(s)) bought = game.buildPlant();
     for (const service of SERVICES) {
       if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
         bought = game.buildService(service);
@@ -307,6 +311,13 @@ const disciplined = (game) => {
     // the sweep measures is a player choosing it against a hospital rather than
     // one handed it for free.
     if (canBuildCityHall(s)) options.push([cityHallCost(), () => game.buildCityHall()]);
+    // And a plant whenever the grid is short. A policy that ignored power would
+    // measure the brownout rather than the thing it was written to measure:
+    // without this, a disciplined city stalls at 626 residents and never leaves
+    // towers, because the cap holds occupancy under LEVEL_UP_OCCUPANCY forever.
+    if (powerRatio(s) < 1 && canBuildPlant(s)) {
+      options.push([plantCost(s), () => game.buildPlant()]);
+    }
     for (const service of SERVICES) {
       if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
         options.push([serviceCost(s, service), () => game.buildService(service)]);
@@ -344,6 +355,7 @@ const greedy = (game) => {
       options.push([0, () => game.buildPark()]);
     }
     if (canBuildCityHall(s)) options.push([0, () => game.buildCityHall()]);
+    if (powerRatio(s) < 1 && canBuildPlant(s)) options.push([0, () => game.buildPlant()]);
     if (canAnnex(s)) options.push([-1, () => game.annex()]);
     if (options.length === 0) return;
     options.sort((a, b) => a[0] - b[0]);

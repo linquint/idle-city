@@ -221,6 +221,7 @@ describe('plot book', () => {
     for (let i = 0; i < layout.landmarkSmallSites; i++) square(layout.landmarkSmallSiteCell(i), 2);
     // The city hall's square, reserved in every district and built on in one.
     for (let i = 0; i < layout.cityHallSites; i++) square(layout.cityHallSiteCell(i), 2);
+    for (let i = 0; i < layout.powerPlantSites; i++) square(layout.powerPlantCell(i), 2);
     for (const c of layout.spareSquares) square(c, 2);
     for (const cell of layout.courtyards) seen.add(key(cell));
     expect(seen.size).toBe(PLOTS_PER_DISTRICT * 9);
@@ -250,7 +251,8 @@ describe('plot book', () => {
     const usedSquares =
       FRONTAGE_TARGET.civicSites +
       FRONTAGE_TARGET.landmarkSmallSites +
-      FRONTAGE_TARGET.cityHallSites;
+      FRONTAGE_TARGET.cityHallSites +
+      FRONTAGE_TARGET.powerSites;
     expect(usedSquares).toBeLessThanOrEqual(FRONTAGE_TARGET.squares);
     expect(SPARE_PLOTS_PER_DISTRICT).toBe(
       (FRONTAGE_TARGET.squares - usedSquares) * 4 + courtyard - BUILDABLE_PARKS_PER_DISTRICT,
@@ -269,6 +271,7 @@ describe('plot book', () => {
       expect(plan.landmarksLarge).toHaveLength(FRONTAGE_TARGET.landmarkLargeSites);
       expect(plan.landmarksSmall).toHaveLength(FRONTAGE_TARGET.landmarkSmallSites);
       expect(plan.cityHalls).toHaveLength(FRONTAGE_TARGET.cityHallSites);
+      expect(plan.powerPlants).toHaveLength(FRONTAGE_TARGET.powerSites);
       // Nothing overlaps: a plot reserved for one square is not for sale and is
       // not in another square.
       const seen = new Set<number>();
@@ -287,6 +290,7 @@ describe('plot book', () => {
         ...plan.landmarksSmall,
         ...plan.sites,
         ...plan.cityHalls,
+        ...plan.powerPlants,
         ...plan.spareSquares,
       ]) {
         take(site.cells);

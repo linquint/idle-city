@@ -71,6 +71,22 @@ export type GameEvent =
    * stopped being true. `service` is a `ServiceKey`; the HUD looks up the name,
    * for the same reason the zone is a key rather than a label.
    */
+  /**
+   * The grid stopped covering the load.
+   *
+   * Edge-triggered like `coverage` and for the same reason — it is a condition
+   * that becomes true and stays true — and it is the one event in this list a
+   * player cannot work out from anywhere else on screen without opening a tab.
+   * `cap` is what the shortfall is costing, in the units they watch: how full
+   * the city is allowed to get.
+   */
+  | {
+      readonly kind: 'brownout';
+      readonly at: number;
+      readonly ratio: number;
+      readonly cap: number;
+      readonly count: number;
+    }
   | {
       readonly kind: 'coverage';
       readonly at: number;
@@ -151,6 +167,10 @@ function sameSubject(a: GameEvent, b: GameEvent): boolean {
       return a.reason === (b as typeof a).reason;
     case 'coverage':
       return a.service === (b as typeof a).service;
+    case 'brownout':
+      // One shortfall is one shortfall however deep it gets. The line is
+      // re-armed by the grid catching up, not by a second push.
+      return true;
     case 'annexed':
       // Never. Each district is its own milestone, and "2 districts annexed"
       // would be the one line a player most wants two of.

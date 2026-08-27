@@ -245,6 +245,15 @@ export interface DistrictPlan {
    */
   readonly cityHalls: readonly CivicSite[];
   /**
+   * 2x2 power plant sites, sliced after the city hall — the last of the nine.
+   *
+   * One a district and every one of them buildable, unlike the hall's: a city
+   * needs about 0.78 plants a district at the top of the level ladder, so this
+   * list is the one reservation the game expects to fill. See POWER_EXPONENT,
+   * which is bounded above by exactly this.
+   */
+  readonly powerPlants: readonly CivicSite[];
+  /**
    * 2x2 squares the district claimed and reserved but nothing stands on.
    *
    * Deliberately empty land, and the reason it is *reserved* rather than left
@@ -303,7 +312,9 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
   );
   const afterCivic = FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites;
   const cityHalls = squares.slice(afterCivic, afterCivic + FRONTAGE_TARGET.cityHallSites);
-  const spareSquares = squares.slice(afterCivic + FRONTAGE_TARGET.cityHallSites);
+  const afterHall = afterCivic + FRONTAGE_TARGET.cityHallSites;
+  const powerPlants = squares.slice(afterHall, afterHall + FRONTAGE_TARGET.powerSites);
+  const spareSquares = squares.slice(afterHall + FRONTAGE_TARGET.powerSites);
 
   const keep = (cells: readonly number[]): number[] => cells.filter((c) => !reserved.has(c));
   // Paired after the sites are reserved, never before: a plot a hospital is
@@ -325,6 +336,7 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
     landmarksSmall,
     sites,
     cityHalls,
+    powerPlants,
     spareSquares,
     residential: residential.cells,
     commercial: commercial.cells,
@@ -352,11 +364,13 @@ function onTarget(plan: DistrictPlan): boolean {
     plan.sites.length === FRONTAGE_TARGET.civicSites &&
     plan.landmarksSmall.length === FRONTAGE_TARGET.landmarkSmallSites &&
     plan.cityHalls.length === FRONTAGE_TARGET.cityHallSites &&
+    plan.powerPlants.length === FRONTAGE_TARGET.powerSites &&
     plan.spareSquares.length ===
       FRONTAGE_TARGET.squares -
         FRONTAGE_TARGET.civicSites -
         FRONTAGE_TARGET.landmarkSmallSites -
-        FRONTAGE_TARGET.cityHallSites &&
+        FRONTAGE_TARGET.cityHallSites -
+        FRONTAGE_TARGET.powerSites &&
     plan.universities.length === FRONTAGE_TARGET.universitySites &&
     plan.landmarksLarge.length === FRONTAGE_TARGET.landmarkLargeSites
   );
@@ -493,7 +507,8 @@ export const SPARE_PLOTS_PER_DISTRICT =
   (FRONTAGE_TARGET.squares -
     FRONTAGE_TARGET.civicSites -
     FRONTAGE_TARGET.landmarkSmallSites -
-    FRONTAGE_TARGET.cityHallSites) *
+    FRONTAGE_TARGET.cityHallSites -
+    FRONTAGE_TARGET.powerSites) *
     4;
 
 export const BUILDABLE_RESIDENTIAL_PER_DISTRICT = FRONTAGE_TARGET.residential;
@@ -504,6 +519,7 @@ export const UNIVERSITY_SITES_PER_DISTRICT = FRONTAGE_TARGET.universitySites;
 export const LANDMARK_LARGE_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkLargeSites;
 export const LANDMARK_SMALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkSmallSites;
 export const CITY_HALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.cityHallSites;
+export const POWER_SITES_PER_DISTRICT = FRONTAGE_TARGET.powerSites;
 
 /**
  * The order in which a ring of districts gets annexed.
@@ -1102,6 +1118,8 @@ interface DistrictPlots {
   readonly landmarksSmall: Coord[];
   /** Lower-left plot of each 2x2 city hall site, in site order. */
   readonly cityHalls: Coord[];
+  /** Lower-left plot of each 2x2 power plant site, in site order. */
+  readonly powerPlants: Coord[];
   /** Lower-left plot of each 2x2 square nothing stands on. */
   readonly spareSquares: Coord[];
   readonly courtyards: Coord[];
@@ -1143,6 +1161,7 @@ function placeDistrict(index: number): DistrictPlots {
     landmarksLarge: plan.landmarksLarge.map((site) => toGlobal(site.cell)),
     landmarksSmall: plan.landmarksSmall.map((site) => toGlobal(site.cell)),
     cityHalls: plan.cityHalls.map((site) => toGlobal(site.cell)),
+    powerPlants: plan.powerPlants.map((site) => toGlobal(site.cell)),
     spareSquares: plan.spareSquares.map((site) => toGlobal(site.cell)),
     courtyards: plan.courtyards.map(toGlobal),
     roads,
@@ -1215,6 +1234,8 @@ export class CityLayout {
    * rest are reserved land the renderer draws as empty.
    */
   private readonly _cityHalls: Coord[] = [];
+  /** Power plant sites, one per district and the i-th plant on the i-th. */
+  private readonly _powerPlants: Coord[] = [];
   /** Lower-left plot of every 2x2 square held back with nothing on it. */
   private readonly _spareSquares: Coord[] = [];
   /**
@@ -1247,6 +1268,7 @@ export class CityLayout {
         landmarksLarge,
         landmarksSmall,
         cityHalls,
+        powerPlants,
         spareSquares,
         courtyards,
         roads,
@@ -1259,6 +1281,7 @@ export class CityLayout {
       this._landmarksLarge.push(...landmarksLarge);
       this._landmarksSmall.push(...landmarksSmall);
       this._cityHalls.push(...cityHalls);
+      this._powerPlants.push(...powerPlants);
       this._spareSquares.push(...spareSquares);
       this._parks.push(...courtyards.slice(0, BUILDABLE_PARKS_PER_DISTRICT));
       this._spare.push(...courtyards.slice(BUILDABLE_PARKS_PER_DISTRICT));
@@ -1462,6 +1485,18 @@ export class CityLayout {
 
   get cityHallSites(): number {
     return this._cityHalls.length;
+  }
+
+  /**
+   * Lower-left plot of the i-th power plant site. One a district, and the i-th
+   * plant stands on the i-th — no interleave, exactly like a landmark.
+   */
+  powerPlantCell(i: number): Coord {
+    return this._powerPlants[i] as Coord;
+  }
+
+  get powerPlantSites(): number {
+    return this._powerPlants.length;
   }
 
   /** Every plot of one zone, in build order. Used by the zone overlay. */
