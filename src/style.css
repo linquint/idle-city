@@ -322,6 +322,10 @@ button.tab[aria-selected='true'] {
 .cap + .services,
 .cap + .rci,
 .cap + .steps { margin-bottom: 14px; }
+/* A bare readout row followed by the next caption. `.services` carries the gap
+   for the rows inside it; a `.svc` standing on its own — the Taxes tab has two —
+   has none, so the caption underneath it sat on its baseline. */
+.svc + .cap { margin-top: 12px; }
 .services:last-child { margin-bottom: 0; }
 
 /* The one line on a panel that says why the rest of it is dead. Same idiom as
@@ -546,16 +550,23 @@ button.civic {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 8px 9px;
+  /* 7px rather than 9: both civic rows carry four buttons now, and the widest
+     of them says "University" against a 266px panel. Measured, 9px overflows
+     the row by 4px and 7px leaves 12px in hand. */
+  padding: 8px 7px;
   font-size: 11px;
   border-color: rgba(127, 168, 255, 0.3);
+  /* Shrink before the row does. A button that has to give up a pixel is a
+     better failure than a row that scrolls sideways under a panel with no
+     scrollbar on it. */
+  min-width: 0;
 }
 button.civic:hover:not(:disabled) { background: rgba(127, 168, 255, 0.1); border-color: var(--civic); }
 button.civic .cost { color: var(--civic); font-size: 10px; }
 /* Parks share the civic row because they buy the same thing — a happiness term
    — but they are not a service, so they get the signal green rather than the
-   civic blue. Four buttons in the row, so the padding comes down a little. */
-button.civic.park { border-color: rgba(99, 198, 168, 0.3); padding-inline: 7px; }
+   civic blue. */
+button.civic.park { border-color: rgba(99, 198, 168, 0.3); }
 button.civic.park:hover:not(:disabled) { background: rgba(99, 198, 168, 0.1); border-color: var(--signal); }
 button.civic.park .cost { color: var(--signal); }
 /* built / allowed, so the population gate is visible before it bites. */

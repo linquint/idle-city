@@ -6,7 +6,7 @@ import {
   EventLog,
   type GameEvent,
 } from '../src/core/events';
-import { HAPPINESS_MIN_BUILD, MAX_ACTIVE_FIRES, SERVICES } from '../src/sim/config';
+import { HAPPINESS_MIN_BUILD, MAX_ACTIVE_FIRES, MERGE_LEVEL, SERVICES } from '../src/sim/config';
 import { coverage, homeCost } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { createState, type GameState } from '../src/sim/state';
@@ -171,6 +171,21 @@ describe('what the city emits', () => {
     expect(game.state.fires.length).toBeLessThanOrEqual(MAX_ACTIVE_FIRES);
   });
 
+  it('reports a merge as the rung it is, not as a category of its own', () => {
+    // Climbing to MERGE_LEVEL takes two buildings off one parcel and puts one
+    // back, so it is a promotion — and the ticker counts what results.
+    const game = at({ ...built(24, 45, 13, MERGE_LEVEL - 1), ...served(), happiness: 1, cash: 0 });
+    const before = game.state.mergedR;
+    const seen = collect(game, 1_800);
+    expect(game.state.mergedR).toBeGreaterThan(before);
+    const merges = seen.filter(
+      (event) => event.kind === 'level-up' && event.level === MERGE_LEVEL,
+    );
+    expect(merges.length).toBeGreaterThan(0);
+    // And nothing else: the category it used to have is gone, not shadowed.
+    expect(seen.map((event) => event.kind)).not.toContain('merged');
+  });
+
   it('reports a promotion wave once per zone and rung', () => {
     const game = at({ ...built(24, 45, 13), ...served(), happiness: 1, cash: 0 });
     const waves = display(collect(game, 900)).entries.filter(
@@ -300,15 +315,45 @@ describe('catch-up', () => {
     expect(collect(game, 600).length).toBeGreaterThan(0);
   });
 
-  it('absorbs the transitions it crossed rather than announcing them later', () => {
-    // The edge-triggered events keep their state through a silent catch-up, so
-    // a gate that closed while the player was away does not fire the instant
-    // they come back and read as something that just happened.
-    const game = at({ ...housed(4), cash: 1e6, happiness: 0 });
+  it('reports the state you came back to, not the history you missed', () => {
+    // The rule the edge-triggered events follow across an absence. Absorbing
+    // them outright was the first implementation and is wrong in the one case
+    // that matters: a *one-second* catch-up — which is what a reload costs —
+    // swallowed a brownout permanently, and the city sat capped at 37%
+    // occupancy with an empty ticker.
+    //
+    // Still wrong when you look: announced, once.
+    const stuck = at({ ...housed(4), cash: 1e6, happiness: 0 });
+    stuck.catchUp(6 * 3_600);
+    expect(stuck.drainEvents()).toHaveLength(0);
+    const said = collect(stuck, 60).filter((event) => event.kind === 'blocked');
+    expect(said).toHaveLength(1);
+    // And once, not once a tick — the watcher is armed again, not disabled.
+    expect(collect(stuck, 600).filter((event) => event.kind === 'blocked')).toHaveLength(0);
+  });
+
+  it('says nothing about what went wrong and righted itself while away', () => {
+    // The other half of the same rule, and what keeps it from being a flood: a
+    // gate that closed and reopened during the absence is the away sheet's job.
+    const game = at({ ...built(24, 45, 13), ...served(), cash: 1e6, happiness: 1 });
     game.catchUp(6 * 3_600);
     game.drainEvents();
-    const seen = collect(game, 600).filter((event) => event.kind === 'blocked');
+    const seen = collect(game, 60).filter(
+      (event) => event.kind === 'blocked' || event.kind === 'brownout',
+    );
     expect(seen).toHaveLength(0);
+  });
+
+  it('announces a grid that is still short when the player gets back', () => {
+    // The case this rule was found on. A second of catch-up is enough to cross
+    // the edge, and the shortfall then persists with nothing on the default tab
+    // to say so.
+    const game = at({ ...built(24, 45, 13, 2), districts: 4, plants: 0, plantStaff: 0, happiness: 1 });
+    game.catchUp(1);
+    expect(game.drainEvents()).toHaveLength(0);
+    const said = collect(game, 30).filter((event) => event.kind === 'brownout');
+    expect(said).toHaveLength(1);
+    expect(said[0]?.kind === 'brownout' && said[0].cap).toBeLessThan(1);
   });
 
   it('is silent again after a reset', () => {

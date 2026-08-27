@@ -19,6 +19,7 @@ import {
   ZONE_LEVEL_NAMES,
   LEVELS,
   MAX_DISTRICTS,
+  MERGE_LEVEL,
   SERVICES,
   TAX_NEUTRAL,
   AIRPORT_EXPORT_LIFT,
@@ -688,16 +689,17 @@ export class Hud {
         return { text: `Housing stalled — ${event.reason.toLowerCase()}`, tone: 'warn' };
       case 'level-up': {
         const names = ZONE_LEVEL_NAMES[event.zone];
-        return {
-          text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} became ${names[event.level] ?? `level ${event.level + 1}`}`,
-          tone: 'good',
-        };
+        const to = names[event.level] ?? `level ${event.level + 1}`;
+        // The merge rung counts what results rather than what was consumed —
+        // two buildings go onto one parcel and one comes back — so it says
+        // "pairs" and every other rung does not. The alternative was a count
+        // that meant a different thing at one rung than at the others.
+        const from =
+          event.level === MERGE_LEVEL
+            ? `pairs of ${ZONE_PLURAL[event.zone]}`
+            : ZONE_PLURAL[event.zone];
+        return { text: `${many(event.count)} ${from} became ${to}`, tone: 'good' };
       }
-      case 'merged':
-        return {
-          text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} merged into their neighbours`,
-          tone: '',
-        };
       case 'abandoned':
         return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} boarded up`, tone: 'bad' };
       case 'recovered':

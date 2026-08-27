@@ -435,6 +435,30 @@ export class Game {
   }
 
   /**
+   * Re-arms the edge-triggered watchers after a silent catch-up.
+   *
+   * Without this a condition that went true while the player was away is
+   * absorbed and never announced, because the edge it fires on has already been
+   * crossed. Measured on a *one-second* absence, which is what a reload costs: a
+   * city whose grid had gone short came back capped at 37% occupancy with an
+   * empty ticker and nothing on the default tab to say why.
+   *
+   * The rule this leaves is a good one to state plainly: **the ticker reports
+   * the state you came back to, not the history you missed.** Anything that went
+   * wrong and righted itself while you were away says nothing — that is what the
+   * "while you were away" sheet is for — and anything still wrong when you look
+   * says so once. The coverages are re-armed by assuming everything was covered
+   * when you left, which is exactly what makes "still short now" the thing that
+   * fires.
+   */
+  private rearm(): void {
+    this.blocked = null;
+    this.lit = true;
+    this.covering.clear();
+    for (const service of SERVICES) this.covering.add(service.key);
+  }
+
+  /**
    * The two events that are about a line being crossed rather than a thing
    * being done.
    *
@@ -922,7 +946,10 @@ export class Game {
     // adds the merged parcel back and comes out exactly where it started.
     setCount(s, kind, countOf(s, kind) - 1);
     this.merged++;
-    this.emit({ kind: 'merged', at: s.elapsed, zone: kind, count: 1 });
+    // A merge is a promotion to MERGE_LEVEL, so it is reported as one rather
+    // than as a category of its own — see `GameEvent`. The count is the building
+    // that results, which is what the ticker's other rungs count too.
+    this.emit({ kind: 'level-up', at: s.elapsed, zone: kind, level: MERGE_LEVEL, count: 1 });
     return true;
   }
 
@@ -1454,6 +1481,7 @@ export class Game {
     const dt = credited / steps;
     for (let i = 0; i < steps; i++) this.step(dt);
     this.recording = true;
+    this.rearm();
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
     this.annexesLeft = Number.POSITIVE_INFINITY;

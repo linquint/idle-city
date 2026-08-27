@@ -161,6 +161,16 @@ already lists every one of these categories with an exact count. A ticker
 replaying it underneath would say the same facts twice and push the live ones
 out of a sixteen-entry buffer first.
 
+Silence alone is not enough, though, and the case that proves it is a *reload*.
+The edge-triggered lines — housing stalled, the grid gone short, a coverage
+slipping — fire on a transition, so a catch-up that crosses one absorbs it
+permanently: a one-second absence was enough to leave a city capped at 37%
+occupancy with an empty ticker and nothing on the default tab to say why. So
+`Game.rearm` re-arms those watchers when the catch-up ends, and the rule the
+ticker follows across an absence is **it reports the state you came back to, not
+the history you missed**. Anything that went wrong and righted itself while you
+were away says nothing; anything still wrong when you look says so once.
+
 **Style is a hash, not a field.** Each zone has three styles at every level — 45
 looks in all — and a style is a parameter set rather than a mesh: proportions, a
 colour band, how many lit window bands, and which of the shared unit-geometry

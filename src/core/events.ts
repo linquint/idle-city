@@ -10,6 +10,12 @@
  *
  * Three rules make this cheap enough to be worth having:
  *
+ *   - **the ticker reports the state you came back to, not the history you
+ *     missed.** Emission is off for the length of a `catchUp` — a twelve-hour
+ *     absence would flood a sixteen-entry buffer, and the "while you were away"
+ *     sheet already lists every one of these categories with an exact count —
+ *     and the edge-triggered watchers are re-armed afterwards, so anything still
+ *     wrong when the player looks says so once. See `Game.rearm`;
  *   - **events are not state.** Nothing here reaches `GameState`, nothing is
  *     saved, and nothing is derived *from* an event. They are a byproduct of
  *     the simulation, emitted where the `AwayReport` counters are already
@@ -51,6 +57,15 @@ export type GameEvent =
    * the player can act on and has no other way to be told about.
    */
   | { readonly kind: 'blocked'; readonly at: number; readonly reason: string; readonly count: number }
+  /**
+   * A cohort climbed a rung.
+   *
+   * Merging is one of these rather than a kind of its own, and the count is the
+   * buildings that *result*: climbing to MERGE_LEVEL takes two buildings off one
+   * parcel and puts one back, so "13 shops became retail park" is what happened
+   * and "26 shops merged" is the same fact told in the units of the rung below.
+   * One category fewer, and the ladder reads the same way at every rung.
+   */
   | {
       readonly kind: 'level-up';
       readonly at: number;
@@ -59,7 +74,6 @@ export type GameEvent =
       readonly level: number;
       readonly count: number;
     }
-  | { readonly kind: 'merged'; readonly at: number; readonly zone: EventZone; readonly count: number }
   | { readonly kind: 'abandoned'; readonly at: number; readonly zone: EventZone; readonly count: number }
   | { readonly kind: 'recovered'; readonly at: number; readonly zone: EventZone; readonly count: number }
   | { readonly kind: 'annexed'; readonly at: number; readonly districts: number; readonly count: number }
@@ -157,7 +171,6 @@ function sameSubject(a: GameEvent, b: GameEvent): boolean {
     case 'fire-started':
     case 'fire-out':
     case 'fire-lost':
-    case 'merged':
     case 'abandoned':
     case 'recovered':
       return a.zone === (b as typeof a).zone;
