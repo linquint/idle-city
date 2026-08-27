@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   FRONTAGE_TARGET,
-  HAPPINESS_GRACE_SECONDS,
   HOME_BASE,
   HOME_GROWTH,
   INDUSTRY_RESERVE,
@@ -284,16 +283,12 @@ describe('the surveyor', () => {
     // any of this, and CATCHUP_MAX_SURVEYS is the same guard for the same
     // reason. Measured on the build before zoning existed, a twelve-hour
     // absence already came back three districts against a watched six.
-    // Aged past HAPPINESS_GRACE_SECONDS, because a district built out to 24 / 20
-    // / 13 is not two minutes old and no city that reaches this state inside the
-    // window exists. The grace holds happiness up while it runs, which makes
-    // occupancy and demand move faster under the surveyor than they otherwise
-    // would — and a faster-moving signal is exactly where a 60-second step and
-    // sixty ticks of a second disagree most. Played forward honestly the gap is
-    // zero at every age inside the window, 0 to 119 seconds; stamped onto a
-    // finished city at age zero it is three parcels, which is a statement about
-    // the fixture rather than about the surveyor.
-    const patch = { ...built(24, 20, 13), cash: 0, elapsed: HAPPINESS_GRACE_SECONDS };
+    // The city's age used to be part of this fixture, because the opening grace
+    // was a clock and a district built out to 24 / 20 / 13 is not two minutes
+    // old. It is COVERAGE_GRACE_PLOTS now, and twenty-four housing plots are
+    // clear of it at any age — so the fixture says what it means without
+    // stamping an elapsed time on a city that would have taken an hour.
+    const patch = { ...built(24, 20, 13), cash: 0 };
     const away = new Game(city(1, patch));
     const watched = new Game(city(1, patch));
     away.catchUp(3_600);

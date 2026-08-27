@@ -6,7 +6,13 @@ import {
   EventLog,
   type GameEvent,
 } from '../src/core/events';
-import { HAPPINESS_MIN_BUILD, MAX_ACTIVE_FIRES, MERGE_LEVEL, SERVICES } from '../src/sim/config';
+import {
+  COVERAGE_GRACE_PLOTS,
+  HAPPINESS_MIN_BUILD,
+  MAX_ACTIVE_FIRES,
+  MERGE_LEVEL,
+  SERVICES,
+} from '../src/sim/config';
 import { coverage, homeCost } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { createState, type GameState } from '../src/sim/state';
@@ -323,7 +329,11 @@ describe('catch-up', () => {
     // occupancy with an empty ticker.
     //
     // Still wrong when you look: announced, once.
-    const stuck = at({ ...housed(4), cash: 1e6, happiness: 0 });
+    // Housed at COVERAGE_GRACE_PLOTS, which is the smallest city that can hold
+    // a happiness of zero: a shortfall under it is charged in proportion, so a
+    // four-home version of this climbs back over the gate during the absence and
+    // has nothing left to announce.
+    const stuck = at({ ...housed(COVERAGE_GRACE_PLOTS), cash: 1e6, happiness: 0 });
     stuck.catchUp(6 * 3_600);
     expect(stuck.drainEvents()).toHaveLength(0);
     const said = collect(stuck, 60).filter((event) => event.kind === 'blocked');

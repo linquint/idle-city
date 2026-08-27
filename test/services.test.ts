@@ -3,7 +3,7 @@ import {
   CIVIC_RAMP_SECONDS,
   HAPPINESS_FLOOR,
   CIVIC_SERVICES,
-  HAPPINESS_GRACE_SECONDS,
+  COVERAGE_GRACE_PLOTS,
   HAPPINESS_MIN_BUILD,
   START_CASH,
   HAPPINESS_SERVICES,
@@ -11,6 +11,7 @@ import {
   LEVEL_EDUCATION,
   LEVELS,
   MAX_DISTRICTS,
+  RECREATION_WEIGHT,
   SERVICES,
   DEMAND_TERMS,
   DEMAND_TERM_MAX,
@@ -20,7 +21,6 @@ import {
 import {
   bindingTerm,
   canBuildHome,
-  happinessAim,
   happinessFix,
   civicBuildings,
   covered,
@@ -29,6 +29,7 @@ import {
   demandTargets,
   demandTerms,
   educationCoverage,
+  happinessTerms,
   taxPressure,
   ZONE_KINDS,
   happinessTarget,
@@ -44,6 +45,7 @@ import {
   recreationCoverage,
   serviceAllowed,
   serviceCount,
+  shortfallShare,
   shopCapacity,
   siteCapacity,
   staffAfterBuild,
@@ -77,7 +79,10 @@ const hospital = SERVICES[0]!;
 
 describe('coverage', () => {
   it('is nothing at all with residents and nothing built', () => {
-    const bare = state(housed(10));
+    // Sized at COVERAGE_GRACE_PLOTS, which is where a shortfall first counts in
+    // full. Under it the same city earns a fraction of its shortfall instead —
+    // see `shortfallShare`, and the block of tests it has of its own.
+    const bare = state(housed(COVERAGE_GRACE_PLOTS));
     for (const service of SERVICES) expect(coverage(bare, service)).toBe(0);
     expect(happinessTarget(bare)).toBe(0);
   });
@@ -444,76 +449,137 @@ describe('happiness as a gate on housing', () => {
   });
 
   /**
-   * The hole the grace fills, and the reason it is a clock rather than a purse:
-   * happiness leaves an empty city's 1 on HAPPINESS_TAU and crosses the gate at
-   * 47 seconds, where the purchase that lifts it is 94 seconds away at the very
-   * best. No starting treasury closes that — measured from 40 to 2,000, the gate
-   * shut at 47 seconds every time and the city only had more houses to board up.
+   * The hole COVERAGE_GRACE_PLOTS fills, and the reason it is a size rather
+   * than a clock.
+   *
+   * `coverage` reads an empty city as fully covered — a service fails nobody
+   * when nothing has been built — and that rule used to be a step: one plot of
+   * housing took every service from failing nobody to failing everybody, and
+   * handed a one-house village a 130 hospital to fix it. Income is quadratic in
+   * happiness (HAPPINESS_FLOOR once, and again through occupancy), so the
+   * village earned 4.8% of its rate while the housing gate stood shut in front
+   * of the only building that could reopen it.
+   *
+   * The clock this replaced was set from a player who buys housing the instant
+   * they can and so never needed it. This is the reported save that fell
+   * through it: one home, one park, one shop, and nothing else pressed.
    */
-  it('holds the housing gate open while the opening grace runs', () => {
+  it('does not shut the gate on a city too small to open the fix', () => {
     const game = at({ cash: START_CASH });
-    // Played the way the trap is sprung: every home the money allows, at once.
-    for (let i = 0; i < HAPPINESS_GRACE_SECONDS * 10; i++) {
+    game.buildHome();
+    run(game, 120);
+    game.buildPark();
+    run(game, 90);
+    game.buildShop();
+    run(game, 30 * 60);
+
+    // Measured on the same city before the fix: 18% and 0.076/s, which is 28
+    // minutes of doing nothing to afford the hospital the panel was naming.
+    expect(game.state.happiness).toBeGreaterThan(0.9);
+    expect(homeBlocker(game.state)).toBeNull();
+    // And the half-hour was not spent in a hole: the treasury climbed the whole
+    // way, so the hospital is minutes off rather than half an hour.
+    expect(game.state.cash).toBeGreaterThan(hospital.base);
+  });
+
+  it('charges a shortfall in proportion to the city there is to fail', () => {
+    // Nothing built, so the shortfall is the whole of it and the target is
+    // exactly what a city this size is charged for.
+    for (const plots of [1, 2, 4, 6, 8, 12, 24]) {
+      const s = state(housed(plots));
+      expect(shortfallShare(s)).toBeCloseTo(Math.min(1, plots / COVERAGE_GRACE_PLOTS), 12);
+      expect(happinessTarget(s)).toBeCloseTo(1 - Math.min(1, plots / COVERAGE_GRACE_PLOTS), 12);
+    }
+    // Continuous at both ends: the empty city's 1 is where the ramp starts
+    // rather than a case beside it, and it is spent by COVERAGE_GRACE_PLOTS.
+    expect(happinessTarget(state())).toBeCloseTo(1, 12);
+    expect(shortfallShare(state(housed(COVERAGE_GRACE_PLOTS)))).toBe(1);
+  });
+
+  it('leaves every city the constants were measured against exactly where it was', () => {
+    // The whole reason the ramp is 12 plots and not a district's 24: above it
+    // nothing moves at all, so the tutorial still costs exactly what it says.
+    // The assertion is the weighted-coverage sum this used to be written as,
+    // which is what every calibration in config.ts is quoted against.
+    for (const plots of [COVERAGE_GRACE_PLOTS, 19, 24, 48]) {
+      const s = state({ ...housedOn(plots), parks: 1, ...staffed({ police: 0, fire: 0 }) });
+      expect(shortfallShare(s)).toBe(1);
+      expect(happinessTarget(s)).toBeCloseTo(
+        hospital.weight * coverage(s, hospital) + RECREATION_WEIGHT * recreationCoverage(s),
+        12,
+      );
+    }
+  });
+
+  it('says the same thing about a service as every other panel does', () => {
+    // The discount is a property of happiness, never of a coverage: a village
+    // with no hospital has no health coverage, and the happiness panel, the
+    // services table and the ticker all have to agree about that. What differs
+    // is only what the shortfall costs.
+    const village = state({ ...housed(1), parks: 1 });
+    const health = happinessTerms(village).find((term) => term.key === 'hospital');
+    expect(health?.coverage).toBe(coverage(village, hospital));
+    expect(health?.coverage).toBe(0);
+    expect(happinessTarget(village)).toBeGreaterThan(0.9);
+  });
+
+  it('never lets a house make a city poorer', () => {
+    // The failure mode a *threshold* would have had, where the grace held below
+    // some size and let go all at once above it: the house that crossed the line
+    // would drop happiness off a cliff, and building would be the move that
+    // bricked the city. The ramp is monotone instead — every house costs a
+    // little happiness and none of them costs a lot.
+    let last = Number.POSITIVE_INFINITY;
+    let worst = 0;
+    for (let plots = 0; plots <= 2 * COVERAGE_GRACE_PLOTS; plots++) {
+      const target = happinessTarget(state({ ...housedOn(plots), parks: 1 }));
+      expect(target).toBeLessThanOrEqual(last + 1e-12);
+      if (plots > 0) worst = Math.max(worst, last - target);
+      last = target;
+    }
+    expect(worst).toBeLessThan(0.12);
+  });
+
+  it('holds the housing gate open until the fix is affordable', () => {
+    // Played the way the trap used to be sprung: every home the money allows,
+    // at once. The gate still bites — the grace buys the chance to act, not the
+    // outcome — but it now bites on a city that can pay for the answer.
+    const game = at({ cash: START_CASH });
+    let gated: { at: number; homes: number; income: number } | null = null;
+    for (let i = 0; i < 3_000 && gated === null; i++) {
       while (canBuildHome(game.state)) game.buildHome();
       game.advance(0.1);
+      if (homeBlocker(game.state) !== null && game.state.cash >= homeCost(game.state)) {
+        gated = { at: i / 10, homes: game.state.homes, income: income(game.state) };
+      }
     }
-    expect(game.state.homes).toBeGreaterThan(8);
-    // Still open at the end of the window, and open the whole way through it:
-    // the aim is held at the gate, so happiness lags down onto it and stops.
-    expect(game.state.happiness).toBeGreaterThanOrEqual(HAPPINESS_MIN_BUILD);
-    expect(homeBlocker(game.state)).toBeNull();
-
-    // The grace buys the chance to act, not the outcome — a city that spends
-    // every penny of the window on houses arrives at the end of it with 9 in
-    // the bank, and is gated the moment the grace lifts. That is the tutorial
-    // still working: what changed is that it now bites after the fix for it is
-    // reachable rather than a minute before.
-    run(game, 120);
-    expect(game.state.happiness).toBeLessThan(HAPPINESS_MIN_BUILD);
+    expect(gated).not.toBeNull();
+    const shut = gated as { at: number; homes: number; income: number };
+    expect(shut.homes).toBeGreaterThan(8);
     expect(homeBlocker(game.state)).toBe('Residents are leaving');
+    // The number that matters: what the fix costs in seconds of the income the
+    // city has at the instant it is asked for it. Under a minute, against the
+    // twenty-eight the reported save was looking at.
+    expect(hospital.base / shut.income).toBeLessThan(60);
+    run(game, 60);
+    expect(game.buildService(hospital)).toBe(true);
   });
 
-  it('is long enough for a city that holds anything back to open the fix', () => {
-    // The other half, and the number the window is set from: a city that keeps
-    // the hospital's price in hand can open one inside the grace and is never
-    // gated at all. Before the grace it was gated at 47 seconds and bought the
-    // same hospital at 107 — a minute of losing the residents that paid for it.
-    const game = at({ cash: START_CASH });
-    let opened: number | null = null;
-    for (let i = 0; i < HAPPINESS_GRACE_SECONDS * 10; i++) {
-      if (opened === null && game.state.cash >= hospital.base && game.buildService(hospital)) {
-        opened = i / 10;
-      }
-      // Spends the opening treasury on housing — a city that buys nothing earns
-      // nothing and could never afford anything — and holds the hospital's price
-      // back from everything it earns after that.
-      const reserve = game.state.homes < 4 ? 0 : hospital.base;
-      while (
-        canBuildHome(game.state) &&
-        game.state.cash - homeCost(game.state) >= reserve
-      ) {
-        game.buildHome();
-      }
-      game.advance(0.1);
-      expect(homeBlocker(game.state)).toBeNull();
-    }
-    expect(opened).not.toBeNull();
-    expect(opened as number).toBeLessThan(HAPPINESS_GRACE_SECONDS);
-  });
+  it('leaves the earned coverage alone, because there is nothing to hold up', () => {
+    // The grace used to be a second number — an aim the integrator chased while
+    // `happinessTarget` said something else — and the split had to be argued
+    // for, because the panel, `migrate`'s seed and every calibration in
+    // config.ts read the earned one. A size grace needs no split: a village
+    // genuinely is not failing anybody, so this *is* the earned number and
+    // everything that reads it goes on reading one number.
+    const s = state({ ...housed(4), elapsed: 0 });
+    expect(happinessTarget(s)).toBeCloseTo(1 - 4 / COVERAGE_GRACE_PLOTS, 12);
+    expect(happinessTarget({ ...s, elapsed: 10 * 3_600 })).toBe(happinessTarget(s));
 
-  it('leaves the earned coverage alone while it holds the aim up', () => {
-    // The split that keeps `happinessTarget` honest: the grace moves where
-    // happiness is *heading*, never what the city has earned. The breakdown
-    // panel, `migrate`'s seed and every calibration in config.ts read the
-    // earned number and would all be lying about a two-minute-old city if the
-    // grace were folded into it.
-    const s = state({ ...housed(12), elapsed: 0 });
-    expect(happinessTarget(s)).toBe(0);
-    expect(happinessAim(s)).toBe(HAPPINESS_MIN_BUILD);
-    expect(happinessAim({ ...s, elapsed: HAPPINESS_GRACE_SECONDS })).toBe(0);
-    // Above the gate the grace is not a factor at all — it is a floor, not a peg.
-    const covered = state({ ...housed(12), ...staffed(), parks: 4, elapsed: 0 });
-    expect(happinessAim(covered)).toBe(happinessTarget(covered));
+    // And it is a discount on what is short, not a floor: a city that has earned
+    // its coverage is not held anywhere.
+    const covered = state({ ...housed(4), ...staffed(), parks: 4 });
+    expect(happinessTarget(covered)).toBeCloseTo(1, 12);
   });
 
   /**
@@ -566,16 +632,15 @@ describe('happiness as a gate on housing', () => {
   });
 
   it('lags rather than snapping when the city outgrows it', () => {
-    // Aged past the opening grace: what is under test is the lag a *settled*
-    // city feels when it outgrows its services, and HAPPINESS_GRACE_SECONDS
-    // would otherwise hold the aim up for the first two minutes of the 252 this
-    // runs — leaving the convergence below half-measured rather than wrong.
+    // Twenty plots, so the city is clear of COVERAGE_GRACE_PLOTS before a single
+    // tick runs: what is under test is the lag a *settled* city feels when it
+    // outgrows its services, and a target still being discounted for its size
+    // would leave that half-measured rather than wrong.
     const game = at({
       ...housedOn(20),
       cash: 1e12,
       ...staffed(),
       happiness: 1,
-      elapsed: HAPPINESS_GRACE_SECONDS,
     });
     run(game, 1);
     expect(game.state.happiness).toBeGreaterThan(0.95);

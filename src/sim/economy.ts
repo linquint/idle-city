@@ -21,6 +21,7 @@ import {
   SURVEY_FILL,
   ZONE_SHARE,
   FRONTAGE_TARGET,
+  COVERAGE_GRACE_PLOTS,
   type DemandTerm,
   DEMAND_TAU,
   DISTRICT_BONUS,
@@ -38,7 +39,6 @@ import {
   FIRE_SUPPRESSION,
   FIRE_UNHAPPINESS,
   HAPPINESS_FLOOR,
-  HAPPINESS_GRACE_SECONDS,
   HAPPINESS_MIN_BUILD,
   HAPPINESS_TAU,
   HIGHWAY_COST,
@@ -1118,8 +1118,31 @@ export interface HappinessTerm {
   readonly key: ServiceKey | 'recreation';
   readonly coverLabel: string;
   readonly weight: number;
+  /**
+   * The raw share, exactly as `coverage` and `recreationCoverage` report it.
+   *
+   * Deliberately *not* discounted by `shortfallShare`, which is the one place
+   * this could have gone. A coverage means one thing everywhere in this game —
+   * the share of the city's housing land a service reaches — and the services
+   * panel, the ticker's "coverage fell to" line and this one all have to say
+   * the same number about the same buildings. What a small city is excused is a
+   * property of its happiness, so it lives in `happinessTarget` and nowhere
+   * else.
+   */
   readonly coverage: number;
 }
+
+/**
+ * Share of a coverage shortfall a city this size is charged for, in [0, 1].
+ *
+ * The continuous form of the rule `coverage` states at zero plots: a service
+ * fails nobody when nothing has been built, and it barely fails anybody when
+ * eleven twelfths of the city it would serve does not exist yet. Reaches 1 at
+ * COVERAGE_GRACE_PLOTS and stays there, so every number this file's constants
+ * were measured against is untouched.
+ */
+export const shortfallShare = (s: GameState): number =>
+  Math.min(1, housingPlots(s) / COVERAGE_GRACE_PLOTS);
 
 /** Every term happiness is made of, services first. The weights sum to 1. */
 export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
@@ -1144,11 +1167,19 @@ export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
  * The fire term is a flat subtraction rather than another weighted coverage
  * because it is not a service level — it is an event, and it should hurt while
  * it is happening and stop hurting the moment it is out.
+ *
+ * Written as one minus the weighted *shortfall* rather than as the weighted
+ * coverage it used to be, which is the same number by two routes — the four
+ * weights sum to exactly 1 — and only the shortfall form can be scaled by
+ * `shortfallShare`. Summed by hand rather than through `happinessTerms`
+ * because this runs ten times a second and the four objects that read nicer
+ * are four objects a tick.
  */
 export const happinessTarget = (s: GameState): number => {
-  const covered =
-    HAPPINESS_SERVICES.reduce((sum, service) => sum + service.weight * coverage(s, service), 0) +
-    RECREATION_WEIGHT * recreationCoverage(s);
+  const share = shortfallShare(s);
+  let short = RECREATION_WEIGHT * (1 - recreationCoverage(s));
+  for (const service of HAPPINESS_SERVICES) short += service.weight * (1 - coverage(s, service));
+  const covered = 1 - share * short;
   // The tax term joins the fire term as a *modifier* on earned coverage rather
   // than as a fifth weight. The four weights sum to exactly 1 and go on doing
   // so; what a tax rate changes is how the city feels about the coverage it has,
@@ -1163,33 +1194,6 @@ export const happinessTarget = (s: GameState): number => {
     (faresWaived(s) ? FREE_TRANSPORT_MOOD : 0) +
     LANDMARK_MOOD * landmarkCoverage(s);
   return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
-};
-
-/**
- * Where happiness is actually integrated toward: the coverage the city has
- * earned, held up to HAPPINESS_MIN_BUILD while the opening grace runs.
- *
- * A second function rather than a branch inside `happinessTarget`, and the split
- * is the point. `happinessTarget` answers "what has this city earned", which is
- * what the breakdown panel shows, what `migrate` seeds a loaded save from and
- * what every calibration in config.ts is quoted against — a grace folded into it
- * would make all three lie about a city's coverage for its first two minutes.
- * This answers the different question the integrator asks, which is where the
- * number should be heading right now.
- *
- * Applied to the aim rather than to `s.happiness` for the same reason: the city
- * still lags onto the floor at HAPPINESS_TAU and still shows every point it is
- * losing on the way down. Pinning the stored value would freeze the panel at a
- * number the city has not earned and then drop it the moment the grace lifted.
- *
- * `at` is the instant to read the grace at, defaulting to the city's own age.
- * The integrator passes the *start* of its step rather than taking the default,
- * because this is the one aim in the loop that is not continuous in the state:
- * see `integrateHappiness` for the split a step straddling the window needs.
- */
-export const happinessAim = (s: GameState, at: number = s.elapsed): number => {
-  const earned = happinessTarget(s);
-  return at < HAPPINESS_GRACE_SECONDS ? Math.max(HAPPINESS_MIN_BUILD, earned) : earned;
 };
 
 /**
@@ -1232,6 +1236,11 @@ export interface HappinessFix {
 export const happinessFix = (s: GameState): HappinessFix | null => {
   const plots = housingPlots(s);
   if (plots <= 0) return null;
+  // Every lift is scaled by the same share, so this cannot reorder the options
+  // — it is here so `lift` goes on meaning what it says it means. On a city
+  // under COVERAGE_GRACE_PLOTS an unscaled lift would promise a park eighteen
+  // points it would not deliver.
+  const share = shortfallShare(s);
   const options: HappinessFix[] = [];
 
   for (const service of HAPPINESS_SERVICES) {
@@ -1246,7 +1255,7 @@ export const happinessFix = (s: GameState): HappinessFix | null => {
       label: service.buildLabel,
       cost,
       affordable: s.cash >= cost,
-      lift: service.weight * (then - now),
+      lift: share * service.weight * (then - now),
     });
   }
 
@@ -1258,7 +1267,7 @@ export const happinessFix = (s: GameState): HappinessFix | null => {
       label: 'Open park',
       cost,
       affordable: s.cash >= cost,
-      lift: RECREATION_WEIGHT * (then - now),
+      lift: share * RECREATION_WEIGHT * (then - now),
     });
   }
 

@@ -3,6 +3,7 @@ import {
   ABANDON_SECONDS,
   CATCHUP_MAX_ABANDONED,
   CATCHUP_STEP_SECONDS,
+  COVERAGE_GRACE_PLOTS,
   HAPPINESS_MIN_OCCUPANCY,
   LEVEL_CAPACITY,
   LEVEL_EDUCATION,
@@ -423,10 +424,22 @@ describe('abandonment', () => {
    * hours at income 0.00e+0 with nothing the player could press.
    */
   it('never writes off the last building of a zone', () => {
-    const game = at({ ...housed(6), ...trading(15), happiness: 0, occupancyR: 0, occupancyC: 0, cash: 0 });
+    // A district's worth of housing, and the size is load-bearing: a shortfall
+    // is only charged in full above COVERAGE_GRACE_PLOTS, and six hours of fire
+    // takes a stock down as well as the write-offs do. A six-home version of
+    // this fixture climbs back out instead of draining, and measures the ramp
+    // rather than the guard.
+    const game = at({
+      ...housed(2 * COVERAGE_GRACE_PLOTS),
+      ...trading(15),
+      happiness: 0,
+      occupancyR: 0,
+      occupancyC: 0,
+      cash: 0,
+    });
     // Long enough to have written off many times over: ABANDON_SPREAD_SECONDS
-    // is 1,200, and a stock of six drains to its last building in about 1,900
-    // seconds of it. Six hours is three times over.
+    // is 1,200, and a stock of twenty-four drains to its last building in about
+    // 3,800 seconds of it. Six hours is five times over.
     for (let i = 0; i < 6; i++) run(game, 3_600);
     expect(game.state.abandonedR).toBe(game.state.homes - 1);
     expect(game.state.abandonedC).toBe(game.state.shops - 1);
@@ -435,7 +448,14 @@ describe('abandonment', () => {
   });
 
   it('leaves a written-off city something to climb out on', () => {
-    const game = at({ ...housed(6), ...trading(15), happiness: 0, occupancyR: 0, occupancyC: 0, cash: 0 });
+    const game = at({
+      ...housed(2 * COVERAGE_GRACE_PLOTS),
+      ...trading(15),
+      happiness: 0,
+      occupancyR: 0,
+      occupancyC: 0,
+      cash: 0,
+    });
     for (let i = 0; i < 6; i++) run(game, 3_600);
     // The whole point of the last building: a ledger that is not zero. At the
     // occupancy floor one home is a third of a resident, which is a hospital in
