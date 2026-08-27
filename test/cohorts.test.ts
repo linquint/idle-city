@@ -21,6 +21,7 @@ import {
 import {
   cohortStart,
   cohortTotal,
+  income,
   levelAt,
   mergedCohort,
   mergeCapacity,
@@ -37,7 +38,7 @@ import { Game } from '../src/sim/game';
 import { hash01 } from '../src/core/rng';
 import { cohortOf, createState, type GameState, type ZoneKind } from '../src/sim/state';
 import { migrate } from '../src/sim/save';
-import { built, cohort, housed, served } from './levels';
+import { built, cohort, housed, served, trading } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -391,6 +392,39 @@ describe('abandonment', () => {
     const report = game.catchUp(6 * 3_600);
     expect(report.abandoned).toBeGreaterThan(0);
     expect(report.recovered).toBe(0);
+  });
+
+  /**
+   * The soft-lock this rule exists to prevent, and it is a hard one: a zone
+   * written off to the last plot holds no level, houses nobody and earns
+   * *exactly* zero. With residents at zero the rent line is zero, happiness has
+   * nothing to be about, the occupancy target sits under OCCUPANCY_EMPTY forever
+   * and `isRecovering` never opens. Measured before the guard: twelve simulated
+   * hours at income 0.00e+0 with nothing the player could press.
+   */
+  it('never writes off the last building of a zone', () => {
+    const game = at({ ...housed(6), ...trading(15), happiness: 0, occupancyR: 0, occupancyC: 0, cash: 0 });
+    // Long enough to have written off many times over: ABANDON_SPREAD_SECONDS
+    // is 1,200 and this is twenty-four hours of it.
+    for (let i = 0; i < 24; i++) run(game, 3_600);
+    expect(game.state.abandonedR).toBe(game.state.homes - 1);
+    expect(game.state.abandonedC).toBe(game.state.shops - 1);
+    expect(cohortTotal(game.state.homeLevels)).toBe(1);
+    assertBalanced(game.state);
+  });
+
+  it('leaves a written-off city something to climb out on', () => {
+    const game = at({ ...housed(6), ...trading(15), happiness: 0, occupancyR: 0, occupancyC: 0, cash: 0 });
+    for (let i = 0; i < 24; i++) run(game, 3_600);
+    // The whole point of the last building: a ledger that is not zero. At the
+    // occupancy floor one home is a third of a resident, which is a hospital in
+    // about an hour and a half — slow enough to read as a consequence, and not
+    // a save to throw away.
+    expect(residents(game.state)).toBeGreaterThan(0);
+    expect(income(game.state)).toBeGreaterThan(0);
+    const before = game.state.cash;
+    run(game, 3_600);
+    expect(game.state.cash).toBeGreaterThan(before);
   });
 });
 

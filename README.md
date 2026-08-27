@@ -204,6 +204,16 @@ Plots are also merge-invariant (a pair of houses that becomes one tower still
 holds two plots) and occupancy-invariant (a boarded-up house still holds its
 land), so coverage answers "how much of the city is served" and nothing else.
 
+A zone also never writes off its *last* standing building. That is the same rule
+`OCCUPANCY_FLOOR` is — a neglected city should read as one that has stopped
+growing, not one that has been switched off — and the floor stopped short of it,
+because occupancy is a share of a stock and a stock of nothing has no share. A
+zone written off to the last plot houses nobody and earns exactly zero, and with
+residents at zero the occupancy target sits under `OCCUPANCY_EMPTY` forever and
+nothing ever recovers. One home standing is a third of a resident and a hospital
+in about ninety minutes: slow enough to read as the consequence it is, and not a
+save you have to throw away.
+
 Three rules keep it from being either free or punishing. A new building ramps
 its staffing in over ninety seconds rather than covering anything the moment its
 roof goes on. A build gate of `floor(housingPlots / plots) + 1` means you may
@@ -296,4 +306,7 @@ Everything degrades rather than breaks: a corrupted save, a browser with storage
 switched off, or a save from an older balance pass all open — clamped into
 something legal instead of rejected. A v1 save is read out of the key it was
 written under and brought forward; a save claiming `demandR: 50` is clamped back
-into the band rather than handed free buildings.
+into the band rather than handed free buildings; and a save whose whole housing
+stock was written off — a state older builds could reach and this one cannot —
+gets its last building back, because a city with no standing housing earns
+exactly zero and can never recover from it.

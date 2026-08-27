@@ -339,17 +339,46 @@ export const occupancyStep = (dt: number): number =>
 export const isVacant = (s: GameState, kind: ZoneKind): boolean =>
   occupancyOf(s, kind) < OCCUPANCY_EMPTY;
 
-/** Whether a zone has been empty long enough to start writing buildings off. */
+/**
+ * Whether a zone has been empty long enough to start writing buildings off.
+ *
+ * Never the *last* one standing, and that is the same rule OCCUPANCY_FLOOR is:
+ * a neglected city should feel like one that has stopped growing, not one that
+ * has been switched off. The floor kept occupancy off zero and stopped short of
+ * this, because occupancy is a share of a stock and a stock of nothing has no
+ * share. A zone written off to the last building holds no level, houses nobody
+ * and earns *exactly* zero — and with residents at zero the rent line is zero,
+ * happiness has nothing to be about, the occupancy target sits under
+ * OCCUPANCY_EMPTY forever and `isRecovering` never opens. Measured on a city of
+ * six ruined homes and fifteen shops: twelve simulated hours, income 0.00e+0 at
+ * every one of them, and nothing the player could press.
+ *
+ * One home left standing is 0.32 residents at the occupancy floor and about
+ * 0.026 a second, which is a hospital in an hour and a half. Slow enough to
+ * read as the consequence it is, and not a save you have to throw away.
+ *
+ * Found while calibrating LAND_VALUE_SPREAD: the discount-chasing policy in
+ * tools/economy.calibrate.mjs sits on the edge of this for three and a half
+ * hours of a 24-hour run, and a 2.7% change in the ledger decided which side of
+ * it the run landed on. The cliff is what made the constant unmeasurable.
+ */
 export const isAbandoning = (s: GameState, kind: ZoneKind): boolean =>
-  isVacant(s, kind) && vacantOf(s, kind) >= ABANDON_SECONDS && standingOf(s, kind) > 0;
+  isVacant(s, kind) && vacantOf(s, kind) >= ABANDON_SECONDS && standingOf(s, kind) > 1;
 
 /** Whether a zone has ruins to bring back and the occupancy to justify it. */
 export const isRecovering = (s: GameState, kind: ZoneKind): boolean =>
   !isVacant(s, kind) && abandonedOf(s, kind) > 0;
 
-/** Buildings a zone writes off per second, once it is past ABANDON_SECONDS. */
+/**
+ * Buildings a zone writes off per second, once it is past ABANDON_SECONDS.
+ *
+ * Against the stock it may actually lose rather than the whole of it, so the
+ * rate goes to zero as the zone approaches its last building instead of
+ * stopping dead against the guard in `isAbandoning`. A rate that ignored the
+ * floor would bank drift the pass could never spend.
+ */
 export const abandonRate = (s: GameState, kind: ZoneKind): number =>
-  standingOf(s, kind) / ABANDON_SPREAD_SECONDS;
+  Math.max(0, standingOf(s, kind) - 1) / ABANDON_SPREAD_SECONDS;
 
 /** Buildings a zone brings back per second. Four times the rate it lost them. */
 export const recoverRate = (s: GameState, kind: ZoneKind): number =>

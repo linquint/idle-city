@@ -19,6 +19,7 @@ import {
   landmarkCoverage,
   landmarkSiteCapacity,
   parkCapacity,
+  residents,
   serviceAllowed,
   serviceCount,
   shopCapacity,
@@ -528,6 +529,19 @@ describe('the v6 migration', () => {
     expect(civicBuildings(back)).toBe(3);
     expect(back.fires).toEqual([{ kind: 'shop', index: 3, startedAt: 8_950 }]);
     expect(back.fireCursor).toBe(42);
+  });
+
+  it('brings back the last building of a zone written off to nothing', () => {
+    // A state the current build cannot produce and an older one could: every
+    // home written off. It houses nobody and earns exactly zero, and with
+    // residents at zero the occupancy target sits under OCCUPANCY_EMPTY forever
+    // — so nothing ever recovers and the save has nothing left to press. The
+    // repair is the one `isAbandoning` now enforces: the last ruin comes back.
+    const state = migrate({ version: 8, homes: 6, abandonedR: 6, shops: 4, abandonedC: 4 });
+    expect(state).not.toBeNull();
+    expect(state?.abandonedR).toBe(5);
+    expect(state?.abandonedC).toBe(3);
+    expect(residents({ ...(state as GameState), occupancyR: 0.5 })).toBeGreaterThan(0);
   });
 
   it('opens occupied rather than reading as a city being abandoned', () => {

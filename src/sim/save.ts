@@ -197,7 +197,12 @@ function fitZone(
   // cohort is built, since the cohort is reconciled to the standing stock and a
   // stock of a billion would build one that agreed with nothing afterwards.
   const held = Math.min(count, capacity);
-  const lost = Math.min(abandoned, held);
+  // Never every building of a zone, for the reason `isAbandoning` carries: a
+  // zone written off to the last plot houses nobody, earns exactly zero and can
+  // never recover, and a save carrying that state is a save with nothing left to
+  // press. The current build cannot produce one; a v8 or older save can, and
+  // this is the repair — the last ruin comes back standing.
+  const lost = Math.min(abandoned, Math.max(0, held - 1));
   const levels = migrateCohort(raw, held - lost, tier);
   const zone: ZoneFit = { count: held, abandoned: lost, levels, merged: 0 };
 

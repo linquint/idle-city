@@ -779,9 +779,14 @@ export class Game {
   private abandon(kind: ZoneKind, budget: number): number {
     const s = this.inner;
     const levels = levelsOf(s, kind);
+    // Never the last one standing — see `isAbandoning`, which carries the
+    // measurement. Bounded here as well as gated there, because a 60-second
+    // catch-up step arrives with a budget of tens and the gate only says
+    // whether the pass may run at all.
+    const spare = Math.max(0, standingOf(s, kind) - 1);
     let moved = 0;
-    for (let l = 0; l < LEVELS && moved < budget; l++) {
-      const take = Math.min(budget - moved, levels[l] ?? 0, this.abandonsLeft);
+    for (let l = 0; l < LEVELS && moved < spare; l++) {
+      const take = Math.min(budget - moved, spare - moved, levels[l] ?? 0, this.abandonsLeft);
       if (take <= 0) continue;
       levels[l] = (levels[l] ?? 0) - take;
       setAbandoned(s, kind, abandonedOf(s, kind) + take);
