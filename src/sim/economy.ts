@@ -38,6 +38,7 @@ import {
   FIRE_SUPPRESSION,
   FIRE_UNHAPPINESS,
   HAPPINESS_FLOOR,
+  HAPPINESS_GRACE_SECONDS,
   HAPPINESS_MIN_BUILD,
   HAPPINESS_TAU,
   HIGHWAY_COST,
@@ -351,6 +352,15 @@ export const cityScale = (s: GameState): number => {
  * fast enough to start boarding plots up. The zone's own demand is the smaller
  * modifier, so a zone in surcharge keeps most of its tenants rather than
  * emptying.
+ *
+ * The demand term modifies the range *above* the floor rather than the floor
+ * itself, and the clamp below is what says so. Added outside it, a zone that
+ * was miserable and oversupplied at once read 0.047 against a floor of 0.08 —
+ * so OCCUPANCY_FLOOR, whose whole job is the trickle of income a written-off
+ * city climbs back on, was quietly paying out 40% less than it promises. A city
+ * that had spent itself down to one standing home earned 0.014 a second where
+ * the floor is set for 0.024: two and a half hours to the cheapest service in
+ * the game rather than the forty-eight minutes it is priced at.
  */
 export const occupancyTarget = (s: GameState, kind: ZoneKind): number => {
   const mood = Math.max(0, Math.min(1, s.happiness));
@@ -364,7 +374,13 @@ export const occupancyTarget = (s: GameState, kind: ZoneKind): number => {
   // from the surplus. Applied to all three zones — a shop with no power does not
   // trade either — and floored by POWER_FLOOR, which is what keeps the loop from
   // having a fixed point at nothing.
-  return Math.max(0, Math.min(1, wanted)) * powerCap(s);
+  //
+  // Outside the floor rather than inside it, and the two are not interchangeable:
+  // a cap that could not reach under OCCUPANCY_FLOOR would make a blackout
+  // invisible in a city that is also unhappy, which is the one case POWER_FLOOR's
+  // own comment says is left to rot on purpose. What is killing that city is the
+  // unhappiness, and the power term is not there to insure against it.
+  return Math.max(OCCUPANCY_FLOOR, Math.min(1, wanted)) * powerCap(s);
 };
 
 /** Fraction of the gap occupancy closes over `dt`. Same form as `demandStep`. */
@@ -1150,12 +1166,111 @@ export const happinessTarget = (s: GameState): number => {
 };
 
 /**
+ * Where happiness is actually integrated toward: the coverage the city has
+ * earned, held up to HAPPINESS_MIN_BUILD while the opening grace runs.
+ *
+ * A second function rather than a branch inside `happinessTarget`, and the split
+ * is the point. `happinessTarget` answers "what has this city earned", which is
+ * what the breakdown panel shows, what `migrate` seeds a loaded save from and
+ * what every calibration in config.ts is quoted against — a grace folded into it
+ * would make all three lie about a city's coverage for its first two minutes.
+ * This answers the different question the integrator asks, which is where the
+ * number should be heading right now.
+ *
+ * Applied to the aim rather than to `s.happiness` for the same reason: the city
+ * still lags onto the floor at HAPPINESS_TAU and still shows every point it is
+ * losing on the way down. Pinning the stored value would freeze the panel at a
+ * number the city has not earned and then drop it the moment the grace lifted.
+ *
+ * `at` is the instant to read the grace at, defaulting to the city's own age.
+ * The integrator passes the *start* of its step rather than taking the default,
+ * because this is the one aim in the loop that is not continuous in the state:
+ * see `integrateHappiness` for the split a step straddling the window needs.
+ */
+export const happinessAim = (s: GameState, at: number = s.elapsed): number => {
+  const earned = happinessTarget(s);
+  return at < HAPPINESS_GRACE_SECONDS ? Math.max(HAPPINESS_MIN_BUILD, earned) : earned;
+};
+
+/**
  * The term holding happiness back hardest — the one whose shortfall costs the
  * most weighted points. Naming it is the entire value of the panel: a bare
  * percentage tells the player nothing they can act on, and with a fourth term
  * in the sum a panel that could only ever name a *service* would leave a
  * park-less city stuck at 82% with three green lines and no explanation.
  */
+/**
+ * The purchase that would lift happiness most, and what it costs.
+ *
+ * `bindingTerm` says what is *short*; this says what to press, and the two are
+ * not the same answer. The binding term is whichever shortfall costs the most
+ * weighted points, which early on is always the hospital — so a city sitting at
+ * 60 in the bank was told "Health coverage 0%" about a building costing 130
+ * while the 45 park that would also have helped sat unmentioned. A panel that
+ * can only name a problem the player cannot afford to solve is a panel that
+ * names nothing.
+ *
+ * So: every happiness lever the city has the *land* for, scored by what one more
+ * of it would add to the target, and the best of the ones it can pay for wins.
+ * With nothing affordable it falls back to the cheapest lever there is, because
+ * "save 130 for a hospital" is still an instruction and "Health coverage 0%" is
+ * not.
+ *
+ * Parks are in the list on equal terms with the three services. They are the
+ * fourth happiness term and the cheapest by a wide margin, which is exactly the
+ * combination the old panel could never surface.
+ */
+export interface HappinessFix {
+  /** The button this names, worded as the button words it. */
+  readonly label: string;
+  readonly cost: number;
+  readonly affordable: boolean;
+  /** What one more would add to the happiness target, in points. */
+  readonly lift: number;
+}
+
+export const happinessFix = (s: GameState): HappinessFix | null => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return null;
+  const options: HappinessFix[] = [];
+
+  for (const service of HAPPINESS_SERVICES) {
+    if (serviceCount(s, service.key) >= serviceAllowed(s, service)) continue;
+    // One more building at full staffing, against the coverage the city has
+    // now — the honest marginal reading, and it goes to zero on a covered
+    // service so a green line never gets named.
+    const now = coverage(s, service);
+    const then = Math.min(1, (covered(s, service) + service.plots) / plots);
+    const cost = serviceCost(s, service);
+    options.push({
+      label: service.buildLabel,
+      cost,
+      affordable: s.cash >= cost,
+      lift: service.weight * (then - now),
+    });
+  }
+
+  if (s.parks < parkCapacity(s)) {
+    const now = recreationCoverage(s);
+    const then = Math.min(1, ((s.parks + 1) * PLOTS_PER_PARK) / plots);
+    const cost = parkCost(s);
+    options.push({
+      label: 'Open park',
+      cost,
+      affordable: s.cash >= cost,
+      lift: RECREATION_WEIGHT * (then - now),
+    });
+  }
+
+  const worth = options.filter((option) => option.lift > 0);
+  if (worth.length === 0) return null;
+  const paid = worth.filter((option) => option.affordable);
+  if (paid.length > 0) {
+    return paid.reduce((best, option) => (option.lift > best.lift ? option : best));
+  }
+  return worth.reduce((best, option) => (option.cost < best.cost ? option : best));
+};
+
 export const bindingTerm = (s: GameState): HappinessTerm => {
   const terms = happinessTerms(s);
   let worst = terms[0] as HappinessTerm;

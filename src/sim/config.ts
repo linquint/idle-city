@@ -1574,12 +1574,43 @@ export const HAPPINESS_FLOOR = 0.55;
  * An empty city is at 1, not 0 — coverage is the share of residents a service
  * reaches, and with no residents there is nobody it fails. Happiness then lags
  * down from there as the first houses fill (HAPPINESS_TAU), which is what buys
- * the opening enough room to earn the hospital that lifts the gate. Measured
- * against a player who buys the moment they can: the gate first bites at 47s
- * and 11 homes, and the first hospital opens at 116s. The stall is not dead
- * time — shops and industry are both still buildable through it.
+ * the opening enough room to earn the hospital that lifts the gate. That lag on
+ * its own was not enough room: it ran out at 47 seconds against a hospital no
+ * city could open before 94, so the gate shut a minute before the fix for it
+ * existed. HAPPINESS_GRACE_SECONDS is what closed that minute, and the numbers
+ * below are measured with it. Against a player who buys the moment they can:
+ * the gate first bites at 2.1 minutes and 16 homes, and the first hospital
+ * opens at 2.5 minutes. The stall is not dead time — shops and industry are
+ * both still buildable through it.
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
+
+/**
+ * Seconds a new city is held at HAPPINESS_MIN_BUILD before the gate may bite.
+ *
+ * The opening had a hole in it that no amount of starting cash could fill, and
+ * the shape of the hole is why: happiness decays on a *clock* rather than a
+ * budget. It leaves an empty city's 1 on HAPPINESS_TAU as the first houses
+ * fill, crosses this gate at 47 seconds, and does so at every START_CASH from
+ * 40 to 2,000 — more money only buys more houses to board up. Measured at
+ * 2,000, a city ended two hours with 25 homes and 24 of them abandoned.
+ *
+ * Against that, the earliest a city can *afford* the purchase that lifts the
+ * gate: 94 seconds to a hospital buying homes as fast as it can, 107 holding
+ * cash back for one, 56 seconds to the park that goes with it. So the gate shut
+ * a full minute before the fix for it existed, and the minute was spent losing
+ * the residents that would have paid for it.
+ *
+ * 120 covers the slowest of those with margin to spare, and it is 2.7 x
+ * HAPPINESS_TAU — long enough that happiness has fully lagged down onto the
+ * floor and is sitting on it when the grace lifts, so the transition is the
+ * gate starting to bite rather than a number jumping. What it does *not* do is
+ * make the opening free: the city still loses residents and income the whole
+ * way down, the panel still names what is short, and a player who spends the
+ * window on shops still arrives at 120 seconds with nothing to open. It buys
+ * the chance to act, not the outcome.
+ */
+export const HAPPINESS_GRACE_SECONDS = 120;
 
 // ------------------------------------------------------------------ upkeep
 

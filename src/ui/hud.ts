@@ -107,6 +107,7 @@ import {
   residents,
   serviceBlocker,
   serviceCost,
+  happinessFix,
   serviceReadings,
   shopCapacity,
   shopCost,
@@ -120,10 +121,8 @@ import { ESTATE_CELLS } from '../sim/estates';
 import type { BuildingRef } from '../render/buildings';
 import type { AwayReport, Game } from '../sim/game';
 import {
-  BUILDABLE_COMMERCIAL_PER_DISTRICT,
-  BUILDABLE_INDUSTRIAL_PER_DISTRICT,
-  BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   createPlacement,
+  districtOfPlot,
   housingCentrality,
   portDistrict,
   type CityLayout,
@@ -154,13 +153,6 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 /** The tabs the docked control is split into, in the order they are shown. */
 const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'trade', 'estates'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
-
-/** Plots one district sells of each zone. Turns a plot index into a district. */
-const ZONE_PLOTS: Record<ZoneKind, number> = {
-  home: BUILDABLE_RESIDENTIAL_PER_DISTRICT,
-  shop: BUILDABLE_COMMERCIAL_PER_DISTRICT,
-  industry: BUILDABLE_INDUSTRIAL_PER_DISTRICT,
-};
 
 /**
  * Seconds a ticker line stays on screen, in simulated time.
@@ -901,10 +893,21 @@ export class Hud {
     // The happiness panel. A bare percentage says nothing a player can act on,
     // so the binding term is named beside it: "Health coverage 41%" is the whole
     // reason this block exists rather than the number on its own.
+    //
+    // And the term alone turned out not to be enough either. It names what is
+    // short, which early on is always the hospital, so a city with 60 in the
+    // bank read "Health coverage 0%" about a 130 building while the 45 park that
+    // would also have lifted it went unmentioned — the panel naming a problem the
+    // player could not afford to solve. `happinessFix` names the button instead,
+    // with its price, and falls back to the cheapest one when nothing is
+    // affordable, because "save 130" is an instruction and a percentage is not.
     const worst = bindingTerm(s);
-    const why = `${worst.coverLabel} ${pct(worst.coverage)}`;
+    const term = `${worst.coverLabel} ${pct(worst.coverage)}`;
+    const fix = happinessFix(s);
+    const why = fix === null ? term : `${term} — ${fix.label.toLowerCase()}, ${fmt(fix.cost)}`;
     n.moodPct.textContent = pct(s.happiness);
     n.moodWhy.textContent = why;
+    n.moodWhy.classList.toggle('can', fix !== null && fix.affordable);
     n.moodFill.style.width = `${Math.max(0, Math.min(100, s.happiness * 100)).toFixed(1)}%`;
     n.mood.classList.toggle('short', s.happiness < HAPPINESS_MIN_BUILD);
     n.mood.setAttribute('aria-label', `Happiness ${pct(s.happiness)}. Weakest: ${why}.`);
@@ -1301,7 +1304,10 @@ export class Hud {
     const at = this.layout
       .ensure(s)
       .place(zoneOf(ref.kind), ref.slot, mergedOf(s, ref.kind), s, this.at);
-    const district = Math.floor(at.plot / (ZONE_PLOTS[ref.kind] || 1));
+    // Asked of the layout rather than divided out of a per-district constant:
+    // districts sell different amounts of each zone now, so there is no divisor
+    // to use. See `districtOfPlot`.
+    const district = districtOfPlot(s, zoneOf(ref.kind), at.plot);
 
     n.inspectTitle.textContent =
       level < 0 ? 'Boarded up' : (names[level] ?? `level ${level}`);

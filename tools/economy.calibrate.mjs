@@ -7,7 +7,9 @@
  * It reports, per policy:
  *   - the longest continuous stretch each demand signal spends pinned at +-1
  *   - whether any cost curve is ever non-monotonic in n
- *   - time to first rezone, first annex, first service and the city hall
+ *   - time to first survey and first release, first annex, first service and
+ *     the city hall, plus how many times the surveyor moves land in a day —
+ *     a gate nothing ever clears is a mechanic that does not exist
  *   - happiness at 1h / 6h / 24h
  *   - the share of income attributable to the shop multiplier at 1h / 6h / 24h,
  *     which is what stops a cheap commercial curve collapsing the game into
@@ -60,9 +62,13 @@ import {
   residents,
   serviceCost,
   shopCost,
+  willRelease,
+  willSurvey,
+  willTransfer,
+  ZONE_KINDS,
 } from '../src/sim/economy.ts';
 import { Game } from '../src/sim/game.ts';
-import { createState } from '../src/sim/state.ts';
+import { createState, openZoning } from '../src/sim/state.ts';
 
 const HOURS = Number(process.argv[2] ?? 24);
 const STEP = 1; // seconds of simulated time per sample
@@ -244,9 +250,71 @@ class PinTracker {
   }
 }
 
+/**
+ * Whether the surveyor's gates ever open, and what they move when they do.
+ *
+ * The question a `SURVEY_DEMAND` of 0.35 against a `SURVEY_FILL` of 0.8 has to
+ * answer: a gate nothing clears is a mechanic that does not exist. So this
+ * samples the three predicates themselves rather than inferring them from the
+ * zoning — `willSurvey`, `willRelease` and `willTransfer` are pure functions of
+ * the state, and asking them directly is the only reading that separates "the
+ * city never wanted to rezone" from "it wanted to and had nowhere to".
+ *
+ * Parcels moved are counted off the *frontier* district and only while the
+ * frontier stands still, because those are the only writes the surveyor makes.
+ * A district's opening split is `annexZoning` and the one it leaves behind is
+ * topped up by `freeze`; both land in the same arrays and neither is a survey.
+ */
+class SurveyTracker {
+  constructor(s) {
+    this.districts = s.districts;
+    this.prev = SurveyTracker.frontier(s);
+    this.open = { survey: 0, release: 0, transfer: 0 };
+    this.first = { survey: null, release: null, transfer: null };
+    this.moved = { in: 0, out: 0 };
+  }
+
+  static frontier(s) {
+    const at = Math.max(0, s.districts - 1);
+    return [s.surveyedR[at] ?? 0, s.surveyedC[at] ?? 0, s.surveyedI[at] ?? 0];
+  }
+
+  sample(s, t, dt) {
+    const wants = ZONE_KINDS.some((kind) => willSurvey(s, kind));
+    const sheds = ZONE_KINDS.some((kind) => willRelease(s, kind));
+    const trades = willTransfer(s) !== null;
+    if (wants) {
+      this.open.survey += dt;
+      if (this.first.survey === null) this.first.survey = t;
+    }
+    if (sheds) {
+      this.open.release += dt;
+      if (this.first.release === null) this.first.release = t;
+    }
+    if (trades) {
+      this.open.transfer += dt;
+      if (this.first.transfer === null) this.first.transfer = t;
+    }
+
+    const now = SurveyTracker.frontier(s);
+    if (s.districts !== this.districts) {
+      this.districts = s.districts;
+      this.prev = now;
+      return;
+    }
+    for (let i = 0; i < 3; i++) {
+      const by = now[i] - this.prev[i];
+      if (by > 0) this.moved.in += by;
+      else if (by < 0) this.moved.out -= by;
+    }
+    this.prev = now;
+  }
+}
+
 function run(policy) {
   const game = new Game(createState(0));
   const pins = { R: new PinTracker(), C: new PinTracker(), I: new PinTracker() };
+  const surveyor = new SurveyTracker(game.state);
   const firsts = { level: null, top: null, annex: null, service: null, hall: null };
   const happy = {};
   const share = {};
@@ -266,6 +334,7 @@ function run(policy) {
     pins.R.sample(s.demandR, STEP);
     pins.C.sample(s.demandC, STEP);
     pins.I.sample(s.demandI, STEP);
+    surveyor.sample(s, t, STEP);
     if (firsts.level === null && s.homeLevels[0] < cohortTotal(s.homeLevels)) firsts.level = t;
     if (firsts.top === null && s.homeLevels[LEVEL_CAPACITY.length - 1] > 0) firsts.top = t;
     if (firsts.annex === null && s.districts > 1) firsts.annex = t;
@@ -287,7 +356,7 @@ function run(policy) {
       opening.shopsAt = s.shops;
     }
   }
-  return { game, pins, firsts, happy, share, opening, peakSurcharge };
+  return { game, pins, surveyor, firsts, happy, share, opening, peakSurcharge };
 }
 
 /**
@@ -323,7 +392,7 @@ function monotonic() {
 console.log(`${HOURS}h simulated, ${STEP}s sample step\n`);
 
 for (const [name, policy] of POLICIES) {
-  const { game, pins, firsts, happy, share, opening, peakSurcharge } = run(policy);
+  const { game, pins, surveyor, firsts, happy, share, opening, peakSurcharge } = run(policy);
   const s = game.state;
   console.log(`policy: ${name}`);
   console.log(
@@ -350,6 +419,19 @@ for (const [name, policy] of POLICIES) {
     `  first level-up: ${fmtTime(firsts.level)}   first top level: ${fmtTime(firsts.top)}   ` +
       `first annex: ${fmtTime(firsts.annex)}   first service: ${fmtTime(firsts.service)}   ` +
       `city hall: ${fmtTime(firsts.hall)}`,
+  );
+  const gate = (name, key) =>
+    `${name} ${fmtTime(surveyor.first[key])} (open ${(surveyor.open[key] / 60).toFixed(0)}m)`;
+  const idleGates = surveyor.first.survey === null && surveyor.first.transfer === null;
+  console.log(
+    `  surveyor gates: ${gate('survey', 'survey')}   ${gate('release', 'release')}   ` +
+      `${gate('transfer', 'transfer')}` +
+      (idleGates ? '   <- no gate ever opened' : ''),
+  );
+  console.log(
+    `  parcels moved:  ${surveyor.moved.in} in / ${surveyor.moved.out} out on the frontier, ` +
+      `zoning R ${JSON.stringify([...s.surveyedR])} C ${JSON.stringify([...s.surveyedC])} ` +
+      `I ${JSON.stringify([...s.surveyedI])} (opens ${JSON.stringify(openZoning(0))})`,
   );
   console.log(
     `  happiness:      1h ${((happy[3600] ?? 0) * 100).toFixed(0)}%  ` +
