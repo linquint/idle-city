@@ -14,7 +14,9 @@ import {
   SERVICES,
   TAX_STEPS,
   TICK_RATE,
+  type Landmark,
   type Service,
+  type Terminal,
 } from './config.ts';
 import {
   annexCost,
@@ -25,15 +27,20 @@ import {
   canBuildIndustry,
   canBuildPark,
   canBuildService,
+  canBuildEstate,
+  canBuildHighway,
   canBuildShop,
+  canBuildTerminal,
   canMergeParcel,
   civicBuildings,
   clampDemand,
   demandStep,
   demandTargets,
   educationCoverage,
+  estateCost,
   happinessStep,
   happinessTarget,
+  highwayCost,
   homeCost,
   ignitionRate,
   income,
@@ -51,11 +58,13 @@ import {
   occupancyStep,
   occupancyTarget,
   parkCost,
+  canBuildLandmark,
+  landmarkCost,
   promoteRate,
   recoverRate,
   abandonRate,
   recreationCoverage,
-  residents,
+  housingPlots,
   resolvesAt,
   standingOf,
   cohortTotal,
@@ -66,6 +75,7 @@ import {
   shopCost,
   staffAfterBuild,
   staffStep,
+  terminalCost,
   willAutoAnnex,
   wouldBurnOut,
   ZONE_KINDS,
@@ -511,10 +521,11 @@ export class Game {
     s.demandR = clampDemand(s.demandR + (target.r - s.demandR) * k);
     s.demandC = clampDemand(s.demandC + (target.c - s.demandC) * k);
     s.demandI = clampDemand(s.demandI + (target.i - s.demandI) * k);
-    // The happiness ceiling is a hard constraint, not another target: a rezone
-    // that doubles the population halves coverage under the city's feet, and
-    // residential demand has to be under the new ceiling that same tick rather
-    // than easing down through a discount it is no longer entitled to.
+    // The happiness ceiling is a hard constraint, not another target: annexing
+    // land stretches the same services across more of it and coverage falls
+    // under the city's feet, and residential demand has to be under the new
+    // ceiling that same tick rather than easing down through a discount it is
+    // no longer entitled to.
     //
     // Against happiness, not against `target.r` — `target.r` is already
     // capped by it, and clamping to the target would snap the signal onto its
@@ -797,6 +808,66 @@ export class Game {
     return true;
   }
 
+  /**
+   * A landmark takes one of the squares reserved for its size and pays nothing
+   * back directly. What it buys is the mood of the housing around it — see
+   * `landmarkCoverage`, which resolves "around it" against the layout rather
+   * than storing anything per building.
+   */
+  buildLandmark(landmark: Landmark): boolean {
+    const s = this.inner;
+    if (!canBuildLandmark(s, landmark)) return false;
+    s.cash -= landmarkCost(s, landmark);
+    if (landmark.key === 'museum') s.museums++;
+    else s.stadiums++;
+    return true;
+  }
+
+  /**
+   * A terminal takes one of the berths the city's coastal districts carry.
+   *
+   * The two halves pay back in different currencies and neither is rent: a
+   * cruise terminal lands visitors who spend, scaled by how much they enjoyed
+   * it, and a cargo terminal lifts the export tap industrial demand is drawn
+   * against. See TERMINALS.
+   */
+  buildTerminal(terminal: Terminal): boolean {
+    const s = this.inner;
+    if (!canBuildTerminal(s, terminal)) return false;
+    s.cash -= terminalCost(s, terminal);
+    if (terminal.key === 'cruise') s.cruiseTerminals++;
+    else s.cargoTerminals++;
+    return true;
+  }
+
+  /**
+   * The road out of town. Bought once, and what it buys is the right to build
+   * on land the city does not own — see HIGHWAY_MIN_DISTRICTS.
+   */
+  buildHighway(): boolean {
+    const s = this.inner;
+    if (!canBuildHighway(s)) return false;
+    s.cash -= highwayCost();
+    s.highway = true;
+    return true;
+  }
+
+  /**
+   * One parcel in the band beyond the city edge.
+   *
+   * Industry, and counted as industry everywhere it matters — jobs, goods and
+   * the income multiplier — but never as *land*, because the city does not own
+   * the ground it stands on. The in-district industrial plots are untouched by
+   * this and stay exactly where they are.
+   */
+  buildEstate(): boolean {
+    const s = this.inner;
+    if (!canBuildEstate(s)) return false;
+    s.cash -= estateCost(s);
+    s.estates++;
+    return true;
+  }
+
   /** Civic buildings take a 2x2 site and pay nothing back directly. */
   buildService(service: Service): boolean {
     const s = this.inner;
@@ -965,7 +1036,11 @@ export class Game {
         });
       }
       for (const service of SERVICES) {
-        if (residents(s) <= 0 || serviceCount(s, service.key) >= serviceNeeded(s, service)) continue;
+        // Housing land rather than residents, because that is what a service is
+        // now short of. The two only differ for a city that has built houses
+        // nobody is in, which is exactly the city that should still be allowed
+        // to buy the hospital that would bring them back.
+        if (housingPlots(s) <= 0 || serviceCount(s, service.key) >= serviceNeeded(s, service)) continue;
         if (!canBuildService(s, service)) continue;
         shortfalls.push({
           cost: serviceCost(s, service),

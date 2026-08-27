@@ -57,12 +57,19 @@ multiplies one per-district constant by the district count, and it has to be
 true. `tools/citygen.test.mjs` guards all of it, and `npm run citygen:calibrate`
 prints the distribution the target came from.
 
-Only the 72 of those 90 plots that front a street are ever for sale; the rest is
-the interior of a deep block, and `civicSites` claims most of it for the 2x2
-quads hospitals, police and fire stations stand on. That leaves 19 housing, 28
-commercial and 11 industrial plots a district — and because the road-adjacent
-R/I split is *not* seed-invariant, `districtPlanAt` rejection-samples the
-district seed a second time until it is. Same trick, one level up.
+Only the 108 of those 144 plots that front a street could ever be for sale, and
+not all of them are: two 3x3 squares go to the university and a landmark, and
+`civicSites` then claims every 2x2 it can find — six for civic buildings, one
+for a smaller landmark, and two left deliberately empty. That leaves 24 housing,
+45 commercial and 13 industrial plots a district, plus eight interior courtyard
+plots of which four carry parks. Because the road-adjacent R/I split is *not*
+seed-invariant, `districtPlanAt` rejection-samples the district seed a second
+time until it is. Same trick, one level up.
+
+The commercial count is invariant for a different reason: `zoneBlocks` lays
+shops along block rings and a ring *is* the frontage, so it is 45 at this span
+at 100% of seeds. Widening the district is therefore never additive — it moves
+commercial capacity, and everything priced against it has to move too.
 
 **Deterministic placement.** The save says `{ homes: 412 }`, never 412
 positions. Which plot the 412th home stands on is a pure function of its index
@@ -70,17 +77,37 @@ and a seed, so the same save renders the same city on every device — and a
 building placed in district 1 does not move when district 20 is annexed.
 `test/layout.test.ts` guards exactly that.
 
-**Tier replacement.** Rezoning swaps houses for apartments for towers for
-arcologies. A purchase changes *what* stands on a plot, not how many plots
-exist — which is how an exponential economy stays inside a world you can
-actually draw. Expansion is the second axis: annexing a district adds land,
-plots, and a permanent civic bonus.
+**Levels, not new plots.** A building climbs five rungs — houses, apartments,
+towers, arcologies, megastructures — and a promotion changes *what* stands on a
+plot rather than how many plots exist, which is how an exponential economy stays
+inside a world you can actually draw. Commerce and industry climb the same
+rungs. Expansion is the second axis: annexing a district adds land, plots, and a
+permanent civic bonus.
+
+**Landmarks are an area of effect without per-building state.** A museum (2x2)
+or a stadium (3x3) covers the housing plots inside its reach, and the share of
+the city's housing land under at least one landmark is a single scalar that
+happiness adds as a modifier — the same way the tax rate and free transport do,
+so the four happiness weights still sum to exactly 1. The obvious
+implementation, a modifier per building, would mean per-instance state and a
+save that grows with the city; the covered share is a pure function of four
+counts and the seed. It is memoised against those counts, because
+`happinessTarget` runs ten times a second.
+
+**Style is a hash, not a field.** Each zone has three styles at every level — 45
+looks in all — and a style is a parameter set rather than a mesh: proportions, a
+colour band, how many lit window bands, and which of the shared unit-geometry
+detail parts it wears. Which one a building gets is `hash(slot, SEED)`, so it is
+stable forever, identical on every device, and nowhere in the save.
 
 ### Rendering notes
 
-The city is a handful of `InstancedMesh` draw calls — one per building tier,
-plus roads, kerbs and land tiles — so a city of four thousand buildings costs
-about the same as a city of forty.
+The city is a handful of `InstancedMesh` draw calls — 15 bodies, one per (zone,
+level), and 9 shared detail parts, plus roads, kerbs and land tiles — so a city
+of four thousand buildings costs about the same as a city of forty. The 24 is a
+budget rather than an accident, and `test/skyline.test.ts` asserts it: the naive
+version of the same variety is 45 draw calls for what is fundamentally the same
+box.
 
 - `GrowableInstancedMesh` reallocates and copies instance buffers when the city
   outgrows them, doubling capacity so it stays amortised O(1) per instance.
@@ -167,13 +194,22 @@ with no hospital watches its residential bar flatline however many jobs it has
 going spare, and then stops growing entirely. That is the tutorial, and it has
 no text.
 
+Coverage is measured against **housing plots**, not residents. That is the one
+denominator that survives the level ladder: residents per plot run from 4 to 300
+as buildings climb, and the civic land they stand on is fixed at six 2x2 sites
+a district — so a per-resident measure meant need scaled with density while
+supply scaled with land, and a maxed-out city read 34% happiness at every size.
+Plots are also merge-invariant (a pair of houses that becomes one tower still
+holds two plots) and occupancy-invariant (a boarded-up house still holds its
+land), so coverage answers "how much of the city is served" and nothing else.
+
 Three rules keep it from being either free or punishing. A new building ramps
-its staffing in over ninety seconds rather than covering anybody the moment its
-roof goes on. A build gate of `floor(residents / capacity) + 1` means you may
+its staffing in over ninety seconds rather than covering anything the moment its
+roof goes on. A build gate of `floor(housingPlots / plots) + 1` means you may
 always be one ahead of need and never five, so early cash cannot be dumped into
 permanent coverage. And an empty city reads as fully covered rather than fully
-neglected — coverage is the share of residents a service fails, and it fails
-nobody when there is nobody, which is what stops the housing gate deadlocking
+neglected — coverage is the share of the housing a service fails, and it fails
+nothing when nothing is built, which is what stops the housing gate deadlocking
 the opening.
 
 Each stands on a 2x2 site reserved before the housing list is drawn, and the

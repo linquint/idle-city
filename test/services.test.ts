@@ -4,8 +4,11 @@ import {
   HAPPINESS_FLOOR,
   CIVIC_SERVICES,
   HAPPINESS_MIN_BUILD,
+  HAPPINESS_SERVICES,
   LEVEL_CAPACITY,
-  LEVEL_HOUSING,
+  LEVEL_EDUCATION,
+  LEVELS,
+  MAX_DISTRICTS,
   SERVICES,
 } from '../src/sim/config';
 import {
@@ -15,6 +18,7 @@ import {
   covered,
   coverage,
   demandTargets,
+  educationCoverage,
   happinessTarget,
   homeBlocker,
   income,
@@ -22,6 +26,9 @@ import {
   residents,
   industryCapacity,
   homeCapacity,
+  housingPlots,
+  parkCapacity,
+  recreationCoverage,
   serviceAllowed,
   serviceCount,
   shopCapacity,
@@ -29,9 +36,9 @@ import {
   staffAfterBuild,
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
-import { CityLayout } from '../src/sim/layout';
+import { BUILDABLE_RESIDENTIAL_PER_DISTRICT, CityLayout } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { built, housed } from './levels';
+import { built, housed, housedOn } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -75,32 +82,58 @@ describe('coverage', () => {
   });
 
   it('never exceeds 1, and never exceeds what the buildings can reach', () => {
-    for (const homes of [1, 4, 12, 19]) {
-      for (const level of [0, 1, 2, 3]) {
+    for (const plots of [2, 4, 12, 24]) {
+      for (let level = 0; level < LEVELS; level++) {
         for (const built of [0, 1, 3, 40]) {
           for (const staff of [0, 0.37, 1]) {
             const s = state({
-              ...housed(homes, level),
+              ...housedOn(plots, level),
               hospitals: built,
               hospitalStaff: staff,
             });
-            const people = residents(s);
-            expect(people).toBeGreaterThan(0);
+            const land = housingPlots(s);
+            expect(land).toBeGreaterThan(0);
             const reach = coverage(s, hospital);
             expect(reach).toBeLessThanOrEqual(1);
-            expect(reach).toBeLessThanOrEqual((built * hospital.capacity) / people + 1e-12);
-            expect(reach).toBeCloseTo(Math.min(1, covered(s, hospital) / people), 12);
+            expect(reach).toBeLessThanOrEqual((built * hospital.plots) / land + 1e-12);
+            expect(reach).toBeCloseTo(Math.min(1, covered(s, hospital) / land), 12);
           }
         }
       }
     }
   });
 
-  it('goes short again when the city climbs under it', () => {
-    // A district's four parks cover nineteen homes outright, so this is a city
-    // that has everything: 1 is reachable only with the fourth term too.
-    const before = state({ ...housed(19), parks: 4, ...staffed() });
-    const after = state({ ...housed(19, 3), parks: 4, ...staffed() });
+  /**
+   * The regression test for the ceiling Part 0 removed, and the reason the
+   * denominator is land. Before it, a maxed-out city read 34% happiness at
+   * every size — residents per plot climb 4 -> 300 while the civic sites the
+   * services stand on are fixed at six a district.
+   */
+  it('is untouched by levelling and by merging', () => {
+    for (const plots of [12, 24, 96, 240]) {
+      const staffing = { ...staffed(), schools: 3, universities: 2, depots: 3,
+        schoolStaff: 1, universityStaff: 1, depotStaff: 1, parks: 6 };
+      const flat = state({ ...housedOn(plots, 0), ...staffing });
+      for (let level = 1; level < LEVELS; level++) {
+        const climbed = state({ ...housedOn(plots, level), ...staffing });
+        expect(housingPlots(climbed)).toBe(housingPlots(flat));
+        for (const service of SERVICES) {
+          expect(coverage(climbed, service)).toBe(coverage(flat, service));
+        }
+        expect(recreationCoverage(climbed)).toBe(recreationCoverage(flat));
+        expect(educationCoverage(climbed)).toBe(educationCoverage(flat));
+        expect(happinessTarget(climbed)).toBe(happinessTarget(flat));
+      }
+    }
+  });
+
+  it('goes short again when the city builds out under it', () => {
+    // One hospital reaches exactly 20 plots, and four parks reach 24, so this
+    // is a city that has everything: 1 is reachable only with the fourth term
+    // too. What takes it short again is *land* now, not levels — the same one
+    // hospital over four districts of housing is stretched four ways.
+    const before = state({ ...housedOn(hospital.plots), parks: 4, ...staffed() });
+    const after = state({ ...housedOn(hospital.plots * 4), parks: 4, ...staffed() });
     expect(happinessTarget(before)).toBeCloseTo(1, 12);
     expect(happinessTarget(after)).toBeLessThan(1);
   });
@@ -112,12 +145,82 @@ describe('coverage', () => {
    * lines and no explanation.
    */
   it('names the term holding happiness back', () => {
-    const s = state({ ...housed(19, 3), parks: 4, ...staffed({ police: 3, fire: 4 }) });
+    const s = state({ ...housedOn(240), parks: 4, ...staffed({ police: 3, fire: 4 }) });
     expect(bindingTerm(s).key).toBe('hospital');
     const policed = { ...s, hospitals: 9, police: 0 };
     expect(bindingTerm(policed).key).toBe('police');
     const served = { ...s, hospitals: 9, police: 9, fire: 9, parks: 0 };
     expect(bindingTerm(served).key).toBe('recreation');
+  });
+});
+
+/**
+ * The direct regression test for Part 0.
+ *
+ * The bug it pins: with coverage measured per resident, a city with every
+ * housing plot at the top level and every service built to the cap the land
+ * allows read 25% / 16% / 15% / 15% health coverage at 1 / 4 / 10 / 25
+ * districts, and 35% / 34% / 34% / 34% happiness. The city could not reach 40%
+ * at any size, however it was played, because need scaled with density and
+ * supply scaled with land.
+ */
+describe('the happiness ceiling', () => {
+  /** Every housing plot developed to the top level, every service at its cap. */
+  const maxed = (districts: number): GameState => {
+    const s = state({ ...housedOn(BUILDABLE_RESIDENTIAL_PER_DISTRICT * districts, LEVELS - 1), districts });
+    s.parks = parkCapacity(s);
+    // `serviceAllowed` reads the housing land, which the cohort above has
+    // already fixed, so one pass over the table is enough.
+    for (const service of SERVICES) {
+      const n = serviceAllowed(s, service);
+      if (service.key === 'hospital') { s.hospitals = n; s.hospitalStaff = 1; }
+      if (service.key === 'police') { s.police = n; s.policeStaff = 1; }
+      if (service.key === 'fire') { s.fire = n; s.fireStaff = 1; }
+      if (service.key === 'school') { s.schools = n; s.schoolStaff = 1; }
+      if (service.key === 'transit') { s.depots = n; s.depotStaff = 1; }
+      if (service.key === 'university') { s.universities = n; s.universityStaff = 1; }
+    }
+    return s;
+  };
+
+  it('is reached at every size a city can be', () => {
+    for (const districts of [1, 4, 10, 25]) {
+      const s = maxed(districts);
+      for (const service of HAPPINESS_SERVICES) {
+        expect(coverage(s, service)).toBeGreaterThanOrEqual(0.95);
+      }
+      expect(recreationCoverage(s)).toBeGreaterThanOrEqual(0.95);
+      expect(happinessTarget(s)).toBeGreaterThanOrEqual(0.95);
+    }
+  });
+
+  /**
+   * The floor holds at *every* district count, not just the four in the report.
+   * The site interleave hands the five 2x2 types 2/1/1/1/1 in a one-district
+   * city and evens out from there, so the awkward sizes are the small ones —
+   * which is exactly why police and fire carry more reach per building than the
+   * hospital does. See SERVICES.
+   */
+  it('holds for every district count the map allows', () => {
+    for (let districts = 1; districts <= MAX_DISTRICTS; districts++) {
+      const s = maxed(districts);
+      for (const service of HAPPINESS_SERVICES) {
+        expect(coverage(s, service)).toBeGreaterThanOrEqual(0.95);
+      }
+    }
+  });
+
+  /**
+   * And education clears its top rung, which the old denominator also put out
+   * of reach: 1.2 schools and one university against a district of arcologies
+   * covered 60% of 7,200 residents against LEVEL_EDUCATION's 0.85.
+   */
+  it('leaves the top of the level ladder reachable', () => {
+    for (const districts of [1, 4, 10, 25]) {
+      expect(educationCoverage(maxed(districts))).toBeGreaterThanOrEqual(
+        LEVEL_EDUCATION[LEVELS - 1] ?? 1,
+      );
+    }
   });
 });
 
@@ -169,20 +272,18 @@ describe('the staffing ramp', () => {
     expect(staffAfterBuild(1, 0)).toBe(0);
     expect(staffAfterBuild(0.5, 1)).toBeCloseTo(0.25, 12);
 
-    // Measured in residents *reached* rather than in coverage. Coverage divides
-    // by a population that now moves on its own — occupancy drains an unserved
-    // city while the ramp is running — and `built x staffing x capacity` is the
-    // quantity `staffAfterBuild` is actually a statement about.
+    // Measured in plots *reached* rather than in coverage, because
+    // `built x staffing x plots` is the quantity `staffAfterBuild` is actually
+    // a statement about and coverage caps at 1 on top of it.
     //
-    // Nine districts of arcologies, so that even after occupancy has fallen the
-    // population still entitles the city to a second hospital: `serviceAllowed`
-    // is measured against residents, and one district's worth would drop under
-    // the gate partway through the ramp.
-    const game = at({ ...housed(19 * 9, 3), districts: 9, cash: 1e12 });
+    // Nine districts of housing, so the land entitles the city to a second
+    // hospital: `serviceAllowed` is one ahead of what the housing plots need,
+    // and one district's worth would cap the allowance at 2 before the ramp.
+    const game = at({ ...housedOn(24 * 9, 3), districts: 9, cash: 1e12 });
     game.buildService(hospital);
     run(game, CIVIC_RAMP_SECONDS * 8);
     const before = covered(game.state, hospital);
-    expect(before / hospital.capacity).toBeCloseTo(1, 3);
+    expect(before / hospital.plots).toBeCloseTo(1, 3);
 
     expect(game.buildService(hospital)).toBe(true);
     expect(covered(game.state, hospital)).toBeCloseTo(before, 9);
@@ -204,37 +305,42 @@ describe('the build gate', () => {
     }
   });
 
-  it('is never exceeded, at any population or district count', () => {
+  it('is never exceeded, at any housing stock or district count', () => {
     for (const districts of [1, 3, 9]) {
-      for (const level of [0, 1, 2, 3]) {
-        const game = at({ ...housed(19 * districts, level), districts, cash: 1e15 });
+      for (let level = 0; level < LEVELS; level++) {
+        const game = at({ ...housedOn(24 * districts, level), districts, cash: 1e15 });
         for (let i = 0; i < 400; i++) for (const service of SERVICES) game.buildService(service);
         const s = game.state;
         for (const service of SERVICES) {
           const built = serviceCount(s, service.key);
-          expect(built).toBeLessThanOrEqual(Math.floor(residents(s) / service.capacity) + 1);
+          expect(built).toBeLessThanOrEqual(Math.floor(housingPlots(s) / service.plots) + 1);
           expect(built).toBeLessThanOrEqual(siteCapacity(s, service.key));
         }
       }
     }
   });
 
-  it('opens up as the population grows past a capacity', () => {
-    const small = state({ homes: 1, districts: 9 });
+  it('opens up as the housing land fills, and not as the city climbs', () => {
+    const small = state({ ...housedOn(1), districts: 9 });
     expect(serviceAllowed(small, hospital)).toBe(1);
-    const large = state({ ...housed(19, 3), districts: 9 });
-    // An arcology stands on two plots and holds both plots' worth of people.
-    const people = 19 * (LEVEL_HOUSING[3] ?? 0);
-    expect(residents(large)).toBe(people);
+    const large = state({ ...housedOn(24 * 9, LEVELS - 1), districts: 9 });
+    const plots = 24 * 9;
+    expect(housingPlots(large)).toBe(plots);
     // One ahead of need, or the sites the land offers, whichever runs out
     // first. With five types sharing six sites a district it is the land that
     // does, which is the point of the second clamp rather than a bug in it.
     expect(serviceAllowed(large, hospital)).toBe(
-      Math.min(
-        Math.floor(people / hospital.capacity) + 1,
-        siteCapacity(large, hospital.key),
-      ),
+      Math.min(Math.floor(plots / hospital.plots) + 1, siteCapacity(large, hospital.key)),
     );
+    // And the allowance is the same however tall that land is built, which is
+    // the whole of Part 0: it used to climb with the population and promise
+    // buildings the six civic sites a district could never hold.
+    for (let level = 0; level < LEVELS; level++) {
+      const climbed = state({ ...housedOn(plots, level), districts: 9 });
+      for (const service of SERVICES) {
+        expect(serviceAllowed(climbed, service)).toBe(serviceAllowed(large, service));
+      }
+    }
   });
 
   it('never hands out more buildings than there are sites', () => {
@@ -342,15 +448,18 @@ describe('happiness as a gate on housing', () => {
     }
   });
 
-  it('lags rather than snapping when the city climbs under it', () => {
-    const game = at({ ...housed(19), cash: 1e12, ...staffed(), happiness: 1 });
+  it('lags rather than snapping when the city outgrows it', () => {
+    const game = at({ ...housedOn(20), cash: 1e12, ...staffed(), happiness: 1 });
     run(game, 1);
     expect(game.state.happiness).toBeGreaterThan(0.95);
-    // Straight to arcologies, the way a rezone used to do it in one purchase.
-    // Levelling gets there over minutes rather than instantly, so the state is
-    // set directly: what is under test is the happiness lag, not the climb.
-    Object.assign(game.state, housed(19, 3));
-    // The population just went up 75x, so coverage has collapsed under it.
+    // Twelve districts of housing appearing at once, which is what an annex and
+    // a build-out do over minutes. The state is set directly: what is under
+    // test is the happiness lag, not how long the land takes to fill.
+    Object.assign(game.state, housedOn(20 * 12));
+    // The same three buildings are stretched twelve ways, so coverage has
+    // collapsed under them. Levelling no longer does this, and that is the fix
+    // — a city is taken short by the land it takes on, not by succeeding on the
+    // land it has.
     expect(happinessTarget(game.state)).toBeLessThan(0.3);
     run(game, 1);
     // The residents have not noticed yet. That is the whole point of the lag.

@@ -55,7 +55,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 8;
 
 /**
  * The entire game, in a handful of fields.
@@ -162,6 +162,42 @@ export interface GameState {
    * building that earns rather than gates — see SERVICES.
    */
   depots: number;
+  /**
+   * Landmarks, on the squares FRONTAGE_TARGET reserves for them: one 2x2 and
+   * one 3x3 a district.
+   *
+   * Two counts and nothing else, which is the whole of the area-of-effect. A
+   * landmark lifts the mood of the housing around it, and "around it" is
+   * resolved against the *layout* rather than stored — the i-th museum stands on
+   * the i-th museum site, so which plots it reaches is a pure function of the
+   * count and the seed. Anything per-building here would mean per-instance
+   * state and a save that grows with the city. See `landmarkCoverage`.
+   */
+  museums: number;
+  stadiums: number;
+  /**
+   * Terminals on the city's waterfront: one berth of each per coastal district.
+   *
+   * Two counts, in the same shape as the landmarks above and for the same
+   * reason — the i-th terminal stands at the i-th coastal district's quay, so
+   * where a port *is* falls out of the count and the seed. What they buy is not
+   * symmetrical: a cruise terminal earns, scaled by happiness, and a cargo
+   * terminal lifts the export tap that industrial demand is drawn against.
+   */
+  cruiseTerminals: number;
+  cargoTerminals: number;
+  /**
+   * The road out of town, and the works standing along it.
+   *
+   * A boolean and a count, and the boolean is the progression gate: the highway
+   * is bought once and the estates are what it is for. Their positions come out
+   * of the count and the seed exactly as everything else's do — see
+   * `estateCell` — and they are the first thing the city builds on land it does
+   * not own, which is why they are counted apart from every plot total in
+   * `economy.ts` rather than folded into one.
+   */
+  highway: boolean;
+  estates: number;
   /**
    * Share of each type's buildings that are actually staffed, in [0, 1].
    *
@@ -275,6 +311,12 @@ export function createState(now = Date.now()): GameState {
     driftC: 0,
     driftI: 0,
     parks: 0,
+    museums: 0,
+    stadiums: 0,
+    cruiseTerminals: 0,
+    cargoTerminals: 0,
+    highway: false,
+    estates: 0,
     hospitals: 0,
     police: 0,
     fire: 0,

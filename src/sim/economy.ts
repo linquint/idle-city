@@ -5,6 +5,7 @@ import {
   AUTO_ANNEX_RESERVE,
   BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
+  CARGO_EXPORT_LIFT,
   CIVIC_RAMP_SECONDS,
   CIVIC_SERVICES,
   ABANDON_SECONDS,
@@ -12,6 +13,10 @@ import {
   DEMAND_SCALE,
   DEMAND_TAU,
   DISTRICT_BONUS,
+  ESTATE_BASE,
+  ESTATE_GROWTH,
+  ESTATE_PLOTS,
+  ESTATE_YIELD,
   EXPORT_BASE,
   EXPORT_PER_DISTRICT,
   EXTINGUISH_MAX,
@@ -24,14 +29,19 @@ import {
   HAPPINESS_FLOOR,
   HAPPINESS_MIN_BUILD,
   HAPPINESS_TAU,
+  HIGHWAY_COST,
+  HIGHWAY_MIN_DISTRICTS,
   HOME_BASE,
   HOME_GROWTH,
-  HOMES_PER_PARK,
+  INDUSTRIAL_OUTPUT,
   INDUSTRY_BASE,
   INDUSTRY_BONUS,
   INDUSTRY_GROWTH,
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
+  JOBS_PER_ESTATE_PLOT,
+  LANDMARKS,
+  LANDMARK_MOOD,
   LEVEL_EDUCATION,
   LEVEL_FOOTPRINT,
   LEVEL_HOUSING,
@@ -49,6 +59,7 @@ import {
   OCCUPANCY_TAU,
   PARK_BASE,
   PARK_GROWTH,
+  PLOTS_PER_PARK,
   PRICE_DISCOUNT_MAX,
   PRICE_SURCHARGE_MAX,
   RECOVER_SPREAD_SECONDS,
@@ -65,18 +76,28 @@ import {
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
   TAX_STEPS,
+  TERMINALS,
   TRANSIT_LABOUR_DRAW,
   TRANSIT_WORKFORCE,
+  VISITOR_SPEND,
+  VISITORS_PER_RESIDENT,
   WORKING_SHARE,
+  type Landmark,
   type Service,
+  type Terminal,
 } from './config.ts';
 import { ZONE, type Zone } from './citygen.ts';
+import { ESTATE_CELLS } from './estates.ts';
 import {
   BUILDABLE_COMMERCIAL_PER_DISTRICT,
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
+  LANDMARK_LARGE_SITES_PER_DISTRICT,
+  LANDMARK_SMALL_SITES_PER_DISTRICT,
+  coastalDistricts,
+  landmarkPlotsCovered,
   parcelBook,
   UNIVERSITY_SITES_PER_DISTRICT,
 } from './layout.ts';
@@ -351,19 +372,20 @@ export const promotable = (s: GameState, kind: ZoneKind): number => {
 };
 
 /**
- * Share of the city's residents within reach of education, in [0, 1].
+ * Share of the city's housing land within reach of education, in [0, 1].
  *
  * Schools and universities pooled, because a level's requirement is a statement
  * about how educated the city is rather than about which building did it. Same
- * convention as the service coverages, and the same denominator: the population
- * the housing is built for, so it does not jump when a city empties out.
+ * convention as the service coverages, and the same denominator: the housing
+ * plots the education stands among, so it does not move when the city levels,
+ * merges or empties out. See `coverage`.
  */
 export const educationCoverage = (s: GameState): number => {
-  const people = population(s);
-  if (people <= 0) return 1;
+  const plots = housingPlots(s);
+  if (plots <= 0) return 1;
   let reached = 0;
   for (const service of EDUCATION_SERVICES) reached += covered(s, service);
-  return Math.min(1, reached / people);
+  return Math.min(1, reached / plots);
 };
 
 /** Buildings a zone promotes per second, with every gate open. */
@@ -461,10 +483,17 @@ export const plotCapacity = (s: GameState): number =>
  *
  * Parks deliberately do not, on either side of the ratio. Courtyard land was
  * never for sale, so counting it would silently re-scale a gate that was
- * measured against the 65 sellable plots of a district — a tier that reached
- * 72.3% build-out would drop to 68.1% and fall under ANNEX_MIN_OCCUPANCY the
- * moment parks existed, gating a player out of annexing for not buying an
- * amenity. Development is what the city sells; a park is what it keeps.
+ * measured against the sellable plots of a district — a tier that reached 72.3%
+ * build-out would drop to 68.1% and fall under ANNEX_MIN_OCCUPANCY the moment
+ * parks existed, gating a player out of annexing for not buying an amenity.
+ * Development is what the city sells; a park is what it keeps.
+ *
+ * Landmarks are out for the same reason and it is worth stating, because unlike
+ * a park a landmark is bought rather than kept and a reader will expect it here.
+ * Adding their two squares a district to `plotCapacity` would drop every
+ * existing city's build-out by about 2% and move the annexation gate under
+ * players who have never opened the tab. They are an amenity that happens to be
+ * expensive, not land the city is selling.
  */
 export const plotsUsed = (s: GameState): number =>
   plotsOf(s, 'home') + plotsOf(s, 'shop') + plotsOf(s, 'industry') + civicBuildings(s);
@@ -507,19 +536,49 @@ export const activeDeveloped = (s: GameState): number =>
 export const residents = (s: GameState): number => population(s) * s.occupancyR;
 
 /**
+ * The housing land the city has actually built on, in plots.
+ *
+ * The denominator every coverage uses, and the whole of Part 0's repair. It has
+ * three properties in a row that no count of *people* has:
+ *
+ *   - level-invariant. A plot is a plot whether a bungalow or an arcology
+ *     stands on it, so promoting the whole city leaves every coverage exactly
+ *     where it was. Residents per plot run 4 -> 300, a 75x swing, against civic
+ *     land that is fixed at six 2x2 sites a district — so a per-resident
+ *     denominator meant need scaled with density and supply scaled with land,
+ *     and the gap opened as the player succeeded. Measured before the fix: a
+ *     maxed-out city reached 34% happiness at 1 district and 34% at 25, and
+ *     could never reach 40% at any size;
+ *   - merge-invariant. `plotsOf` counts a merged parcel twice, so the pair of
+ *     houses that became one tower still holds two plots. A denominator in
+ *     *buildings* would halve when a district merged and coverage would jump
+ *     for free — which is exactly what recreation used to do, see
+ *     PLOTS_PER_PARK;
+ *   - occupancy-invariant. A boarded-up house still holds its land, so an
+ *     emptying city does not read as a covered one. Against `residents` that
+ *     loop oscillates indefinitely: nobody left to fail sends happiness up,
+ *     which refills the houses, which collapses coverage again.
+ *
+ * Developed plots rather than the 24 a district *owns*, and that is the one
+ * judgement call in the formula. The land reading breaks the opening in two
+ * places: a fresh city would own 24 plots before it built anything, so every
+ * coverage would read 0 rather than 1, happiness would sit under
+ * HAPPINESS_MIN_BUILD and the housing gate would refuse to open the first house
+ * that could earn the hospital that lifts it — the deadlock `coverage` has
+ * always guarded against. And `serviceAllowed`'s "one ahead of need" guard
+ * would be dead on arrival: a one-district city could open both its hospitals
+ * before a single resident existed. Against developed land both properties
+ * survive, and a built-out city has developed exactly the 24 a district owns —
+ * so the ceiling this is measured at is unchanged either way.
+ */
+export const housingPlots = (s: GameState): number => plotsOf(s, 'home');
+
+/**
  * The population the city's housing is *built for*, empty or not.
  *
- * The denominator every coverage uses, and it has to be this one rather than
- * `residents`. Coverage measured against who is actually in the houses makes an
- * emptied city read as fully covered — there is nobody left for a hospital to
- * fail — which sends happiness back up, which refills the houses, which
- * collapses coverage again. Measured, that loop oscillates indefinitely and
- * never settles anywhere a player can act on.
- *
- * Against capacity it is stable and it is also the truer statement: a service
- * is sized to the housing stock it stands among, not to how full it happens to
- * be this minute. A city with no housing at all still reads as covered, so the
- * opening — where there is genuinely nobody to fail — is unchanged.
+ * No longer a coverage denominator — see `housingPlots` — but still what
+ * `residents` is a share of, and still the honest statement of what the housing
+ * stock holds when it is full.
  */
 export const population = (s: GameState): number => {
   let people = 0;
@@ -575,19 +634,27 @@ export const siteCapacity = (s: GameState, key: ServiceKey): number => {
  * a maxed happiness bar the city has not earned and removes the only pressure
  * services are supposed to apply. The land supply caps it as well, because a
  * building with no site has nowhere to stand.
+ *
+ * Need is measured in housing plots now rather than in residents, so the
+ * allowance stops climbing when the city climbs — which is the point: the sites
+ * were never going to appear, and an allowance that promised buildings the land
+ * could not hold was only ever describing the ceiling that Part 0 removed.
  */
 export const serviceAllowed = (s: GameState, service: Service): number =>
   Math.min(
-    Math.floor(population(s) / service.capacity) + 1,
+    Math.floor(housingPlots(s) / service.plots) + 1,
     siteCapacity(s, service.key),
   );
 
-/** How many of a service the current population would need for full cover. */
+/** How many of a service the city's housing land would need for full cover. */
 export const serviceNeeded = (s: GameState, service: Service): number =>
-  Math.ceil(population(s) / service.capacity);
+  Math.ceil(housingPlots(s) / service.plots);
 
 /**
- * Residents a service actually reaches, staffing included.
+ * Housing plots a service actually reaches, staffing included.
+ *
+ * Plots rather than residents, and the rename of `Service.capacity` to
+ * `Service.plots` is there so a caller cannot read this as people by accident.
  *
  * One special case, and it is the free-transport policy: the same depots reach
  * a third further when nobody has to pay to board, because people ride when it
@@ -596,7 +663,7 @@ export const serviceNeeded = (s: GameState, service: Service): number =>
  * are taken from all say the same number.
  */
 export const covered = (s: GameState, service: Service): number => {
-  const reach = serviceCount(s, service.key) * staffing(s, service.key) * service.capacity;
+  const reach = serviceCount(s, service.key) * staffing(s, service.key) * service.plots;
   return service.key === 'transit' && s.freeTransport ? reach * (1 + FREE_TRANSPORT_REACH) : reach;
 };
 
@@ -608,15 +675,18 @@ export const transitCoverage = (s: GameState): number =>
   TRANSIT ? coverage(s, TRANSIT) : 0;
 
 /**
- * People actually on the buses: the network's reach, capped at who lives there.
+ * People actually on the buses: the residents living on the land the network
+ * reaches.
  *
- * The one coverage measured against `residents` rather than `population`. Every
+ * The one place a coverage is turned back into people, and it has to be. Every
  * other service is sized to the housing stock it stands among whether or not it
- * is full — see `population` — but a fare is paid by somebody on a bus, and an
- * empty district's depot carries nobody.
+ * is full — see `housingPlots` — but a fare is paid by somebody on a bus, and an
+ * empty district's depot carries nobody. Multiplying `residents` by the covered
+ * share says exactly that, and at full coverage it is still `residents`, which
+ * is what FARE_PER_RIDER was calibrated against.
  */
 export const riders = (s: GameState): number =>
-  TRANSIT ? Math.min(covered(s, TRANSIT), residents(s)) : 0;
+  TRANSIT ? residents(s) * transitCoverage(s) : 0;
 
 /**
  * Fare income, per second, before tax.
@@ -631,20 +701,20 @@ export const fareIncome = (s: GameState): number =>
   s.freeTransport ? 0 : riders(s) * FARE_PER_RIDER;
 
 /**
- * Share of the population a service reaches, capped at everybody.
+ * Share of the city's housing land a service reaches, capped at all of it.
  *
  * A city with no housing reads as fully covered rather than as fully
- * neglected: this is the share of the population a service fails, and it fails
- * nobody when there is nowhere to live. Without that the game deadlocks on its
+ * neglected: this is the share of the housing a service fails, and it fails
+ * nothing when nothing has been built. Without that the game deadlocks on its
  * own tutorial — happiness would be 0 before the first house, the housing gate
  * would refuse to open it, and there would be no income to buy the hospital
- * that lifts the gate. See `population` for why the denominator is the housing
- * stock rather than the people currently in it.
+ * that lifts the gate. See `housingPlots` for why the denominator is the land
+ * the city has developed rather than the people standing on it.
  */
 export const coverage = (s: GameState, service: Service): number => {
-  const people = population(s);
-  if (people <= 0) return 1;
-  return Math.min(1, covered(s, service) / people);
+  const plots = housingPlots(s);
+  if (plots <= 0) return 1;
+  return Math.min(1, covered(s, service) / plots);
 };
 
 export interface ServiceReading {
@@ -663,25 +733,217 @@ export const serviceReadings = (s: GameState): readonly ServiceReading[] =>
     built: serviceCount(s, service.key),
     allowed: serviceAllowed(s, service),
     needed: serviceNeeded(s, service),
-    covered: Math.min(covered(s, service), population(s)),
+    covered: Math.min(covered(s, service), housingPlots(s)),
     coverage: coverage(s, service),
   }));
 
 /**
- * Share of the city's homes within reach of a park, capped at all of them.
+ * Share of the city's housing land within reach of a park, capped at all of it.
  *
- * Measured against homes rather than residents, which is the whole reason this
- * term is worth having. Park land is fixed at 4 plots to 19 housing plots a
+ * Measured against land rather than residents, which is the whole reason this
+ * term is worth having — and is the term the three service coverages were
+ * rebuilt to copy in Part 0. Park land is fixed at 4 plots to 24 housing plots a
  * district and a rezone adds none of it while multiplying residents by up to
- * 75x — so a per-resident denominator would be satisfied at tier 0 by two parks
- * and unreachable at tier 3 by every park in the city. Per home it means the
- * same thing at every tier. An empty city reads as covered for the same reason
- * an unserved one does: there is nobody it fails.
+ * 75x, so a per-resident denominator would be satisfied at level 0 by two parks
+ * and unreachable at level 3 by every park in the city.
+ *
+ * Against *plots* rather than the homes it used to count, so it now shares one
+ * denominator with everything else. Per home the term was level-invariant but
+ * not merge-invariant: the same land read 83% as 24 detached houses and 100% as
+ * the 12 towers they merged into. An empty city reads as covered for the same
+ * reason an unserved one does: there is nothing it fails.
  */
 export const recreationCoverage = (s: GameState): number => {
-  if (s.homes <= 0) return 1;
-  return Math.min(1, (s.parks * HOMES_PER_PARK) / s.homes);
+  const plots = housingPlots(s);
+  if (plots <= 0) return 1;
+  return Math.min(1, (s.parks * PLOTS_PER_PARK) / plots);
 };
+
+/** How many of a landmark type the city has, through one key. */
+export const landmarkCount = (s: GameState, key: Landmark['key']): number =>
+  key === 'museum' ? s.museums : s.stadiums;
+
+/** Landmark sites the city owns of one type. One of each per district. */
+export const landmarkSiteCapacity = (s: GameState, key: Landmark['key']): number =>
+  s.districts *
+  (key === 'museum' ? LANDMARK_SMALL_SITES_PER_DISTRICT : LANDMARK_LARGE_SITES_PER_DISTRICT);
+
+/**
+ * Share of the city's housing land within reach of a landmark, in [0, 1].
+ *
+ * The game's first area-of-effect, and it is a *scalar* rather than a per-
+ * building modifier. That is the whole design decision — see LANDMARKS. A
+ * landmark covers the housing plots inside its reach; this is the share of the
+ * developed housing plots under at least one of them; happiness gains that
+ * share times LANDMARK_MOOD.
+ *
+ * Zero rather than one for a city with no housing, which is the opposite of
+ * every service coverage and is right for the same reason they are one: a
+ * service coverage is the share it *fails* and it fails nothing when nothing is
+ * built, where this is a bonus and an empty city has not earned it.
+ *
+ * The geometry lives in `landmarkPlotsCovered`, which memoises against the
+ * counts it depends on — this is read from `happinessTarget` ten times a second
+ * and must not walk a thousand plots to answer.
+ */
+export const landmarkCoverage = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 0;
+  return Math.min(1, landmarkPlotsCovered(s.museums, s.stadiums, plots, s.districts) / plots);
+};
+
+export interface LandmarkReading {
+  readonly landmark: Landmark;
+  readonly built: number;
+  readonly allowed: number;
+  readonly cost: number;
+}
+
+/** The whole landmarks block, in one read, for the HUD. */
+export const landmarkReadings = (s: GameState): readonly LandmarkReading[] =>
+  LANDMARKS.map((landmark) => ({
+    landmark,
+    built: landmarkCount(s, landmark.key),
+    allowed: landmarkSiteCapacity(s, landmark.key),
+    cost: landmarkCost(s, landmark),
+  }));
+
+// ---------------------------------------------------------------------- port
+
+/** How many terminals of one kind the city has, through one key. */
+export const terminalCount = (s: GameState, key: Terminal['key']): number =>
+  key === 'cruise' ? s.cruiseTerminals : s.cargoTerminals;
+
+/**
+ * Berths the city owns: one of each kind per coastal district.
+ *
+ * The land gate, and the only thing bounding a port. Zero until the city
+ * annexes a district with the sea against it, which is what "the port unlocks
+ * on a coastal district" means in counts — see `portDistrict`.
+ */
+export const terminalCapacity = (s: GameState): number => coastalDistricts(s.districts);
+
+/** Whether the city has reached water at all. What the panel is gated on. */
+export const hasCoast = (s: GameState): boolean => terminalCapacity(s) > 0;
+
+/**
+ * Visitors the cruise terminals are landing, per second.
+ *
+ * Happiness is a multiplier here rather than a floor, which is what makes this
+ * different from every other line in the ledger: `incomeMultiplier` bottoms out
+ * at HAPPINESS_FLOOR because people still pay rent in a city they dislike, and
+ * nobody at all sails to one for a holiday.
+ */
+export const visitors = (s: GameState): number =>
+  s.cruiseTerminals * residents(s) * VISITORS_PER_RESIDENT * Math.max(0, Math.min(1, s.happiness));
+
+/** What those visitors spend, per second, before tax. */
+export const cruiseIncome = (s: GameState): number => visitors(s) * VISITOR_SPEND;
+
+export interface TerminalReading {
+  readonly terminal: Terminal;
+  readonly built: number;
+  readonly allowed: number;
+  readonly cost: number;
+}
+
+/** The whole port block, in one read, for the HUD. */
+export const terminalReadings = (s: GameState): readonly TerminalReading[] =>
+  TERMINALS.map((terminal) => ({
+    terminal,
+    built: terminalCount(s, terminal.key),
+    allowed: terminalCapacity(s),
+    cost: terminalCost(s, terminal),
+  }));
+
+// ------------------------------------------------------------------ estates
+
+/**
+ * Whether the city has reached the size at which it may build outside itself.
+ *
+ * A count rather than a share, because there is no land to measure — see
+ * HIGHWAY_MIN_DISTRICTS. Separate from `canBuildHighway` so the panel can say
+ * "not yet" and "not enough cash" as two different things.
+ */
+export const highwayAllowed = (s: GameState): boolean =>
+  s.districts >= HIGHWAY_MIN_DISTRICTS;
+
+export const highwayCost = (): number => HIGHWAY_COST;
+
+export const canBuildHighway = (s: GameState): boolean =>
+  !s.highway && highwayAllowed(s) && s.cash >= HIGHWAY_COST;
+
+/**
+ * Parcels the city may take in the band, which is nothing until the road is in.
+ *
+ * Two bounds, and each says something different. The road is the progression
+ * gate; the district count paces the band the way it paces the landmark sites,
+ * so a city that has just built the highway does not find thirty-eight parcels
+ * waiting; and ESTATE_CELLS is the ground itself — the band is a fixed strip
+ * with the water already taken out of it, so it is the one bound that cannot be
+ * bought past.
+ */
+export const estateCapacity = (s: GameState): number =>
+  s.highway ? Math.min(ESTATE_CELLS, s.districts) : 0;
+
+export const estateCost = (s: GameState): number => ESTATE_BASE * ESTATE_GROWTH ** s.estates;
+
+export const canBuildEstate = (s: GameState): boolean =>
+  s.estates < estateCapacity(s) && s.cash >= estateCost(s);
+
+/**
+ * Industrial land the city works outside its own streets, in plots, less the
+ * share standing empty.
+ *
+ * Shares `occupancyI` with the works inside the city rather than integrating an
+ * occupancy of its own. They are the same industry facing the same demand, and
+ * a second lagged signal would be a second thing to save, a second thing to
+ * migrate and a second thing that could disagree with the first for reasons
+ * nobody could see.
+ */
+export const estatePlots = (s: GameState): number => s.estates * ESTATE_PLOTS;
+
+export const estateActive = (s: GameState): number => estatePlots(s) * s.occupancyI;
+
+/**
+ * The mean level weight of an industrial plot inside the city.
+ *
+ * What an estate is built to, and the reason it is not simply worth
+ * ESTATE_YIELD forever: LEVEL_SCALE spans 1 to 600, so a flat weight would make
+ * the estates the whole economy at the bottom of the ladder and a rounding
+ * error at the top. An estate has no level of its own to climb — no education
+ * gate, no merge, no fourth cohort in the save — so it is built to whatever
+ * standard the city's own works are built to. They are the same firms.
+ *
+ * One rather than zero for a city with no industry at all, so the first estate
+ * is worth something to a city that has never zoned a works.
+ */
+export const industryScale = (s: GameState): number => {
+  const plots = cohortFootprint(s.industryLevels);
+  if (plots <= 0) return 1;
+  return Math.max(1, cohortScale(s.industryLevels) / plots);
+};
+
+/** What the estates are worth to the ledger, in level-0 industrial buildings. */
+export const estateEarning = (s: GameState): number =>
+  estateActive(s) * ESTATE_YIELD * industryScale(s);
+
+/** Goods the estates make. Per plot and level-flat, exactly as INDUSTRY_OUTPUT is. */
+export const estateSupply = (s: GameState): number =>
+  estateActive(s) * ESTATE_YIELD * INDUSTRIAL_OUTPUT;
+
+/** Hands the estates need. Fewer per plot than in the city — see JOBS_PER_ESTATE_PLOT. */
+export const estateJobs = (s: GameState): number => estateActive(s) * JOBS_PER_ESTATE_PLOT;
+
+export function highwayBlocker(s: GameState): string | null {
+  if (s.highway) return 'Built';
+  return highwayAllowed(s) ? null : `Needs ${HIGHWAY_MIN_DISTRICTS} districts`;
+}
+
+export function estateBlocker(s: GameState): string | null {
+  if (!s.highway) return 'No highway yet';
+  return s.estates >= estateCapacity(s) ? 'No parcels left' : null;
+}
 
 /**
  * One line of the happiness panel: something the city can be short of, what it
@@ -709,7 +971,7 @@ export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
   })),
   {
     key: 'recreation' as const,
-    coverLabel: 'Parks per home',
+    coverLabel: 'Parks per plot',
     weight: RECREATION_WEIGHT,
     coverage: recreationCoverage(s),
   },
@@ -731,7 +993,15 @@ export const happinessTarget = (s: GameState): number => {
   // than as a fifth weight. The four weights sum to exactly 1 and go on doing
   // so; what a tax rate changes is how the city feels about the coverage it has,
   // which is a different statement from how much that coverage is worth.
-  const policy = taxStep(s).mood + (s.freeTransport ? FREE_TRANSPORT_MOOD : 0);
+  //
+  // Landmarks are the third modifier and are here for exactly that reason. They
+  // are an area-of-effect over housing land, not a service the city is covered
+  // by, and adding them to the weighted sum would have re-opened a calibration
+  // that has held for three cycles. See LANDMARK_MOOD.
+  const policy =
+    taxStep(s).mood +
+    (s.freeTransport ? FREE_TRANSPORT_MOOD : 0) +
+    LANDMARK_MOOD * landmarkCoverage(s);
   return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
 
@@ -886,10 +1156,20 @@ export const isBurning = (s: GameState, kind: ZoneKind, index: number): boolean 
  * cycle turning when every counter is still zero.
  */
 export const exportMarket = (s: GameState): number =>
-  EXPORT_BASE + EXPORT_PER_DISTRICT * (s.districts - 1);
+  (EXPORT_BASE + EXPORT_PER_DISTRICT * (s.districts - 1)) *
+  // The cargo berths lift the tap rather than opening a second one beside it,
+  // so there is still one number the outside world's appetite is made of and
+  // one place to look when industrial demand is wrong. See CARGO_EXPORT_LIFT.
+  (1 + CARGO_EXPORT_LIFT * s.cargoTerminals);
 
 export const jobs = (s: GameState): number =>
-  openOf(s, 'shop', SHOP_JOBS) + openOf(s, 'industry', INDUSTRY_JOBS);
+  openOf(s, 'shop', SHOP_JOBS) +
+  openOf(s, 'industry', INDUSTRY_JOBS) +
+  // The estates employ people too, and they are the one employer the city has
+  // that stands on land it does not own — so they are added here rather than
+  // folded into the industrial cohort, which is what the plot totals and the
+  // annexation gate are counted from.
+  estateJobs(s);
 
 /**
  * The imbalance that counts as "saturated", at the city's current level mix.
@@ -971,7 +1251,8 @@ export const demandTargets = (s: GameState): DemandTargets => {
     i: clampDemand(
       (openOf(s, 'shop', SHOP_SUPPLY) +
         exportMarket(s) -
-        openOf(s, 'industry', INDUSTRY_OUTPUT) +
+        openOf(s, 'industry', INDUSTRY_OUTPUT) -
+        estateSupply(s) +
         labourReach(s)) /
         scale,
     ),
@@ -1026,6 +1307,19 @@ export const industryCost = (s: GameState): number =>
  */
 export const parkCost = (s: GameState): number => PARK_BASE * PARK_GROWTH ** s.parks;
 
+/**
+ * What the next landmark of a type costs.
+ *
+ * Compounded over the type's own count, like every other civic curve, and
+ * deliberately *not* demand-modified: a landmark is not a zone and there is no
+ * signal that says the city wants another one.
+ */
+export const landmarkCost = (s: GameState, landmark: Landmark): number =>
+  landmark.base * landmark.growth ** landmarkCount(s, landmark.key);
+
+export const terminalCost = (s: GameState, terminal: Terminal): number =>
+  terminal.base * terminal.growth ** terminalCount(s, terminal.key);
+
 /** Services are not demand-priced: nobody haggles over a hospital. */
 export const serviceCost = (s: GameState, service: Service): number =>
   service.base * service.growth ** serviceCount(s, service.key);
@@ -1046,7 +1340,10 @@ export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** 
 export const income = (s: GameState): number => {
   const people = residents(s) * (1 - alight(s, 'home'));
   const shops = effectiveOf(s, 'shop') * (1 - alight(s, 'shop'));
-  const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry'));
+  // The estates are not in the cohort and cannot catch fire — they are outside
+  // the city and outside the fire model — so they are added after the burning
+  // share comes off rather than before it.
+  const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry')) + estateEarning(s);
   return (
     (people *
       RENT *
@@ -1057,7 +1354,11 @@ export const income = (s: GameState): number => {
       // district bonus, and it is taken from the people on the buses rather
       // than from the people in the houses. It *is* taxed, like everything else
       // the city takes in.
-      fareIncome(s)) *
+      fareIncome(s) +
+      // Tourism, outside the bracket for the same reason and carrying its own
+      // happiness term — see `visitors`, where the mood is a multiplier rather
+      // than the floor `incomeMultiplier` applies to rent.
+      cruiseIncome(s)) *
     // The tax rate multiplies the whole ledger, which is why the happiness it
     // costs is worth more than it looks: happiness multiplies this same line
     // through `incomeMultiplier`, so the two terms compound against each other.
@@ -1078,6 +1379,20 @@ export const canBuildIndustry = (s: GameState): boolean =>
 
 export const canBuildPark = (s: GameState): boolean =>
   s.parks < parkCapacity(s) && s.cash >= parkCost(s);
+
+/**
+ * Whether the city may open another landmark of a type.
+ *
+ * Land and money, and no "one ahead of need" clamp of the kind `serviceAllowed`
+ * carries: a landmark covers land rather than people, so there is no need for it
+ * to run ahead of. The site list is the only bound it has.
+ */
+export const canBuildLandmark = (s: GameState, landmark: Landmark): boolean =>
+  landmarkCount(s, landmark.key) < landmarkSiteCapacity(s, landmark.key) &&
+  s.cash >= landmarkCost(s, landmark);
+
+export const canBuildTerminal = (s: GameState, terminal: Terminal): boolean =>
+  terminalCount(s, terminal.key) < terminalCapacity(s) && s.cash >= terminalCost(s, terminal);
 
 export const canBuildService = (s: GameState, service: Service): boolean =>
   serviceCount(s, service.key) < serviceAllowed(s, service) && s.cash >= serviceCost(s, service);
@@ -1186,6 +1501,24 @@ export function promotionBlocker(
 }
 
 /** Why the park button is off. Land is the only gate a park has. */
+/**
+ * Why the city cannot open another landmark of a type, phrased for the HUD.
+ *
+ * Land only, the same as `serviceBlocker`: the price is on the button and the
+ * button is disabled, so "you cannot afford it" is already said twice. What is
+ * worth saying is the thing the player cannot fix with money.
+ */
+export function landmarkBlocker(s: GameState, landmark: Landmark): string | null {
+  return landmarkCount(s, landmark.key) >= landmarkSiteCapacity(s, landmark.key)
+    ? 'No sites left'
+    : null;
+}
+
+export function terminalBlocker(s: GameState, terminal: Terminal): string | null {
+  if (!hasCoast(s)) return 'No coast yet';
+  return terminalCount(s, terminal.key) >= terminalCapacity(s) ? 'No berths left' : null;
+}
+
 export function parkBlocker(s: GameState): string | null {
   return s.parks >= parkCapacity(s) ? 'No courtyards left' : null;
 }

@@ -63,7 +63,18 @@ interface Range {
  * once and never resized: the camera's far plane is `radius * 8 + 600`, and at
  * MAX_DISTRICTS this comfortably outruns it in every direction.
  */
-const GRASS_REACH = cityRadius(MAX_DISTRICTS) * 8 + 1_200;
+export const GRASS_REACH = cityRadius(MAX_DISTRICTS) * 8 + 1_200;
+
+/**
+ * How far the grassland sits below the districts' own ground.
+ *
+ * It used to be a hair — enough to keep the plane out of a z-fight with the
+ * land tiles and no more. Water is what made the number matter: the sea sits
+ * between the two, so this is the depth of the water at the shore, and a hair
+ * of it would have read as a wet sheet laid over the grass rather than as
+ * something with a bottom. See WATER_Y in `water.ts`, which is derived from it.
+ */
+export const GRASS_Y = -0.3;
 
 /**
  * Cells across the plane. 160 puts a vertex every ~24 world units, which is
@@ -140,10 +151,9 @@ function grassland(scene: THREE.Scene): void {
     geometry,
     new THREE.MeshLambertMaterial({ vertexColors: true }),
   );
-  // Just under the district tiles, whose top face sits at y = 0. A shared plane
-  // would z-fight with every district in the city; a hair below means the
-  // grassland is only ever visible on land nobody has bought.
-  mesh.position.y = -0.06;
+  // Under the district tiles, whose top face sits at y = 0, so the grassland is
+  // only ever visible on land nobody has bought. How far under is GRASS_Y.
+  mesh.position.y = GRASS_Y;
   mesh.receiveShadow = true;
   // It is always under the camera, so a per-object frustum test can only cost.
   mesh.frustumCulled = false;

@@ -1,4 +1,4 @@
-import { LEVELS, MERGE_LEVEL } from '../src/sim/config';
+import { LEVEL_FOOTPRINT, LEVELS, MERGE_LEVEL } from '../src/sim/config';
 import { cohortOf, type GameState, type LevelCohort } from '../src/sim/state';
 
 /**
@@ -42,6 +42,38 @@ export const housed = (homes: number, level = 0): Partial<GameState> => ({
   mergedR: mergedFor(homes, level),
   occupancyR: 1,
 });
+
+/**
+ * A cohort written level by level, padded to whatever LEVELS is.
+ *
+ * The literal-array form these replaced — `[8, 12, 0, 0]` — is exactly what
+ * acceptance criterion 3 forbids: it says "four levels" in a file that has no
+ * business knowing the number, and every one of them had to be found and
+ * widened by hand when the ladder grew to five. Anything past the levels the
+ * game has is dropped rather than silently making a longer cohort than the
+ * simulation can read.
+ */
+export function mix(...counts: readonly number[]): LevelCohort {
+  const levels = cohortOf();
+  for (let l = 0; l < LEVELS; l++) levels[l] = Math.max(0, counts[l] ?? 0);
+  return levels;
+}
+
+/**
+ * The same *land*, developed at one level: as many buildings as `plots` holds.
+ *
+ * The primitive coverage is now measured against, and the one `housed` cannot
+ * express. `housed(24, 3)` is 24 arcologies standing on 48 plots — a bigger
+ * city, not a taller one — so a test that promotes with it is comparing two
+ * different amounts of land and every land-denominated reading moves under it.
+ * `housedOn(24, l)` is one district's housing at whatever level, which is what
+ * "promoting every building leaves coverage unchanged" is a statement about.
+ */
+export const housedOn = (plots: number, level = 0): Partial<GameState> => {
+  const clamped = Math.max(0, Math.min(LEVELS - 1, level));
+  const homes = Math.floor(Math.max(0, plots) / (LEVEL_FOOTPRINT[clamped] ?? 1));
+  return housed(homes, clamped);
+};
 
 export const trading = (shops: number, level = 0): Partial<GameState> => ({
   shops,

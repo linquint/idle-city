@@ -182,12 +182,18 @@ canvas {
   color: var(--sodium);
 }
 
+/* Seven of them now, and the dock is 300px wide: at 10px uppercase with the
+   letter-spacing below, one row of seven wants about 400px, so the strip wraps
+   rather than clipping "LANDMARKS" to "LANDMAR". `flex: 1 1 auto` is what
+   makes each row fill its width once the wrap has decided how many fit. */
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--line);
 }
 button.tab {
-  flex: 1 1 0;
+  flex: 1 1 auto;
+  min-width: 0;
   width: auto;
   margin: 0;
   padding: 8px 4px;

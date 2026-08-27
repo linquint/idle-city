@@ -18,8 +18,11 @@ import {
   mergeCapacity,
   mergedCohort,
   parkCapacity,
+  landmarkSiteCapacity,
+  estateCapacity,
   serviceAllowed,
   shopCapacity,
+  terminalCapacity,
 } from './economy';
 import {
   cohortOf,
@@ -31,16 +34,18 @@ import {
   type LevelCohort,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v6';
+export const SAVE_KEY = 'idle-city/save/v8';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v6 miss falls back through
+ * new build has not agreed to lose their city — so a v8 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v7',
+  'idle-city/save/v6',
   'idle-city/save/v5',
   'idle-city/save/v4',
   'idle-city/save/v3',
@@ -76,12 +81,20 @@ const share = (v: unknown, fallback: number): number =>
 /**
  * Rebuilds one zone's level cohort from untrusted JSON.
  *
- * Three shapes arrive here. A v5 save has the array, which is read a level at a
- * time and never past LEVELS — a save claiming a fifth level simply does not
- * have one to claim. A v4 save has no array but does have a global `tier`, and
- * the honest reading of "the whole city is towers" is a cohort with every
- * standing building at that level, which is what `fallback` carries in. Anything
- * older has neither and starts where a fresh city does, at level 0.
+ * Three shapes arrive here. A v5 or v6 save has the array, which is read a level
+ * at a time and never past LEVELS — a save claiming a level the game does not
+ * have simply does not have one to claim. A v4 save has no array but does have a
+ * global `tier`, and the honest reading of "the whole city is towers" is a
+ * cohort with every standing building at that level, which is what `fallback`
+ * carries in. Anything older has neither and starts where a fresh city does, at
+ * level 0.
+ *
+ * A *shorter* array is the case v7 added, and it is handled by the same loop
+ * rather than by a special case: a v6 save has four entries, `raw[4]` is
+ * undefined, and `count` reads that as 0. So the cohort comes back five wide
+ * with the new rung empty and every building that was at the old top still at
+ * the old top — which is the only reading that does not hand a returning player
+ * a level they never earned. LEVEL_EDUCATION's fifth rung is theirs to climb.
  *
  * Whatever arrives is then reconciled to `standing` rather than trusted, because
  * the sum is the one invariant the rest of the game reads: buildings are trimmed
@@ -230,6 +243,23 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
 
   const base = createState(now);
   const version = Math.max(0, Math.floor(num(r['version'], 0)));
+  /**
+   * Districts, clamped to the land the city is allowed to own.
+   *
+   * v8 put water on the map, and the honest thing to say about what that costs
+   * an older save is: nothing, and everything. Nothing, because the save has
+   * never held a district *coordinate* — it holds a count, and the count is
+   * still legal, so a v7 city that owned twelve districts still owns twelve.
+   * Everything, because the spiral those twelve are read off now skips the wet
+   * positions, so a returning player's city is laid out around a coast that was
+   * not there before and every building in it stands somewhere new.
+   *
+   * There is no migration that avoids that. Storing the old coordinates to keep
+   * the old shape is the one thing the save is arranged never to do, and the
+   * alternative — dropping the districts whose old coordinates are now water —
+   * would take land a player paid for. Keeping the count and redrawing the map
+   * is the reading that loses nothing but the view.
+   */
   const districts = Math.min(MAX_DISTRICTS, Math.max(1, Math.floor(num(r['districts'], 1))));
   // v4's one global tier. Dropped as a field, but not as information: it is
   // what every building in a v4 city stood at, so it seeds the cohorts below.
@@ -285,6 +315,15 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // A v3 save has no parks, which is exactly the state a city that never
     // built one is in. Clamped to the land below, like every other count.
     parks: count(r['parks']),
+    // Landmarks default to none, which is what every save written before they
+    // existed honestly says. Clamped against their site lists below, exactly as
+    // parks and civic buildings are.
+    museums: count(r['museums']),
+    stadiums: count(r['stadiums']),
+    cruiseTerminals: count(r['cruiseTerminals']),
+    cargoTerminals: count(r['cargoTerminals']),
+    highway: r['highway'] === true,
+    estates: count(r['estates']),
     // v2 called them clinics, schools and stations and stood them on single
     // residential plots. They are the same slot — the building the city buys to
     // raise happiness — so the counts carry across by weight rather than being
@@ -346,6 +385,24 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // `count + merged` and `fitZone` is what bounds it. Write-offs and cohorts go
   // through the same call, because all four numbers constrain each other.
   state.parks = Math.min(state.parks, parkCapacity(state));
+  // One site of each size a district, so a save carried over from a larger city
+  // sheds the landmarks whose squares no longer exist.
+  state.museums = Math.min(state.museums, landmarkSiteCapacity(state, 'museum'));
+  state.stadiums = Math.min(state.stadiums, landmarkSiteCapacity(state, 'stadium'));
+  // One berth of each kind per *coastal* district, which is the clamp v8's
+  // water actually needs: a v7 save has no terminals to lose, but a v8 one
+  // whose district count was trimmed above may have had berths on land it no
+  // longer owns — and how many coastal districts a count buys is a property of
+  // the seed, not of the save.
+  const berths = terminalCapacity(state);
+  state.cruiseTerminals = Math.min(state.cruiseTerminals, berths);
+  state.cargoTerminals = Math.min(state.cargoTerminals, berths);
+  // Estates are bounded by the band, by the district count and by the road
+  // being there at all — and a save that claims the works without the highway
+  // gets neither, because a shed with no road to it is not an estate. The band
+  // is a fixed strip with the water already taken out of it, so this clamp can
+  // bite on a save the current build's seed left less room for.
+  state.estates = Math.min(state.estates, estateCapacity(state));
 
   const fitted = [
     fitZone(state.homes, state.abandonedR, r['homeLevels'], tier, state.mergedR, homeCapacity(state), mergeCapacity(state, 'home')),

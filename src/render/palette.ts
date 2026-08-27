@@ -13,6 +13,13 @@ export const PALETTE = {
   grass: 0x7a9557,
   grassDeep: 0x638049,
   sand: 0xc3b489,
+  // Water. Two tones and no third: the deep one is what a flat translucent
+  // plane reads as from the play camera, and the pale one is a band along every
+  // shore, which is the only cue that says where the land stops without a
+  // reflection or an animated normal to say it. Both are lit by the same key
+  // and hemisphere the city is, so the sea goes through the day with it.
+  water: 0x2f6076,
+  shallow: 0x6ba8ad,
   concrete: 0xc9d1da,
   tile: 0x8b5c42,
   parapet: 0x2e3e55,
@@ -49,6 +56,19 @@ export const PALETTE = {
   schoolRoof: 0x8d7f63,
   university: 0xd6c9a8,
   universityRoof: 0x9a7f4e,
+  // Landmarks. Pale stone against every civic blue and teal on the map, because
+  // a landmark's job is to be picked out from across the city — and a lit band
+  // at its base, so it still reads after dark when its neighbours have gone
+  // dark. The two sizes share a palette and differ in silhouette.
+  landmark: 0xe4dccb,
+  landmarkRoof: 0x9c6f4f,
+  // The waterfront. A quay is a deck the colour of the kerbs the city already
+  // has, because it is the same thing: made ground with something standing on
+  // it. Hulls are darker than anything on land so a ship reads against the
+  // water, and a container stack is the one warm block on the coast.
+  quay: 0x8d939c,
+  hull: 0x2b3644,
+  container: 0xb4623f,
   // Transport. The depot is a shed and an apron rather than a civic slab, and
   // the buses that leave it wear the same colour so the two read as one system.
   depot: 0x3d5a52,

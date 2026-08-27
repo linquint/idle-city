@@ -30,9 +30,16 @@ import {
   shopCapacity,
   shopCost,
 } from '../src/sim/economy';
-import { PLOTS_PER_DISTRICT } from '../src/sim/layout';
+import {
+  BUILDABLE_COMMERCIAL_PER_DISTRICT,
+  BUILDABLE_INDUSTRIAL_PER_DISTRICT,
+  BUILDABLE_RESIDENTIAL_PER_DISTRICT,
+  CIVIC_SITES_PER_DISTRICT,
+  PLOTS_PER_DISTRICT,
+  UNIVERSITY_SITES_PER_DISTRICT,
+} from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { built, housed, making, trading } from './levels';
+import { built, housed, making, mix, trading } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 
@@ -69,19 +76,30 @@ describe('residential and commercial parity', () => {
   const home = (n: number): number => homeCost(state({ homes: n }));
   const shop = (n: number): number => shopCost(state({ shops: n }));
 
-  it('opens both types at within 25% of each other', () => {
+  it('opens both types within a third of each other', () => {
     const gap = Math.abs(shop(0) - home(0)) / Math.max(shop(0), home(0));
-    expect(gap).toBeLessThanOrEqual(0.25);
+    expect(gap).toBeLessThanOrEqual(1 / 3);
   });
 
-  it('has commerce compounding faster, but only somewhat', () => {
-    const ratio = shop(20) / home(20);
-    expect(ratio).toBeGreaterThanOrEqual(1.5);
-    expect(ratio).toBeLessThanOrEqual(3);
-    // Faster at every step, not just at the twentieth: the gap only ever opens.
-    for (let n = 1; n <= 40; n++) {
-      expect(shop(n) / home(n)).toBeGreaterThan(shop(n - 1) / home(n - 1));
+  /**
+   * Commerce and housing compound at the *same* rate now, and the wider district
+   * is why. A shop used to compound faster than a house, which was fine over 31
+   * plots and is not over 45: 9 x 1.18^45 fills a district's commerce for 67.6x
+   * what its housing costs, where 31 plots came to 6.6x. Matching the curves
+   * fixes the exponent and leaves the whole gap on the base, so a shop is 1.375
+   * times a house at every n rather than 1.13 at the first and 8x at the last.
+   *
+   * The price *order* being constant is worth more than the gap widening. A
+   * discount-chasing player buys whatever is cheapest, so a curve that crosses
+   * housing's is a curve that eventually makes shops the only thing worth
+   * buying — measured, that policy stalled at 15 shops, four homes and no
+   * hospital it could ever save up for.
+   */
+  it('keeps commerce dearer than housing at every step', () => {
+    for (let n = 0; n <= FRONTAGE_TARGET.commercial; n++) {
+      expect(shop(n)).toBeGreaterThan(home(n));
     }
+    expect(shop(20) / home(20)).toBeCloseTo(shop(0) / home(0), 6);
   });
 
   /**
@@ -99,21 +117,20 @@ describe('residential and commercial parity', () => {
   });
 
   /**
-   * A district sells 31 commercial plots against 24 residential, so the faster
-   * curve compounds over 29% more buildings. Commerce is still the expensive
-   * half of a district — that is what stops "shops are cheap now" becoming
-   * "shops are free". The ratio narrowed with the wider district (it was 47%
-   * at 28/19), which makes the *curve* rather than the plot count the thing
-   * carrying the price gap.
+   * A district sells 45 commercial plots against 24 residential, so commerce is
+   * the expensive half by *count* now rather than by curve — each shop is 1.375
+   * houses and there are 88% more of them. That is what stops "shops are cheap
+   * now" becoming "shops are free", and it is a bound the plot split can be
+   * read off rather than a coincidence of two exponents.
    */
   it('leaves commerce the dearer half of a district to fill', () => {
     const fill = (cost: (n: number) => number, plots: number): number =>
       Array.from({ length: plots }, (_, n) => cost(n)).reduce((a, b) => a + b, 0);
     const housing = fill(home, FRONTAGE_TARGET.residential);
     const commerce = fill(shop, FRONTAGE_TARGET.commercial);
-    expect(FRONTAGE_TARGET.commercial / FRONTAGE_TARGET.residential).toBeCloseTo(1.29, 2);
+    expect(FRONTAGE_TARGET.commercial).toBeGreaterThan(FRONTAGE_TARGET.residential);
     expect(commerce).toBeGreaterThan(housing * 4);
-    expect(commerce).toBeLessThan(housing * 20);
+    expect(commerce).toBeLessThan(housing * 40);
   });
 });
 
@@ -129,8 +146,13 @@ describe('income', () => {
     }
     // And a mixed skyline is the sum of its parts rather than one global level,
     // which is the whole thing cohorts buy over the tier they replaced.
-    const mixed = state({ homes: 10, homeLevels: [4, 3, 2, 1], occupancyR: 1 });
-    expect(residents(mixed)).toBe(4 * 4 + 3 * 16 + 2 * 140 + 1 * 600);
+    const mixed = state({ homes: 10, homeLevels: mix(4, 3, 2, 1), occupancyR: 1 });
+    expect(residents(mixed)).toBe(
+      4 * (LEVEL_HOUSING[0] ?? 0) +
+        3 * (LEVEL_HOUSING[1] ?? 0) +
+        2 * (LEVEL_HOUSING[2] ?? 0) +
+        1 * (LEVEL_HOUSING[3] ?? 0),
+    );
   });
 
   it('rises with shops and with districts', () => {
@@ -162,13 +184,19 @@ describe('capacity', () => {
 
   it('is a share of the plots that front a street, not of the zoned land', () => {
     // The distinction the renamed constants exist to keep straight: a district
-    // is zoned for 100 plots and sells 63 of them, because a building has to
-    // have a street to stand on, six 2x2 quads are held for civic use and one
-    // 3x3 for the university. A site holds one building however many plots it
-    // covers, so the seven of them add seven to what the city can develop.
+    // is zoned for 144 plots and sells 82 of them, because a building has to
+    // have a street to stand on and the rest of the land is held in squares —
+    // six 2x2 for civic use, one 3x3 for the university, two more for landmarks
+    // and two 2x2s spare. A site holds one building however many plots it
+    // covers, so the seven civic and university sites add seven to what the
+    // city can develop.
     const s = state();
-    expect(homeCapacity(s) + shopCapacity(s) + industryCapacity(s)).toBe(63);
-    expect(plotCapacity(s)).toBe(70);
+    const sale =
+      BUILDABLE_RESIDENTIAL_PER_DISTRICT +
+      BUILDABLE_COMMERCIAL_PER_DISTRICT +
+      BUILDABLE_INDUSTRIAL_PER_DISTRICT;
+    expect(homeCapacity(s) + shopCapacity(s) + industryCapacity(s)).toBe(sale);
+    expect(plotCapacity(s)).toBe(sale + CIVIC_SITES_PER_DISTRICT + UNIVERSITY_SITES_PER_DISTRICT);
     expect(plotCapacity(s)).toBeLessThan(PLOTS_PER_DISTRICT);
   });
 

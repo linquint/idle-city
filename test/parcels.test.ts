@@ -40,19 +40,32 @@ const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0
 const at = (patch: Partial<GameState> = {}): Game => new Game(state(patch));
 
 /**
- * Runs a city with its treasury held at zero.
+ * Runs a city for `minutes`, with its treasury held at zero throughout.
  *
  * These tests are about one district's parcels, and a city that can afford the
  * next district takes it: `autoAnnex` runs inside `step` and asks nobody. A
  * treasury pinned at zero is the least invasive way to hold the land still
  * while the skyline moves, and merging costs nothing, so it changes nothing
  * about what is being measured.
+ *
+ * The pin has to be *finer* than the catch-up step for that to hold, which is
+ * what the fifth level cost this helper. A district of megastructures houses
+ * 28,800 and earns enough in one 60-second step to clear ANNEX_BASE and its
+ * reserve before the treasury is next zeroed, so the city annexed underneath
+ * these tests and they measured two districts' parcels. Measured at 60, 30, 10
+ * and 5 seconds: the land holds still from 10 down. 10 it is, with the same
+ * total simulated time.
  */
-const broke = (game: Game, steps: number, seconds = 60): Game => {
-  for (let i = 0; i < steps; i++) {
-    game.catchUp(seconds);
+const PIN_SECONDS = 10;
+
+const broke = (game: Game, minutes: number): Game => {
+  for (let i = 0; i < Math.round((minutes * 60) / PIN_SECONDS); i++) {
+    game.catchUp(PIN_SECONDS);
     Object.assign(game.state, { cash: 0 });
   }
+  // The whole point of the pin. If this ever trips, the numbers below are about
+  // a city with more land than the plan they are checked against.
+  expect(game.state.districts).toBe(1);
   return game;
 };
 

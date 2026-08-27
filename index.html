@@ -55,6 +55,12 @@
       aria-controls="panel-demand" aria-selected="false" tabindex="-1">Demand</button>
     <button class="tab" type="button" role="tab" id="tab-taxes"
       aria-controls="panel-taxes" aria-selected="false" tabindex="-1">Taxes</button>
+    <button class="tab" type="button" role="tab" id="tab-landmarks"
+      aria-controls="panel-landmarks" aria-selected="false" tabindex="-1">Landmarks</button>
+    <button class="tab" type="button" role="tab" id="tab-port"
+      aria-controls="panel-port" aria-selected="false" tabindex="-1">Port</button>
+    <button class="tab" type="button" role="tab" id="tab-estates"
+      aria-controls="panel-estates" aria-selected="false" tabindex="-1">Estates</button>
   </div>
 
   <div class="panels">
@@ -175,7 +181,7 @@
         <span class="covers" id="svc-fire-covers">0 of 0</span></div>
       <div class="svc"><span class="k">Parks</span>
         <span class="built" id="svc-parks-built">0/0</span>
-        <span class="covers" id="svc-parks-covers">0 of 0 homes</span></div>
+        <span class="covers" id="svc-parks-covers">0 of 0 plots</span></div>
     </div>
 
     <p class="cap">Transport</p>
@@ -216,6 +222,85 @@
     <div class="svc"><span class="k">Trade</span>
       <span class="built" id="free-fares">0/s in fares</span>
       <span class="covers" id="free-effect">reach +33%, mood +5</span></div>
+  </div>
+
+  <div class="panel" id="panel-landmarks" role="tabpanel" aria-labelledby="tab-landmarks" tabindex="0" hidden>
+    <p class="cap">Landmarks</p>
+    <div class="civic-row">
+      <button class="civic" id="build-museum" type="button">
+        <span>Museum</span><span class="built" id="build-museum-built">0/1</span>
+        <span class="cost" id="build-museum-cost">4000</span>
+      </button>
+      <button class="civic" id="build-stadium" type="button">
+        <span>Stadium</span><span class="built" id="build-stadium-built">0/1</span>
+        <span class="cost" id="build-stadium-cost">12000</span>
+      </button>
+    </div>
+
+    <p class="cap">Reach</p>
+    <div class="services" id="landmark-reach" role="img">
+      <div class="svc"><span class="k">Museums</span>
+        <span class="built" id="svc-museum-built">0/0</span>
+        <span class="covers" id="svc-museum-covers">reaches 24 plots</span></div>
+      <div class="svc"><span class="k">Stadiums</span>
+        <span class="built" id="svc-stadium-built">0/0</span>
+        <span class="covers" id="svc-stadium-covers">reaches 38 plots</span></div>
+      <div class="svc"><span class="k">Covered</span>
+        <span class="built" id="landmark-share">0%</span>
+        <span class="covers" id="landmark-mood">no effect on mood</span></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-port" role="tabpanel" aria-labelledby="tab-port" tabindex="0" hidden>
+    <p class="cap">Terminals</p>
+    <div class="civic-row">
+      <button class="civic" id="build-cruise" type="button">
+        <span>Cruise</span><span class="built" id="build-cruise-built">0/0</span>
+        <span class="cost" id="build-cruise-cost">20000</span>
+      </button>
+      <button class="civic" id="build-cargo" type="button">
+        <span>Cargo</span><span class="built" id="build-cargo-built">0/0</span>
+        <span class="cost" id="build-cargo-cost">28000</span>
+      </button>
+    </div>
+
+    <p class="cap">Waterfront</p>
+    <div class="services" id="port-trade" role="img">
+      <div class="svc"><span class="k">Berths</span>
+        <span class="built" id="port-berths">0</span>
+        <span class="covers" id="port-where">no coast yet</span></div>
+      <div class="svc"><span class="k">Visitors</span>
+        <span class="built" id="port-visitors">0</span>
+        <span class="covers" id="port-spend">0.0/s in tourism</span></div>
+      <div class="svc"><span class="k">Exports</span>
+        <span class="built" id="port-exports">60</span>
+        <span class="covers" id="port-lift">no cargo berths</span></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-estates" role="tabpanel" aria-labelledby="tab-estates" tabindex="0" hidden>
+    <p class="cap">Beyond the city</p>
+    <button class="ghost wide" id="build-highway" type="button">
+      <span id="build-highway-label">Build the highway</span>
+      <span class="cost" id="build-highway-cost">240K</span>
+    </button>
+    <button id="build-estate" type="button">
+      <span id="build-estate-label">Break ground on an estate</span>
+      <span class="price"><span class="cost" id="build-estate-cost">60K</span></span>
+    </button>
+
+    <p class="cap">The band</p>
+    <div class="services" id="estate-trade" role="img">
+      <div class="svc"><span class="k">Parcels</span>
+        <span class="built" id="estate-built">0/0</span>
+        <span class="covers" id="estate-room">needs 18 districts</span></div>
+      <div class="svc"><span class="k">Works</span>
+        <span class="built" id="estate-plots">0</span>
+        <span class="covers" id="estate-jobs">0 jobs</span></div>
+      <div class="svc"><span class="k">Ledger</span>
+        <span class="built" id="estate-ledger">+0%</span>
+        <span class="covers" id="estate-supply">no goods yet</span></div>
+    </div>
   </div>
 
   </div>

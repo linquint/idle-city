@@ -83,9 +83,22 @@ export class CameraRig {
    * Re-frames for a city of this size and centre: widens the zoom ceiling and
    * the pan bounds, and eases out and over to reveal land that was just bought.
    */
-  fit(cityRadius: number, centre: { x: number; z: number }, reveal = false): void {
+  fit(
+    cityRadius: number,
+    centre: { x: number; z: number },
+    reveal = false,
+    /**
+     * How far the player may pan, if further than the districts reach.
+     *
+     * Its own argument rather than a wider `cityRadius`, because the two are
+     * used for different things: the radius sets the zoom ceiling and the
+     * opening frame, and widening it for a quay half a district offshore would
+     * open the game zoomed out past the city. This only moves the leash.
+     */
+    reach = cityRadius,
+  ): void {
     this.maxRadius = Math.max(200, cityRadius * 4);
-    this.bounds = cityRadius;
+    this.bounds = Math.max(cityRadius, reach);
     this.centre.set(centre.x, 4, centre.z);
 
     // The distance at which the whole city fits the frame. It scales off the

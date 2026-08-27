@@ -1,8 +1,11 @@
 import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
   ANNEX_MIN_OCCUPANCY,
+  CELL,
+  LANDMARKS,
+  LANDMARK_MOOD,
   HAPPINESS_MIN_BUILD,
-  HOMES_PER_PARK,
+  PLOTS_PER_PARK,
   LEVEL_EDUCATION,
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
@@ -16,6 +19,9 @@ import {
   LEVELS,
   MAX_DISTRICTS,
   SERVICES,
+  CARGO_EXPORT_LIFT,
+  HIGHWAY_MIN_DISTRICTS,
+  TERMINALS,
 } from '../sim/config';
 import {
   abandonedBuildings,
@@ -29,16 +35,34 @@ import {
   canBuildIndustry,
   canBuildPark,
   canBuildService,
+  canBuildEstate,
+  canBuildHighway,
   canBuildShop,
+  canBuildTerminal,
+  cruiseIncome,
   demandTargets,
   educationCoverage,
+  estateBlocker,
+  estateCapacity,
+  estateCost,
+  estateJobs,
+  estatePlots,
+  estateSupply,
+  exportMarket,
   fareIncome,
+  highwayAllowed,
+  highwayBlocker,
+  highwayCost,
   homeBlocker,
   labourReach,
   homeCapacity,
   homeCost,
+  canBuildLandmark,
   income,
   industryCapacity,
+  landmarkBlocker,
+  landmarkCoverage,
+  landmarkReadings,
   industryCost,
   parkBlocker,
   parkCapacity,
@@ -51,7 +75,7 @@ import {
   transitCoverage,
   zoneOf,
   priceModifier,
-  population,
+  housingPlots,
   recreationCoverage,
   residents,
   serviceBlocker,
@@ -59,8 +83,12 @@ import {
   serviceReadings,
   shopCapacity,
   shopCost,
+  terminalBlocker,
+  terminalReadings,
+  visitors,
   willAutoAnnex,
 } from '../sim/economy';
+import { ESTATE_CELLS } from '../sim/estates';
 import type { BuildingRef } from '../render/buildings';
 import type { AwayReport, Game } from '../sim/game';
 import {
@@ -68,6 +96,7 @@ import {
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   createPlacement,
+  portDistrict,
   type CityLayout,
 } from '../sim/layout';
 import type { GameState, ZoneKind } from '../sim/state';
@@ -94,7 +123,7 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 };
 
 /** The tabs the docked control is split into, in the order they are shown. */
-const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes'] as const;
+const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'port', 'estates'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /** Plots one district sells of each zone. Turns a plot index into a district. */
@@ -213,7 +242,40 @@ export class Hud {
     transit: el('transit'),
     transitFares: el('transit-fares'),
     transitLabour: el('transit-labour'),
+    landmarkShare: el('landmark-share'),
+    landmarkMood: el('landmark-mood'),
+    portBerths: el('port-berths'),
+    portWhere: el('port-where'),
+    portVisitors: el('port-visitors'),
+    portSpend: el('port-spend'),
+    portExports: el('port-exports'),
+    portLift: el('port-lift'),
+    highway: el<HTMLButtonElement>('build-highway'),
+    highwayLabel: el('build-highway-label'),
+    highwayCost: el('build-highway-cost'),
+    estate: el<HTMLButtonElement>('build-estate'),
+    estateLabel: el('build-estate-label'),
+    estateCost: el('build-estate-cost'),
+    estateBuilt: el('estate-built'),
+    estateRoom: el('estate-room'),
+    estatePlots: el('estate-plots'),
+    estateJobs: el('estate-jobs'),
+    estateLedger: el('estate-ledger'),
+    estateSupply: el('estate-supply'),
   };
+
+  /**
+   * One row of controls and readouts per landmark type, keyed the same way the
+   * service rows are. Two types, two sizes, one shape.
+   */
+  private readonly landmarkNodes = LANDMARKS.map((landmark) => ({
+    landmark,
+    button: el<HTMLButtonElement>(`build-${landmark.key}`),
+    cost: el(`build-${landmark.key}-cost`),
+    allowance: el(`build-${landmark.key}-built`),
+    built: el(`svc-${landmark.key}-built`),
+    covers: el(`svc-${landmark.key}-covers`),
+  }));
 
   /**
    * The four tabs, and which panel each shows.
@@ -222,6 +284,17 @@ export class Hud {
    * arrow keys across the row: a tab strip built out of divs is a tab strip
    * nobody can reach without a mouse.
    */
+  /**
+   * One row of controls and readouts per terminal, keyed the same way the
+   * landmark rows are. Two kinds, one shape, and the same land gate on both.
+   */
+  private readonly terminalNodes = TERMINALS.map((terminal) => ({
+    terminal,
+    button: el<HTMLButtonElement>(`build-${terminal.key}`),
+    cost: el(`build-${terminal.key}-cost`),
+    allowance: el(`build-${terminal.key}-built`),
+  }));
+
   private readonly tabs = TAB_KEYS.map((key) => ({
     key,
     button: el<HTMLButtonElement>(`tab-${key}`),
@@ -292,6 +365,18 @@ export class Hud {
     n.shop.addEventListener('click', () => this.act(() => this.game.buildShop()));
     n.industry.addEventListener('click', () => this.act(() => this.game.buildIndustry()));
     n.park.addEventListener('click', () => this.act(() => this.game.buildPark()));
+    for (const row of this.landmarkNodes) {
+      row.button.addEventListener('click', () =>
+        this.act(() => this.game.buildLandmark(row.landmark)),
+      );
+    }
+    for (const row of this.terminalNodes) {
+      row.button.addEventListener('click', () =>
+        this.act(() => this.game.buildTerminal(row.terminal)),
+      );
+    }
+    n.highway.addEventListener('click', () => this.act(() => this.game.buildHighway()));
+    n.estate.addEventListener('click', () => this.act(() => this.game.buildEstate()));
     n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
 
     for (const { service, button } of this.serviceNodes) {
@@ -458,7 +543,10 @@ export class Hud {
     if (this.open === 'build') this.paintBuild(s);
     else if (this.open === 'treasury') this.paintTreasury(s);
     else if (this.open === 'demand') this.paintDemand(s);
-    else this.paintTaxes(s);
+    else if (this.open === 'taxes') this.paintTaxes(s);
+    else if (this.open === 'landmarks') this.paintLandmarks(s);
+    else if (this.open === 'port') this.paintPort(s);
+    else this.paintEstates(s);
 
     this.paintCard(s);
   }
@@ -506,7 +594,6 @@ export class Hud {
     // The happiness panel. A bare percentage says nothing a player can act on,
     // so the binding term is named beside it: "Health coverage 41%" is the whole
     // reason this block exists rather than the number on its own.
-    const people = population(s);
     const worst = bindingTerm(s);
     const why = `${worst.coverLabel} ${pct(worst.coverage)}`;
     n.moodPct.textContent = pct(s.happiness);
@@ -517,26 +604,30 @@ export class Hud {
 
     const spoken: string[] = [];
     const taught: string[] = [];
+    // Coverage is land now, so the row says how much of the housing a service
+    // reaches rather than how many people. Plots are also the unit the player
+    // buys in, which the residents figure never was.
+    const plots = housingPlots(s);
     for (const { service, built, covered, coverage: reach } of serviceReadings(s)) {
       const row = this.serviceNodes.find((entry) => entry.service.key === service.key);
       if (!row) continue;
       row.built.textContent = fmtInt(built);
-      row.covers.textContent = `covers ${fmtInt(covered)} of ${fmtInt(people)}`;
+      row.covers.textContent = `covers ${fmtInt(covered)} of ${fmtInt(plots)}`;
       row.row.classList.toggle('covered', reach >= 1);
       (service.weight > 0 ? spoken : taught).push(
-        `${service.name} ${built}, covering ${Math.round(covered)} of ${Math.round(people)} residents`,
+        `${service.name} ${built}, covering ${Math.round(covered)} of ${Math.round(plots)} housing plots`,
       );
     }
     // Recreation is the fourth happiness term but not a service: it has no
-    // staffing, no site and a denominator in homes, so it gets its own row
-    // rather than being forced through `serviceReadings`.
+    // staffing and no site of its own, so it gets its own row rather than being
+    // forced through `serviceReadings`. Same denominator as the rest now.
     const parkLand = parkCapacity(s);
     const reach = recreationCoverage(s);
     n.parksBuilt.textContent = `${fmtInt(s.parks)}/${fmtInt(parkLand)}`;
-    n.parksCovers.textContent = `covers ${fmtInt(Math.min(s.homes, s.parks * HOMES_PER_PARK))} of ${fmtInt(s.homes)} homes`;
+    n.parksCovers.textContent = `covers ${fmtInt(Math.min(plots, s.parks * PLOTS_PER_PARK))} of ${fmtInt(plots)} plots`;
     n.parksRow.classList.toggle('covered', reach >= 1);
     spoken.push(
-      `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of homes`,
+      `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of housing land`,
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
@@ -608,6 +699,123 @@ export class Hud {
     n.freeEffect.textContent = `reach +${Math.round(FREE_TRANSPORT_REACH * 100)}%, mood +${Math.round(
       FREE_TRANSPORT_MOOD * 100,
     )}`;
+  }
+
+  /**
+   * The landmarks panel: what each type costs, and what the pair of them is
+   * currently worth.
+   *
+   * The covered share is the whole story here, so it gets a row of its own
+   * rather than being implied by two counts. A player who has bought six
+   * museums needs to know they are covering 30% of the city, not that they own
+   * six of something.
+   */
+  private paintLandmarks(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    for (const { landmark, built, allowed, cost } of landmarkReadings(s)) {
+      const row = this.landmarkNodes.find((entry) => entry.landmark.key === landmark.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(cost);
+      row.button.disabled = !canBuildLandmark(s, landmark);
+      row.button.title = landmarkBlocker(s, landmark) ?? landmark.buildLabel;
+      row.built.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      // Reach in *plots* rather than world units, because a plot is the unit
+      // the player buys in and a world unit is not a thing they can see.
+      row.covers.textContent = `${landmark.span}x${landmark.span} site, reaches ${Math.round(
+        landmark.reach / CELL,
+      )} plots`;
+    }
+    const share = landmarkCoverage(s);
+    n.landmarkShare.textContent = pct(share);
+    n.landmarkMood.textContent =
+      share <= 0
+        ? 'no effect on mood'
+        : `+${(LANDMARK_MOOD * share * 100).toFixed(1)} points of mood`;
+  }
+
+  /**
+   * The port panel: what a berth costs, and what the two kinds are earning.
+   *
+   * Three readouts rather than two counts, because the two halves pay back in
+   * currencies a count cannot show. Visitors are people a second and tourism is
+   * cash a second, so both are worth saying; exports are the tap industrial
+   * demand is drawn against, and the lift is only legible next to it.
+   */
+  private paintPort(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    let berths = 0;
+    for (const { terminal, built, allowed, cost } of terminalReadings(s)) {
+      berths = allowed;
+      const row = this.terminalNodes.find((entry) => entry.terminal.key === terminal.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(cost);
+      row.button.disabled = !canBuildTerminal(s, terminal);
+      row.button.title = terminalBlocker(s, terminal) ?? terminal.buildLabel;
+    }
+
+    const first = portDistrict(s.districts);
+    n.portBerths.textContent = fmtInt(berths);
+    n.portWhere.textContent =
+      first < 0 ? 'no coast yet' : `first quay on district ${fmtInt(first + 1)}`;
+
+    const heads = visitors(s);
+    n.portVisitors.textContent = fmt(heads);
+    n.portSpend.textContent =
+      s.cruiseTerminals <= 0
+        ? 'no cruise berths'
+        : `${fmt(cruiseIncome(s))}/s in tourism`;
+
+    n.portExports.textContent = fmt(exportMarket(s));
+    n.portLift.textContent =
+      s.cargoTerminals <= 0
+        ? 'no cargo berths'
+        : `+${Math.round(CARGO_EXPORT_LIFT * s.cargoTerminals * 100)}% on the tap`;
+  }
+
+  /**
+   * The estates panel: the road, the parcels, and what the band is worth.
+   *
+   * The ledger row is the one that has to be there. An estate pays back through
+   * the income multiplier rather than by earning on its own, so "what did that
+   * buy me" is a share of the whole ledger and cannot be read off a price.
+   */
+  private paintEstates(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    const allowed = estateCapacity(s);
+
+    n.highway.disabled = !canBuildHighway(s);
+    n.highwayLabel.textContent = s.highway ? 'Highway open' : 'Build the highway';
+    n.highwayCost.textContent = s.highway ? '' : fmt(highwayCost());
+    n.highway.title = highwayBlocker(s) ?? 'Build the highway';
+    n.highway.setAttribute('aria-pressed', String(s.highway));
+
+    n.estate.disabled = !canBuildEstate(s);
+    n.estateLabel.textContent = estateBlocker(s) ?? 'Break ground on an estate';
+    n.estateCost.textContent = fmt(estateCost(s));
+
+    n.estateBuilt.textContent = `${fmtInt(s.estates)}/${fmtInt(allowed)}`;
+    // Three states, not two: a city can be big enough for the road and not have
+    // bought it, and "needs 18 districts" to a city with twenty-four is the
+    // panel telling a player something they can see is untrue.
+    n.estateRoom.textContent =
+      s.highway ? `${fmtInt(ESTATE_CELLS)} parcels in the band`
+      : highwayAllowed(s) ? 'needs the highway'
+      : `needs ${fmtInt(HIGHWAY_MIN_DISTRICTS)} districts`;
+
+    n.estatePlots.textContent = fmtInt(estatePlots(s));
+    n.estateJobs.textContent = `${fmt(estateJobs(s))} jobs`;
+
+    // What the band adds to the ledger, measured the way a player would ask it:
+    // the same city without it. Cheap — `income` is a handful of reads.
+    const without = income({ ...s, estates: 0 });
+    n.estateLedger.textContent =
+      s.estates <= 0 || without <= 0 ?
+        '+0%'
+      : `+${(((income(s) - without) / without) * 100).toFixed(0)}%`;
+    n.estateSupply.textContent =
+      s.estates <= 0 ? 'no goods yet' : `${fmt(estateSupply(s))} goods a second`;
   }
 
   private paintBuild(s: Readonly<GameState>): void {

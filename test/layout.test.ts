@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ZONE } from '../src/sim/citygen';
-import { CELL, DISTRICT_SPAN, MAX_DISTRICTS } from '../src/sim/config';
+import { CELL, DISTRICT_SPAN, FRONTAGE_TARGET, MAX_DISTRICTS } from '../src/sim/config';
 import {
   BUILDABLE_COMMERCIAL_PER_DISTRICT as COMMERCIAL_PER_DISTRICT,
+  BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_INDUSTRIAL_PER_DISTRICT as INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT as RESIDENTIAL_PER_DISTRICT,
   CityLayout,
@@ -11,7 +12,9 @@ import {
   DISTRICT_WIDTH,
   districtCoord,
   isRoad,
+  planFor,
   PLOTS_PER_DISTRICT,
+  SPARE_PLOTS_PER_DISTRICT,
   UNIVERSITY_SITES_PER_DISTRICT,
   worldX,
   worldZ,
@@ -202,14 +205,86 @@ describe('plot book', () => {
         seen.add(key(cell));
       }
     }
-    for (let i = 0; i < layout.universitySites; i++) {
-      const c = layout.universitySiteCell(i);
-      for (let dz = 0; dz < 3; dz++) {
-        for (let dx = 0; dx < 3; dx++) seen.add(key({ x: c.x + dx, z: c.z + dz }));
+    const square = (c: { x: number; z: number }, size: number): void => {
+      for (let dz = 0; dz < size; dz++) {
+        for (let dx = 0; dx < size; dx++) seen.add(key({ x: c.x + dx, z: c.z + dz }));
       }
-    }
+    };
+    for (let i = 0; i < layout.universitySites; i++) square(layout.universitySiteCell(i), 3);
+    // The squares the wider district bought: a 3x3 and a 2x2 landmark site per
+    // district, and the 2x2s nothing stands on. Every one of them is land the
+    // sale lists never saw, which is the whole point of reserving them.
+    for (let i = 0; i < layout.landmarkLargeSites; i++) square(layout.landmarkLargeSiteCell(i), 3);
+    for (let i = 0; i < layout.landmarkSmallSites; i++) square(layout.landmarkSmallSiteCell(i), 2);
+    for (const c of layout.spareSquares) square(c, 2);
     for (const cell of layout.courtyards) seen.add(key(cell));
     expect(seen.size).toBe(PLOTS_PER_DISTRICT * 9);
+  });
+
+  /**
+   * The budget, asserted as arithmetic rather than trusted to the comments.
+   *
+   * Every plot a district owns has exactly one owner, and the sum is
+   * TARGET_PLOTS. This is what a future span change trips over first: the
+   * commercial count is structurally fixed per span, so widening the district
+   * without re-deriving this tuple leaves the sampler looking for a split that
+   * no seed produces.
+   */
+  it('accounts for every plot a district owns, exactly once', () => {
+    const sale =
+      FRONTAGE_TARGET.residential + FRONTAGE_TARGET.commercial + FRONTAGE_TARGET.industrial;
+    const squares = FRONTAGE_TARGET.squares * 4;
+    const bigSquares =
+      (FRONTAGE_TARGET.universitySites + FRONTAGE_TARGET.landmarkLargeSites) * 9;
+    const courtyard = PLOTS_PER_DISTRICT - sale - squares - bigSquares;
+    expect(courtyard).toBeGreaterThanOrEqual(BUILDABLE_PARKS_PER_DISTRICT);
+    expect(sale + squares + bigSquares + courtyard).toBe(PLOTS_PER_DISTRICT);
+
+    // The 2x2 claim divides exactly between the things that use it and the
+    // things that do not, and the spare pool is the two together.
+    const usedSquares =
+      FRONTAGE_TARGET.civicSites + FRONTAGE_TARGET.landmarkSmallSites;
+    expect(usedSquares).toBeLessThanOrEqual(FRONTAGE_TARGET.squares);
+    expect(SPARE_PLOTS_PER_DISTRICT).toBe(
+      (FRONTAGE_TARGET.squares - usedSquares) * 4 + courtyard - BUILDABLE_PARKS_PER_DISTRICT,
+    );
+    expect(SPARE_PLOTS_PER_DISTRICT).toBeGreaterThan(0);
+  });
+
+  it('lands every district on that budget, for every seed', () => {
+    for (let seed = 0; seed < 200; seed++) {
+      const plan = planFor((0x51ed2701 + seed * 2654435761) | 0);
+      expect(plan.residential).toHaveLength(FRONTAGE_TARGET.residential);
+      expect(plan.commercial).toHaveLength(FRONTAGE_TARGET.commercial);
+      expect(plan.industrial).toHaveLength(FRONTAGE_TARGET.industrial);
+      expect(plan.sites).toHaveLength(FRONTAGE_TARGET.civicSites);
+      expect(plan.universities).toHaveLength(FRONTAGE_TARGET.universitySites);
+      expect(plan.landmarksLarge).toHaveLength(FRONTAGE_TARGET.landmarkLargeSites);
+      expect(plan.landmarksSmall).toHaveLength(FRONTAGE_TARGET.landmarkSmallSites);
+      // Nothing overlaps: a plot reserved for one square is not for sale and is
+      // not in another square.
+      const seen = new Set<number>();
+      const take = (cells: readonly number[]): void => {
+        for (const c of cells) {
+          expect(seen.has(c)).toBe(false);
+          seen.add(c);
+        }
+      };
+      take(plan.residential);
+      take(plan.commercial);
+      take(plan.industrial);
+      for (const site of [
+        ...plan.universities,
+        ...plan.landmarksLarge,
+        ...plan.landmarksSmall,
+        ...plan.sites,
+        ...plan.spareSquares,
+      ]) {
+        take(site.cells);
+      }
+      take(plan.courtyards);
+      expect(seen.size).toBe(PLOTS_PER_DISTRICT);
+    }
   });
 
   it('keeps existing plots put when the city expands', () => {

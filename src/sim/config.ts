@@ -13,14 +13,31 @@ export const CELL = 4;
 /**
  * Plots per side of a district. A district is the unit of expansion.
  *
- * Widened from 12 to make room for a 3x3 university. At 12 the land budget has
- * no solution: a 3x3 reserved before the 2x2 civic pass leaves
- * 90 - 18 - 28 - 11 - 6x4 - 9 = 0 courtyard plots on the only tuple that is
- * reachable often enough to sample for, which deletes park land outright. 13
- * is the smallest span that fits the university, six civic sites and the four
- * courtyards parks stand on at the same time. See FRONTAGE_TARGET.
+ * Widened from 12 to 13 to make room for a 3x3 university, and from 13 to 15 to
+ * make room for landmarks and for the land the next few features will want.
+ *
+ * The 13 -> 15 step is not additive, and the measurement is the reason the span
+ * moved rather than the budget being re-cut. A district's land was fully spoken
+ * for at 13: over 400 on-target districts every one of the 100 plots was
+ * claimed — 63 for sale, 24 civic, 9 university, 4 courtyard — with 0.00 free
+ * 3x3 squares and 0.05 free 2x2s, and those 2x2s were the park courtyards. A
+ * landmark could not stand anywhere without taking land from something else.
+ *
+ * 15 rather than 14, because 14 does not solve it either: it holds 121 plots,
+ * and after a 3x3 and a 2x2 landmark site that leaves one spare plot. 15 holds
+ * 144 and leaves twelve. Measured over 3,000 seeds a side, the plot count is
+ * 121 at 62.1% (span 14) and 144 at 62.9% (span 15) — both stronger modes than
+ * the 100 at 47.7% that span 13 sampled for, so the rejection sampler got
+ * cheaper rather than dearer.
+ *
+ * What the step costs is commercial land, and that cost is structural rather
+ * than a choice: `zoneBlocks` lays shops along block rings and a ring is
+ * exactly the frontage, so the commercial count is invariant *per span* — 31 at
+ * 13, 38 at 14, 45 at 15, at 100% of seeds each. There is no seed at 15 that
+ * offers 31. See FRONTAGE_TARGET for the tuple that follows and for what it
+ * re-opened.
  */
-export const DISTRICT_SPAN = 13;
+export const DISTRICT_SPAN = 15;
 
 /**
  * Streets are not a fixed grid. Each axis is walked in seeded steps inside this
@@ -39,42 +56,66 @@ export const ROAD_GAP_MAX = 7;
  * strand plots or hand out plots that do not exist. Generation rejection-samples
  * until it hits this number exactly.
  *
- * Measured, not guessed, and re-measured for the wider district. Over 4000 raw
- * (pre-sampling) attempts at DISTRICT_SPAN 13 the count takes six values — 81,
- * 90, 99, 100, 110, 121 — with a mode of 100 at 47.3%, ahead of 110 at 38.6%.
- * 100 is therefore the cheapest target to sample for, exactly as 90 was at span
- * 12 (51.3%). Worst inner sampling over 4000 seeds is 15 attempts against a
- * MAX_ATTEMPTS of 64. See tools/citygen.calibrate.mjs.
+ * Measured, not guessed, and re-measured for every span this has moved through.
+ * The count is always a product of the two axes' non-road line counts, so it
+ * takes only a handful of values. Over 3,000 raw (pre-sampling) attempts:
+ *
+ *   span 13   81, 90, 99, 100, 110, 121      mode 100 at 47.7%
+ *   span 14   100, 110, 120, 121, 132, 144   mode 121 at 62.1%
+ *   span 15   110, 120, 121, 132, 144        mode 144 at 62.9%
+ *
+ * 144 is therefore the cheapest target to sample for at the span the district
+ * now spans, and a better mode than 100 ever was. See
+ * tools/citygen.calibrate.mjs.
  */
-export const TARGET_PLOTS = 100;
+export const TARGET_PLOTS = 144;
 
 /**
- * What one district must offer once frontage, civic land and the university are
- * taken out.
+ * What one district must offer once every reservation has taken its share.
  *
- * Every building fronts a street, so only the 84 road-adjacent plots of a
- * district's 100 are ever for sale, and the site passes claim quads out of
- * those before housing sees them. A university is reserved first (one 3x3),
- * then `civicSites` takes 2x2 quads out of what is left, then the three build
- * lists are what remains. The land adds up exactly:
+ * Every building fronts a street, so only the road-adjacent plots of a
+ * district's 144 are ever for sale, and the site passes claim squares out of
+ * those before housing sees them. Two 3x3s are reserved first — the university
+ * and the large landmark — then every 2x2 the district still has is claimed and
+ * reserved, then the three build lists are what remains. The land adds up
+ * exactly:
  *
- *   24 + 31 + 8 for sale + 6 x 4 civic + 1 x 9 university + 4 courtyard = 100
+ *   24 + 45 + 13 for sale
+ *    + 9 x 4  2x2 squares   (6 civic, 1 small landmark, 2 spare)
+ *    + 2 x 9  3x3 squares   (1 university, 1 large landmark)
+ *    + 4      courtyard parks
+ *    + 4      courtyard spare
+ *   = 144
  *
- * Measured by reserving one 3x3 and running the existing 2x2 pass over 20,000
- * street plans, then tallying the tuple that falls out:
+ * so a district carries twelve deliberately empty plots — two 2x2 squares and
+ * four courtyard plots — which is the land the next few features get to use
+ * without this budget being re-cut under them again.
  *
- *   - road-adjacent plots: 84 of 100, invariant;
- *   - commercial frontage: 31, invariant, because `zoneBlocks` lays shops along
- *     block rings and a ring is exactly the frontage;
- *   - residential and industrial split the rest variably, so the tuple below is
- *     reached by 3.28% of plans — about 1 in 30 attempts, and at
- *     FRONTAGE_MAX_ATTEMPTS the probability of exhausting them is 3.9e-8.
+ * Measured over 20,000 street plans under exactly this reservation order, and
+ * the tuple is the one the numbers picked rather than one they were fitted to:
  *
- * The industrial 8 is what the university costs. Nothing else in this tuple is
- * a cut: residential grew 19 -> 24 and commerce 28 -> 31 with the wider
- * district, so an existing save gains housing land rather than losing it. The
- * alternative at span 12 was a tuple with zero courtyards, which would have
- * deleted park land — see DISTRICT_SPAN.
+ *   - commercial frontage: 45, at 100% of seeds. Invariant per span, because
+ *     `zoneBlocks` lays shops along block rings and a ring is exactly the
+ *     frontage. It was 31 at span 13 and there is no seed at 15 that offers 31;
+ *   - residential and industrial split the rest variably, and the 2x2 count
+ *     with them. 24/45/13/9 is the most reachable tuple that holds residential
+ *     at 24, at 2.63% — about 1 in 38 attempts, against the 3.28% the span-13
+ *     tuple reached. At FRONTAGE_MAX_ATTEMPTS the chance of exhausting them is
+ *     1.2e-6 a district.
+ *
+ * Residential staying at exactly 24 is the load-bearing part and the reason
+ * this tuple was chosen over the four more-reachable ones above it. Coverage is
+ * denominated in housing plots (see `Service.plots`), so every PLOTS_PER_*
+ * constant was solved against 24 housing plots a district — moving it would
+ * re-open the whole of that calibration for nothing. The land grew around
+ * housing rather than under it.
+ *
+ * What the wider district *did* re-open is commerce and industry: 31 -> 45 and
+ * 8 -> 13 plots a district, so `shopCapacity` is up 45% and `industryCapacity`
+ * 62%. Everything priced or cleared against those was re-derived — SHOP_BASE,
+ * SHOP_GROWTH, INDUSTRY_BASE, INDUSTRY_GROWTH, SHOP_THROUGHPUT, SUPPLY_DRAW,
+ * INDUSTRIAL_OUTPUT and EXPORT_PER_DISTRICT — and each carries its own
+ * measurement.
  *
  * `homeCapacity` multiplies a per-district constant by the district count, so a
  * variable split would either strand land or sell plots that do not exist. The
@@ -84,12 +125,23 @@ export const TARGET_PLOTS = 100;
  */
 export const FRONTAGE_TARGET = {
   residential: 24,
-  commercial: 31,
-  industrial: 8,
-  /** 2x2 civic quads per district. 6 x 4 = 24 plots, mostly dead interior. */
+  commercial: 45,
+  industrial: 13,
+  /**
+   * 2x2 quads a district claims, all of them reserved before the build lists
+   * are drawn. Six go to civic, one to a small landmark, and the rest are spare
+   * — reserving the whole claim rather than only the squares something stands
+   * on is what keeps `homeCapacity` independent of build order.
+   */
+  squares: 9,
+  /** 2x2 civic sites per district. 6 x 4 = 24 plots, mostly dead interior. */
   civicSites: 6,
+  /** 2x2 landmark sites per district, taken from the same claim. */
+  landmarkSmallSites: 1,
   /** 3x3 university quads per district. Exactly one, reserved before the rest. */
   universitySites: 1,
+  /** 3x3 landmark quads per district. Reserved alongside the university. */
+  landmarkLargeSites: 1,
 } as const;
 
 /**
@@ -101,6 +153,36 @@ export const FRONTAGE_TARGET = {
  * workers: 14R = 8C + 20I with R + C + I = 1, at I = 0.21. Rounding them to
  * 0.50/0.30/0.20 leaves 7.0 workers chasing 6.4 jobs and breaks the demand loop
  * the moment industry is wired into the economy.
+ *
+ * Re-checked at the new top when the ladder grew to five rungs, because the
+ * split is solved at level 0 and every rung above it walks away from the
+ * solution. The labour market clears at 25.5 residents a plot (14 /
+ * WORKING_SHARE), and a plot holds 2.2 / 8.8 / 38.5 / 165 / 660 workers as it
+ * climbs — so a young city is job-rich and pulls people in, and a mature one is
+ * worker-rich and has to go and find them work. That arc is the design.
+ *
+ * A district built out at one level, measured through `demandTargets` at the
+ * wider district's 24 / 45 / 13 frontage:
+ *
+ *   level              w/j    demand R      C      I
+ *   detached housing  0.09       +1.00  -0.89  +0.41
+ *   apartments        0.34       +0.34  -0.10  +0.10
+ *   towers            1.56       -0.06  +0.10  +0.02
+ *   arcologies        6.69       -0.15  +0.15  +0.01
+ *   megastructures   26.76       -0.17  +0.16   0.00
+ *
+ * The fifth rung adds a hundredth of a demand point to a signal already
+ * settled, which is `demandScale` doing its job: it divides by `cityScale`, so
+ * the imbalance a built city can reach and the scale it is read against climb
+ * together. The ratios above are therefore still the ones to solve, and they
+ * did not move.
+ *
+ * What the rung *does* move is a mixed city. Over 24 hours the discount-chasing
+ * policy — which buys housing and lets commerce lag — now pins residential at
+ * -1 for 1,145 of 1,440 minutes where it pinned nothing before: it reaches
+ * 146,000 residents against 74 shops. That is the surcharge doing what it is
+ * for rather than a broken ratio, and it is the one thing to watch if the
+ * ladder ever gains a sixth rung. See tools/economy.calibrate.mjs.
  */
 export const ZONE_SHARE = {
   residential: 0.48,
@@ -117,19 +199,31 @@ export const MAX_DISTRICTS = 49;
  * The four numbers the old global rezoning tiers carried, kept exactly: a
  * level-0 house holds 4, an apartment block 16, a tower 70, an arcology 300.
  * Keeping them means every constant that was solved against those capacities —
- * RENT against the opening minute, WORKING_SHARE against the labour market,
- * LEVEL_EDUCATION against what a district of towers holds — still means what it
- * meant.
+ * RENT against the opening minute, WORKING_SHARE against the labour market —
+ * still means what it meant.
+ *
+ * The fifth rung is 1,200, and it is the ladder's own opening ratio rather than
+ * a new number: 4 -> 16 is x4, and the two above it are x4.4 and x4.3, so the
+ * mean would put the top at 1,290. x4 is taken instead because the rung already
+ * widens the range every demand signal is read over — DEMAND_SCALE is a
+ * constant and the imbalance a built city can reach scales with this ladder, so
+ * 4 -> 1,200 is a 300x spread where 4 -> 300 was 75x. Measured, the drift that
+ * buys is reported against ZONE_SHARE.
  *
  * Per plot, and that qualifier is what merging cost this comment. A tower
  * covers two plots (LEVEL_FOOTPRINT), so the *building* holds 140 and the land
  * under it still holds 70 a plot. Reading these as per-building instead would
- * halve the population of every merged district, which is not a small change to
- * one number: it is a change to the denominator of every coverage in the game.
- * Measured, it lets a district of towers be covered by schools alone and takes
- * the top of the skyline away from the university. See LEVEL_HOUSING.
+ * halve the population of every merged district. See LEVEL_HOUSING.
+ *
+ * This used to warn that the ladder was "the denominator of every coverage in
+ * the game". It is not, and has not been since Part 0: coverage is measured
+ * against housing *plots* (see `Service.plots` and `housingPlots`), so it is
+ * immune to what stands on them. A denominator that climbed 4 -> 300 while the
+ * civic land stayed fixed is the bug that comment was describing rather than a
+ * property worth protecting. What this ladder still sets is the population,
+ * and through it RENT, the labour market and every demand target.
  */
-export const LEVEL_CAPACITY = [4, 16, 70, 300] as const;
+export const LEVEL_CAPACITY = [4, 16, 70, 300, 1_200] as const;
 
 /** How many levels a building can climb through. */
 export const LEVELS = LEVEL_CAPACITY.length;
@@ -137,14 +231,16 @@ export const LEVELS = LEVEL_CAPACITY.length;
 /**
  * Plots a building covers at each level.
  *
- * The two ones and the two twos are the whole of the merging mechanic: levels 0
- * and 1 stand on a single plot, climbing to level 2 merges a building with its
- * neighbour, and level 3 grows upward on that same footprint. It stops at two
- * because two is what the land offers — see `parcelOrder` in layout.ts, which
- * carries the measurement. A [1, 1, 2, 4] ladder was measured and is not
- * buildable: a district holds 0.0 residential quads.
+ * The ones and the twos are the whole of the merging mechanic: levels 0 and 1
+ * stand on a single plot, climbing to level 2 merges a building with its
+ * neighbour, and everything above it grows upward on that same footprint. It
+ * stops at two because two is what the land offers — see `parcelOrder` in
+ * layout.ts, which carries the measurement. A [1, 1, 2, 4] ladder was measured
+ * and is not buildable: a district holds 0.0 residential quads, so the fifth
+ * rung takes a 2 like the two below it rather than opening a quad tier that
+ * nothing could ever stand on.
  */
-export const LEVEL_FOOTPRINT = [1, 1, 2, 2] as const;
+export const LEVEL_FOOTPRINT = [1, 1, 2, 2, 2] as const;
 
 /**
  * The first level that stands on a merged parcel.
@@ -197,21 +293,30 @@ export const LEVEL_SCALE = LEVEL_CAPACITY.map(
 ) as readonly number[];
 
 /** What the zoning readout calls a level, and the verb on the build button. */
-export const LEVEL_NAMES = ['detached housing', 'apartments', 'towers', 'arcologies'] as const;
+export const LEVEL_NAMES = [
+  'detached housing',
+  'apartments',
+  'towers',
+  'arcologies',
+  'megastructures',
+] as const;
 
 /**
  * What each zone calls its levels.
  *
  * Names rather than numbers, because "retail park" says what a level-2 shop is
  * and "level 2" says only that it is above level 1. Commerce and industry climb
- * the same four rungs housing does and merge at the same one, so a level-2 shop
- * is a pair of shopfronts knocked together and a level-2 works is a plant that
- * has taken the yard next door — which is what these names are trying to say.
+ * the same rungs housing does and merge at the same one, so a level-2 shop is a
+ * pair of shopfronts knocked together and a level-2 works is a plant that has
+ * taken the yard next door — which is what these names are trying to say.
+ *
+ * One entry per level, and the tests assert that: a ladder with a rung the HUD
+ * cannot name is a ladder the player cannot read.
  */
 export const ZONE_LEVEL_NAMES = {
   home: LEVEL_NAMES,
-  shop: ['corner shops', 'high street', 'retail park', 'exchange'],
-  industry: ['workshops', 'factory', 'plant', 'refinery'],
+  shop: ['corner shops', 'high street', 'retail park', 'exchange', 'trade towers'],
+  industry: ['workshops', 'factory', 'plant', 'refinery', 'combines'],
 } as const;
 
 // --------------------------------------------------------------- occupancy
@@ -339,9 +444,10 @@ export const LEVEL_UP_HAPPINESS = 0.55;
  * Seconds for a zone to promote its entire eligible stock by one level.
  *
  * A rate, like abandonment, so a big city climbs faster in absolute terms and
- * at the same pace per building. Five minutes a level and four levels to climb
- * puts a fully gated district about twenty minutes from detached housing to
- * arcologies — against the old rezone, which was one button and 3,000 cash.
+ * at the same pace per building. Five minutes a level and five levels to climb
+ * puts a fully gated district about twenty-five minutes from detached housing
+ * to megastructures — against the old rezone, which was one button and 3,000
+ * cash.
  * The pacing lever moved from the treasury to the happiness panel, which is the
  * point of the change.
  */
@@ -359,18 +465,28 @@ export const LEVEL_UP_SECONDS = 300;
  * something happiness cannot: it decides how tall the city is allowed to get.
  * Do not "tidy" it into the happiness sum.
  *
- * Measured against what the two education types can actually reach. A district
- * of 24 homes holds 96 residents at level 0, 384 at level 1, 1,680 at level 2
- * and 7,200 at level 3, and its 1.5 schools educate 1,050 of them:
+ * Measured against what the two education types can actually reach. Education
+ * is land-denominated like every other coverage now (see `Service.plots`), so
+ * these rungs mean the same thing at every level rather than sliding out of
+ * reach as the city climbs — which is what they used to do:
  *
  *   - 0.35 to reach level 1 means the city needs a school at all. Coverage
  *     without one is zero, so the first promotion is gated on the first school;
  *   - 0.60 to reach level 2 is covered by schools alone, which is what makes
- *     schools the route through the middle of the game;
- *   - 0.85 to reach level 3 is not: schools alone cover a district of towers to
- *     63%, so the top of the skyline is the university's to unlock.
+ *     schools the route through the middle of the game: 62.5% at one district,
+ *     75% once the site interleave evens out;
+ *   - 0.85 to reach level 3 is covered by neither type alone — schools top out
+ *     at 78% and a university reaches 75% — so the top of the skyline needs the
+ *     university *and* the schools already standing, which is what pooling the
+ *     two in `educationCoverage` is for;
+ *   - 1 to reach level 4 is education with no slack left in it. The land always
+ *     holds enough to get there — a district's school and university sites
+ *     between them reach 33 plots against its 24, and the ratio only improves
+ *     as the interleave evens out — but it takes both types built out rather
+ *     than the two buildings 0.85 needs. In a one-district city the two rungs
+ *     coincide, because one school and one university are all the land has.
  */
-export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85] as const;
+export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85, 1] as const;
 
 /**
  * Cash per resident per second.
@@ -418,50 +534,58 @@ export const HOME_BASE = 8;
 export const HOME_GROWTH = 1.14;
 
 /**
- * Commerce opens at about what a house costs and compounds a little faster.
+ * Commerce opens a third above what a house costs and compounds at exactly the
+ * same rate.
  *
- * 9 against HOME_BASE's 8 is a 12.5% gap at the first of each; by the twentieth
- * a shop is 246 against a home's 110, which is 2.2x — "a bit faster", not a
- * different curve. It was 11.3x at the first and 43.7x at the twentieth, which
- * is what made commerce a thing you unlocked rather than a thing you chose.
+ * The matched growth is what the wider district cost this pair, and it is the
+ * repair rather than a simplification. A shop used to compound faster than a
+ * house — 1.18 against 1.14 — which was affordable over 31 commercial plots and
+ * is not over 45: measured, filling one district's commerce went from 8,409 to
+ * 85,784, or 67.6x what its housing costs. The exponent is what exploded, so
+ * the exponent is what was fixed, and the whole gap moved onto the base.
  *
- * The number to keep an eye on is not this pair but the *plot ratio* it
- * compounds over. A district sells 28 commercial plots against 19 residential —
- * 47% more — so the faster curve runs over 47% more buildings, and filling one
- * district's commerce still costs 5,098 against housing's 632, or 8.1x. That
- * ratio is inverted against ZONE_SHARE (R 0.48, C 0.31), which was solved on
- * *zoned* land; only 19 of a district's 43 zoned residential plots front a
- * street, while all 28 commercial ones do. Pricing has to be judged against the
- * frontage split, and the 8.1x is what says commerce is still the expensive
- * half of a district even at these numbers — it was 169x before.
+ * What that buys is a price *order* that never inverts. A shop is 1.375 houses
+ * at the first of each and at the forty-fifth, where before the ratio ran from
+ * 1.13 to 8x. Curves that cross are the failure mode here: 9 / 1.11 was
+ * measured first, and because it undercuts housing from the fifth building on,
+ * the discount-chasing policy bought fifteen shops, four homes and no hospital,
+ * then sat at 18% happiness for the rest of the day with eleven in the bank —
+ * a livelock, not a stall. See test/economy.test.ts, which asserts the order at
+ * every step.
  *
- * One thing this genuinely changes: the demand surcharge starts biting. It used
- * to be inert in the opening ten minutes (worst +0%, 2 shops open under a
- * discount-chasing player) and peaked at +31% across a whole day. Now that
- * player has 12 shops open inside ten minutes and is paying +20% for them, and
- * the run peak is +56% against PRICE_SURCHARGE_MAX's +60% ceiling. The
- * surcharge is what stops "buy shops, ignore everything else" now, and it is
- * doing that four points short of saturating — so the cap still bites and is
- * still not the binding constraint. Raising it would be a change to the model
- * rather than a repair.
+ * 11 rather than 9, and that is the one number set against a target rather than
+ * against the curve. SHOP_BONUS is the strongest income multiplier in the game,
+ * and the constant it is judged by is what ten shops cost per 1.0 of it: 1,433
+ * two cycles ago, 423 after the last rebalance. At base 9 the matched curve put
+ * it at 348 and the greedy livelock above followed; at 11 it is 425, which is
+ * the number that was aimed at.
+ *
+ * Filling one district's commerce now costs 28,496 against housing's 1,269, or
+ * 22.5x over 88% more plots. Commerce is the expensive half of a district by
+ * *count* rather than by curve, which is a bound the plot split can be read off
+ * rather than a coincidence of two exponents.
  */
-export const SHOP_BASE = 9;
-export const SHOP_GROWTH = 1.18;
+export const SHOP_BASE = 11;
+export const SHOP_GROWTH = 1.14;
 
 /**
- * Industry is priced between a shop and a rezone.
+ * Industry opens dear and compounds at the same rate as everything else.
  *
- * It used to compound more slowly than commerce as well; bringing SHOP_GROWTH
- * down to 1.18 has left 1.2 marginally the steeper of the two, which is fine
- * and is not worth a retune: a district holds 11 industrial plots against 28
- * commercial, so the steeper curve runs over less than half the buildings and
- * a full district's industry still costs a fraction of its commerce. Measured
- * over 24 hours after the commercial rebalance, every policy still builds
- * industry out — 9 under auto-develop, 59 disciplined, 65 greedy — so the
- * demand loop is still what gates the zone rather than the price.
+ * The same repair the commercial curve took, for the same reason: a district
+ * holds 13 industrial plots now against 8, and 240 / 1.2 filled them for 11,639
+ * against the 3,960 the old eight cost. 120 / 1.14 fills the thirteen for 3,851
+ * — the pacing the constants around it were measured against — and matching
+ * HOME_GROWTH means the price order across the three zones is fixed by the base
+ * alone: a house opens at 8, a shop at 11, a works at 120, and that ordering
+ * holds at every building rather than up to some crossover.
+ *
+ * Industry being the dearest thing to start is the whole of its identity here.
+ * Measured over 24 hours, every policy still builds it out — 37 under
+ * auto-develop, 65 greedy — so the demand loop is still what gates the zone
+ * rather than the price.
  */
-export const INDUSTRY_BASE = 240;
-export const INDUSTRY_GROWTH = 1.2;
+export const INDUSTRY_BASE = 120;
+export const INDUSTRY_GROWTH = 1.14;
 
 /**
  * Each industrial building adds this share of base income.
@@ -479,18 +603,33 @@ export const ANNEX_GROWTH = 3.4;
  * You must have built out this share of your land before the city annexes more.
  *
  * Left at 0.7 through the change that made annexation automatic, and measured
- * rather than assumed. Demand-neutral build-out of one district, holding every
- * home at one level — a player who never buys into a surcharge:
+ * rather than assumed. Demand-neutral build-out, holding every home at one
+ * level — a player who never buys into a surcharge. Re-measured through the
+ * land-denominated coverage, the fifth level and the wider district:
  *
- *   detached housing  78.6%   apartments  80.0%
- *   towers            68.6%   arcologies  68.6%
+ *                    span 13   span 15
+ *   detached housing   69.6%     64.2%
+ *   apartments         68.6%     67.4%
+ *   towers             67.1%     69.3%
+ *   arcologies         65.7%     69.7%
+ *   megastructures        —      69.1%
  *
- * So the opening and the middle game clear the gate comfortably and the top of
- * the ladder settles 1.4 points under it. That is the same shape the tiered
- * build had (53.8 / 72.3 / 83.1 / 70.8) and it is deliberate: a city of towers
- * is worker-rich, its residential demand runs negative, and filling the last of
- * its housing means paying the surcharge to do it. Expansion past the middle
- * game is a decision rather than a formality.
+ * Every rung sat under the gate before and every rung still does, so this is the
+ * shape rather than a regression: a demand-neutral player does not annex. The
+ * top three rungs sit closer to it than they did, which is the wider district's
+ * extra commercial land counting on both sides of the ratio.
+ *
+ * Annexation in an actual run got slower, and it is worth stating plainly rather
+ * than tuned away: a district is 44% bigger, so filling one to the gate takes
+ * 62 buildings rather than 49. Auto-develop's first annex moved 1.25h -> 1.63h
+ * and the discount-chasing policy's 2.46h -> 4.91h, both against a run that
+ * still reaches 5 and 9 districts inside a day. ANNEX_BASE is the lever if that
+ * ever needs pulling back.
+ *
+ * It is deliberate: a city of towers is worker-rich, its residential demand
+ * runs negative, and filling the last of its housing means paying the surcharge
+ * to do it. Expansion past the middle game is a decision rather than a
+ * formality.
  *
  * Raising it is the obvious response and the wrong one — 0.8 would put three of
  * the four levels under. Lowering it to 0.65 would clear all four and is the
@@ -588,14 +727,16 @@ export const DEMAND_TAU = 25;
  * auto-develop ends at R +0.57 / C -0.02 / I -0.02 — lively, and well short of
  * the bounds.
  *
- * The honest limit of a *constant* scale, also measured: under the two policies
- * that rezone to arcologies and annex five or six districts inside a day,
- * residential pins at -1 and commercial at +1 for about 21 of the 24 hours. The
- * imbalance a built city can reach scales with tier capacity, which spans 4 to
- * 300, and no single constant covers a 75x range — a scale set for arcologies
- * would leave the opening hour flat. Fixing it properly means dividing by a
- * size term rather than a constant, which is a change to the model the brief
- * specifies rather than a calibration. See tools/economy.calibrate.mjs.
+ * Not a constant scale, and this is the constant it is built out of rather than
+ * the scale itself: `demandScale` multiplies it by `cityScale`, the mean
+ * LEVEL_SCALE a housing plot carries. The imbalance a built city can reach
+ * scales with the level ladder, which now spans 4 to 1,200 residents a plot —
+ * 300x — and no single constant covers that: a scale set for megastructures
+ * would leave the opening hour flat, and one set for the opening pins
+ * everything above towers. Dividing by the size term is what keeps one number
+ * meaningful at both ends, and it is why the fifth rung moved a built-out
+ * district's demand by 0.01. See ZONE_SHARE for the measurement, and
+ * tools/economy.calibrate.mjs for the runs.
  */
 export const DEMAND_SCALE = 300;
 
@@ -646,14 +787,20 @@ export const INDUSTRY_JOBS = LEVEL_FOOTPRINT.map(
 /**
  * Shopping trips generated per resident, against trips one shop can serve.
  *
- * Calibrated so commerce clears exactly at the zoning budget: 43 plots x 14
- * residents x 0.5 trips = 301 trips, and 28 commercial plots x 11 = 308. The
- * point is that the land budget and the demand model agree about what a
- * finished district looks like — otherwise the annexation gate asks for plots
- * the demand model is surcharging.
+ * Calibrated so commerce clears at the *frontage* a district actually sells,
+ * which is what the wider district moved. The labour market clears at 25.5
+ * residents a housing plot (see WORKING_SHARE), so a district's 24 housing
+ * plots hold 612 residents and generate 306 trips — and its 45 commercial plots
+ * serve 45 x 7 = 315. It was 31 plots x 11 = 341 against the same 306.
+ *
+ * Throughput fell rather than spend rising because that is what the extra land
+ * means: a district with 45 shops in it has smaller shops, not richer
+ * residents. The point is that the land budget and the demand model agree about
+ * what a finished district looks like — otherwise the annexation gate asks for
+ * plots the demand model is surcharging.
  */
 export const SPEND_PER_RESIDENT = 0.5;
-export const SHOP_THROUGHPUT = 11;
+export const SHOP_THROUGHPUT = 7;
 
 /** Trips one shop serves at each level. Per plot, as SHOP_JOBS explains. */
 export const SHOP_TRIPS = LEVEL_FOOTPRINT.map((f) => SHOP_THROUGHPUT * f) as readonly number[];
@@ -661,8 +808,14 @@ export const SHOP_TRIPS = LEVEL_FOOTPRINT.map((f) => SHOP_THROUGHPUT * f) as rea
 /**
  * Goods one shop pulls from industry, against what one industrial plot makes.
  *
- * Same calibration: 28 shops x 4 plus a base export of 60 is 172, and 19
- * industrial plots x 9 is 171.
+ * Left alone across the wider district, and measured rather than assumed to be
+ * safe. Industry is structurally *under*supplied against the demand its shops
+ * and the export tap generate, which is what keeps industrial demand positive
+ * and industry worth building: at span 13 a district's supply covered 36% of
+ * its draw (8 plots x 9 against 31 shops x 4 plus 74 of export), and at span 15
+ * it covers 46% (13 x 9 against 45 x 4 plus 74). The ratio moved toward balance
+ * rather than away from it, so the term needed no retune — see
+ * tools/economy.calibrate.mjs, where industrial demand pins under no policy.
  */
 export const SUPPLY_DRAW = 4;
 export const INDUSTRIAL_OUTPUT = 9;
@@ -720,8 +873,28 @@ export interface Service {
   readonly buildLabel: string;
   /** How the HUD names this service's coverage when it is the binding one. */
   readonly coverLabel: string;
-  /** Residents one of these covers, once it is fully staffed. */
-  readonly capacity: number;
+  /**
+   * Housing *plots* one of these covers, once it is fully staffed.
+   *
+   * Land, not people, and that is the repair Part 0 of this cycle was. Coverage
+   * used to divide by residents, and residents per plot climb 4 -> 300 as
+   * buildings level while civic land stays at six 2x2 sites a district split
+   * five ways — about 1.2 buildings of each type, forever. Need scaled with
+   * density and supply scaled with land, so the gap opened as the player
+   * succeeded: a city with every housing plot at the top level and every
+   * service built to the cap the land allows reached 34% happiness at 1
+   * district and 34% at 25, and could never reach 40% at any size.
+   *
+   * The repo had already solved this once for parks and written down why — see
+   * PLOTS_PER_PARK. Housing plots are the denominator that survives, because
+   * they do not move for levels (a merged tower stands on the two plots its
+   * pair held), for merges (`plotsOf` counts a merged parcel twice) or for
+   * occupancy (a boarded-up house still holds its land).
+   *
+   * See `coverage` in economy.ts for why the denominator is the housing plots
+   * the city has *developed* rather than the 24 a district owns.
+   */
+  readonly plots: number;
   readonly base: number;
   /** Price growth per building. Steeper for the one that is a landmark. */
   readonly growth: number;
@@ -750,19 +923,51 @@ export interface Service {
  * A city that never builds one still works, it just runs at the floor and never
  * gets past detached housing — neglect reads as a ceiling on what the city can
  * become, not as a punishment for playing.
+ *
+ * ---
+ *
+ * The `plots` column is what Part 0 of this cycle re-derived, and it is derived
+ * rather than picked. Two numbers set it: 1.2 sites of each 2x2 type per
+ * district, against 24 housing plots per district. A type whose every allowed
+ * building is standing therefore covers `1.2 x plots / 24` of the city, so
+ * `plots = 20` is exactly full coverage and exactly half coverage at half the
+ * buildings. That is the hospital, and it is the anchor.
+ *
+ * The other two happiness services come off the weight ordering rather than
+ * being chosen: `plots_i = 20 x w_hospital / w_i`, so a service worth less to
+ * happiness needs less of the city's civic land to satisfy. That reproduces the
+ * ordering the old `capacity` column had — 900 / 1200 / 1500 is within 8% of
+ * inverse-proportional to 0.34 / 0.26 / 0.22 — and the slack it leaves police
+ * and fire is what the one-district city needs: the six sites interleave
+ * 2/1/1/1/1, so at one district police and fire have a single building each
+ * against 24 plots and would read 83% and 87% at the hospital's 20.
+ *
+ * `serviceAllowed` then does the rest of the work, and it is why the three do
+ * not have to be equal to read alike: the allowance is `need + 1` clamped by the
+ * land, so a service with more reach per building is simply allowed fewer of
+ * them. Measured over every district count from 1 to MAX_DISTRICTS with every
+ * allowed building standing and staffed, the worst reading of any of the three
+ * is 100%; at half the allowed buildings they average 53% / 55% / 55%. See
+ * test/services.test.ts, which asserts the >= 95% floor so a later change to the
+ * site interleave cannot quietly reopen the ceiling.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    capacity: 900,   base: 130,    growth: 1.35, weight: 0.34, span: 2 },
-  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    capacity: 1_200, base: 210,    growth: 1.35, weight: 0.26, span: 2 },
-  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      capacity: 1_500, base: 320,    growth: 1.35, weight: 0.22, span: 2 },
+  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 20, base: 130,    growth: 1.35, weight: 0.34, span: 2 },
+  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 26, base: 210,    growth: 1.35, weight: 0.26, span: 2 },
+  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 31, base: 320,    growth: 1.35, weight: 0.22, span: 2 },
   /**
-   * Schools take the fourth slot in the 2x2 interleave. 700 is set against what
-   * a district holds rather than against anything real: 1.5 schools a district
-   * educate 1,050, which covers a district of apartments (384) outright and a
-   * district of towers (1,680) to 63% — under LEVEL_EDUCATION's top rung, which
-   * is what leaves the last level for the university to unlock.
+   * Schools take the fourth slot in the 2x2 interleave, and 15 is the only
+   * integer that keeps LEVEL_EDUCATION's design intact at both ends of the map.
+   * Schools alone have to clear the 0.60 rung and miss the 0.85 one, at one
+   * district (a single school against 24 plots, so plots/24) and at scale (1.2
+   * schools against 24, so 1.2 x plots/24). That is plots in [14.4, 20.4) and
+   * [12, 17): 15 or 16, and 15 leaves the wider margin under 0.85.
+   *
+   * Measured: schools alone read 62.5% at 1 district, 62.5% at 2 and 3, 78% at
+   * 4 and 75% from 10 up — through the middle of LEVEL_EDUCATION everywhere,
+   * and never at its top.
    */
-  { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    capacity: 700,   base: 180,    growth: 1.35, weight: 0,    span: 2 },
+  { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    plots: 15, base: 180,    growth: 1.35, weight: 0,    span: 2 },
   /**
    * The transit depot: the fifth 2x2 type, and the first civic building in the
    * game that *earns*.
@@ -776,17 +981,31 @@ export const SERVICES: readonly Service[] = [
    * exactly 1 two cycles ago, and a fifth would re-open that calibration to buy
    * something transport already has two better routes to.
    *
-   * 2,200 against a hospital's 900: a network reaches further than a building,
-   * and a district that has bought one depot should feel covered by it.
+   * 24 against a hospital's 20: a network reaches further than a building, and
+   * "a district that has bought one depot should feel covered by it" is now
+   * exactly what the number says — one depot, 24 plots, the 24 plots of a
+   * district. The 2,200 residents this used to read stated the same intent
+   * against a denominator that moved 75x under it.
    */
-  { key: 'transit',    name: 'Transit',     buildLabel: 'Open depot',          coverLabel: 'Transit coverage',   capacity: 2_200, base: 260,    growth: 1.35, weight: 0,    span: 2 },
+  { key: 'transit',    name: 'Transit',     buildLabel: 'Open depot',          coverLabel: 'Transit coverage',   plots: 24, base: 260,    growth: 1.35, weight: 0,    span: 2 },
   /**
-   * Five schools' worth of teaching in one building, on nine plots, one to a
-   * district, at forty times a school's opening price and compounding half again
-   * as fast. Every one of those is doing the same job: making a university a
-   * thing the city decides to do rather than a box it ticks.
+   * Three quarters of a district's housing taught by one building, on nine
+   * plots, one to a district, at forty times a school's opening price and
+   * compounding half again as fast.
+   *
+   * It used to say "five schools' worth of teaching", and against a residents
+   * denominator that was true — 3,500 against 700. Against land it is not, and
+   * it must not be: there are 1.2 school sites to a district and exactly one
+   * university site, so a university worth five schools would reach 75 plots,
+   * three districts of housing, and education would be a thing you bought once.
+   *
+   * 18 is what the pool needs instead. `educationCoverage` sums schools and
+   * universities, so neither type alone clears LEVEL_EDUCATION's top rung —
+   * schools reach 62.5-78%, a university 75% — and together they always do.
+   * The top of the skyline is still the university's to unlock; what changed is
+   * that it unlocks it alongside the schools rather than instead of them.
    */
-  { key: 'university', name: 'Universities', buildLabel: 'Found university',   coverLabel: 'University coverage', capacity: 3_500, base: 7_200, growth: 1.9,  weight: 0,    span: 3 },
+  { key: 'university', name: 'Universities', buildLabel: 'Found university',   coverLabel: 'University coverage', plots: 18, base: 7_200, growth: 1.9,  weight: 0,    span: 3 },
 ];
 
 /** The three that feed happiness. Their weights and RECREATION_WEIGHT sum to 1. */
@@ -864,20 +1083,118 @@ export const HAPPINESS_FLOOR = 0.55;
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
 
+// -------------------------------------------------------------- landmarks
+
+export interface Landmark {
+  /** Matches the GameState counter and the coverage key. */
+  readonly key: 'museum' | 'stadium';
+  readonly name: string;
+  readonly buildLabel: string;
+  readonly base: number;
+  readonly growth: number;
+  /** Plots per side of the site it stands on. One of each per district. */
+  readonly span: 2 | 3;
+  /**
+   * How far its influence reaches from its own centre, in world units.
+   *
+   * The one number that decides what a landmark is worth, and it is measured
+   * rather than chosen — see LANDMARK_MOOD for the curve it was read off.
+   */
+  readonly reach: number;
+}
+
+/**
+ * The city's special buildings: one to a district of each size, on the squares
+ * FRONTAGE_TARGET holds back for them.
+ *
+ * Landmarks are the game's first area-of-effect, and the shape of that effect is
+ * the whole design. Per-building happiness does not exist here and must not be
+ * introduced: levels are cohorts, so a per-instance modifier would mean
+ * per-instance state, a save that grows with the city, and the end of "positions
+ * derive from counts". What a landmark does instead is cover *land* — the
+ * housing plots inside `reach` of it — and the share of the city's housing
+ * under at least one landmark is a single scalar. See `landmarkCoverage`.
+ *
+ * Two sizes so the choice is a real one. A museum is cheap, fits the 2x2 square
+ * every district already claims, and covers its own neighbourhood; a stadium
+ * costs three times as much, needs the 3x3, and reaches half again as far.
+ * Neither earns anything: what they buy is mood, which is the one thing a city
+ * short of civic land cannot buy any other way.
+ *
+ * The two reaches were swept together rather than picked, against the share of
+ * housing land each covers with one landmark on every site it has:
+ *
+ *   districts        1      4     10     25     49
+ *   museums only   46%    33%    49%    49%    47%
+ *   stadiums only  63%    83%    80%    85%    86%
+ *   both           63%    92%    88%    91%    92%
+ *
+ * so a museum is worth about half a district and a stadium most of one, and
+ * neither type alone gets the city past the mid-eighties — the last stretch
+ * needs both, which is what keeps the cheap one worth buying after the dear one
+ * exists. Against 3x the price the stadium is 1.8x the coverage, so museums are
+ * the better value and stadiums are what finishes the job.
+ *
+ * The one-district city is the exception and is left as it is: a stadium's 38
+ * contains a museum's 24 at that size, so the museum adds nothing until the
+ * city is two districts wide. Reaches large enough to avoid that would cover
+ * the whole map from one site.
+ *
+ * Coverage is smooth in the count rather than stepped — at ten districts, one
+ * stadium covers 15%, three 36%, five 54% and ten 80% — so every purchase moves
+ * the number and none of them is a cliff.
+ */
+export const LANDMARKS: readonly Landmark[] = [
+  { key: 'museum',  name: 'Museums',  buildLabel: 'Open museum',   base: 4_000,  growth: 1.6, span: 2, reach: 24 },
+  { key: 'stadium', name: 'Stadiums', buildLabel: 'Build stadium', base: 12_000, growth: 1.7, span: 3, reach: 38 },
+];
+
+/**
+ * What a fully landmarked city adds to its happiness.
+ *
+ * A *modifier* on earned coverage, exactly as the tax mood and
+ * FREE_TRANSPORT_MOOD are, and not a fifth weight. The four happiness weights
+ * were calibrated to sum to exactly 1 and go on doing so — adding a fifth would
+ * re-open that calibration to buy something a modifier states more honestly.
+ * What a landmark changes is how the city feels about the coverage it has, not
+ * how much that coverage is worth.
+ *
+ * 0.12 against the numbers it sits beside: free transport is worth 0.05, the
+ * punitive tax rate costs 0.14, and a fire costs 0.05 while it burns. So a
+ * fully landmarked city can run one tax step harder than it otherwise could, or
+ * absorb two fires, and a neglected one is lifted clear of HAPPINESS_MIN_BUILD
+ * (0.35) without a single service. It is deliberately worth less than the
+ * cheapest service weight (recreation, 0.18): a landmark should not be a way to
+ * skip the hospital.
+ *
+ * Since coverage tops out at 1 and this is added on top, a city that has already
+ * earned 1.00 gains nothing — which is the right shape. Landmarks buy happiness
+ * *early*, standing in for services not yet built, and stop mattering once the
+ * city is properly served.
+ */
+export const LANDMARK_MOOD = 0.12;
+
 // ------------------------------------------------------------------ parks
 
 /**
- * Homes one park keeps happy.
+ * Housing plots one park keeps happy.
  *
- * Against *homes*, not residents, and that is the whole design of the term. The
- * land ratio is fixed at four park plots to nineteen housing plots a district,
- * whatever stands on them — a rezone multiplies residents by up to 75x and adds
- * exactly zero park land. A per-resident denominator would therefore be trivial
- * at detached housing and unreachable at arcologies, which is a happiness term
- * that means two different things at two ends of the same game. Per home it is
- * tier-invariant: 19 homes want 3.8 parks and a district has 4.
+ * Against land, not residents, and that is the whole design of the term — this
+ * is the one coverage the repo got right first time, and the one Part 0 made
+ * every other coverage copy. A rezone multiplies residents by up to 75x and adds
+ * exactly zero park land, so a per-resident denominator would be trivial at
+ * detached housing and unreachable at arcologies: a happiness term that means
+ * two different things at two ends of the same game.
+ *
+ * Plots rather than *homes*, which is the one thing that moved. Per home the
+ * term was level-invariant but not merge-invariant: 24 detached houses want 4.8
+ * parks against the 4 a district has, and the same land merged into 12 towers
+ * wants 2.4 — so recreation jumped from 83% to 100% the moment a district
+ * merged, having built nothing. Six is the ratio the land already states: four
+ * park plots to twenty-four housing plots a district, so a district's parks
+ * cover its housing exactly and half of them cover half of it.
  */
-export const HOMES_PER_PARK = 5;
+export const PLOTS_PER_PARK = 6;
 
 /**
  * Recreation's share of happiness. With the three services above it sums to 1.
@@ -965,6 +1282,241 @@ export const TRANSIT_LABOUR_DRAW = 0.35;
  */
 export const FREE_TRANSPORT_REACH = 0.33;
 export const FREE_TRANSPORT_MOOD = 0.05;
+
+// ---------------------------------------------------------------------- port
+
+/**
+ * One half of a port. Two of them, and they buy different things.
+ *
+ * The same shape as a SERVICE or a LANDMARK — a count, a site, an exponential
+ * cost — because it is the same kind of thing, and because a one-off flat price
+ * would be meaningless in an economy this exponential: by the time a city has
+ * reached the coast it is earning more in a second than any fixed number is
+ * worth. What bounds them instead is land: one berth of each per *coastal*
+ * district, and a full city owns a handful of those.
+ *
+ * Bases are set against LANDMARKS, which is the nearest thing already priced:
+ * a cruise terminal is between a museum and a stadium, a cargo terminal past
+ * both, and the growth is steeper than either because a waterfront runs out of
+ * berths long before a district runs out of squares.
+ */
+export interface Terminal {
+  readonly key: 'cruise' | 'cargo';
+  readonly name: string;
+  readonly buildLabel: string;
+  readonly base: number;
+  readonly growth: number;
+}
+
+export const TERMINALS: readonly Terminal[] = [
+  {
+    key: 'cruise',
+    name: 'Cruise',
+    buildLabel: 'Open cruise terminal',
+    base: 20_000,
+    growth: 1.8,
+  },
+  {
+    key: 'cargo',
+    name: 'Cargo',
+    buildLabel: 'Build cargo terminal',
+    base: 28_000,
+    growth: 1.8,
+  },
+];
+
+/**
+ * Visitors a cruise terminal lands, as a share of the city's own population.
+ *
+ * Tied to residents rather than to a flat rate, and for the reason FARE_PER_RIDER
+ * is: a constant would be the opening hour's whole economy and a mature city's
+ * rounding error. What a berth is worth has to grow with the place it serves,
+ * because the reason anybody sails there is the place.
+ *
+ * Scaled by happiness on top, which is the mechanic rather than the flavour: it
+ * is the only income line in the game that goes to *zero* in a miserable city
+ * rather than merely to HAPPINESS_FLOOR. Nobody's holiday is somewhere grim.
+ */
+export const VISITORS_PER_RESIDENT = 0.03;
+
+/**
+ * What a visitor spends per second, against RENT's 0.14 a resident.
+ *
+ * Five times what somebody who lives there pays, and still a small line,
+ * because there are far fewer of them. Set against the transit fares rather
+ * than against rent, because that is the family it belongs to: both are trade
+ * income and both sit outside the multipliers rent goes through, so both are a
+ * far smaller share of a built-out city's ledger than of a young one's.
+ *
+ * Measured (tools/water.calibrate.mjs) on a city built out to its own frontage,
+ * with a full transit network for comparison. One cruise berth is worth about
+ * what the whole fare line is, at every size and at every rung of the ladder:
+ *
+ *   12 districts, 1 berth    fares 0.34% of the ledger, cruise 0.35%
+ *   25 districts, 4 berths   fares 0.16%, cruise 0.17% each
+ *   49 districts, 6 berths   fares 0.08%, cruise 0.09% each
+ *
+ * So a finished waterfront is worth something over half a percent of a mature
+ * ledger, which is the same order as everything else the city can buy that is
+ * not a building. What makes it worth buying is not the size of the line.
+ */
+export const VISITOR_SPEND = 0.7;
+
+/**
+ * What one cargo terminal adds to the export tap, as a fraction of it.
+ *
+ * It lifts EXPORT_BASE and EXPORT_PER_DISTRICT rather than sitting beside them,
+ * so there is still exactly one number the outside world's appetite is made of
+ * and one place to look when industrial demand is wrong. A parallel term would
+ * be a second export market that nothing else in the model knew about.
+ *
+ * Worth stating plainly: this matters most to a young city and least to an old
+ * one. The export tap is measured in level-0 plots while `demandScale` grows
+ * with the level ladder, so what a berth moves the industrial target by falls
+ * away as the city climbs. Measured, before `clampDemand`:
+ *
+ *   12 districts   +0.29 on detached housing, +0.07 on apartments, +0.02 on towers
+ *   49 districts   +0.98, +0.24, +0.06 for the same three
+ *
+ * That is the right way round rather than a shortfall — a port is how a city's
+ * industry gets going, not how a finished one stays busy — and the land gate
+ * keeps the strong end honest: a city that has only just reached the water owns
+ * exactly one berth, so the +0.29 is a lift and not a pin. Against
+ * TRANSIT_LABOUR_DRAW's measured 0.14, one berth early is the larger of the two
+ * levers a player has on industrial demand.
+ */
+export const CARGO_EXPORT_LIFT = 0.4;
+
+// ------------------------------------------------------------------ estates
+
+/**
+ * What one industrial estate is worth, in the industrial plots a district
+ * sells.
+ *
+ * An estate is one large parcel off a highway with a shed on it — nine plots
+ * across and nothing but the shed inside — so it stands in for nine of the
+ * small works the street grid sells. Counting it in *plots* rather than giving
+ * it a scale of its own is what lets every term the demand model already has
+ * take it without a special case: jobs, output and the income multiplier are
+ * all per industrial plot, at every level, by ZONE_SHARE's own design.
+ *
+ * The in-district industrial land is untouched by all of this and stays exactly
+ * where it is. An estate is where a city puts industry it has no room for, not
+ * a replacement for the works on Mill Street.
+ */
+export const ESTATE_PLOTS = 9;
+
+/**
+ * How much more each of those plots makes, and earns, than one inside the city.
+ *
+ * The reason to build out of town: room to lay a shed out properly. Output and
+ * the income multiplier take it; jobs do not — see JOBS_PER_ESTATE_PLOT.
+ *
+ * There is no happiness penalty to set against it, and that is a decision
+ * rather than an oversight: nothing in `happinessTarget` reads industry at all,
+ * so a penalty would have to be invented — and inventing one would be a balance
+ * change to the in-district industrial zone, which is not what this is.
+ *
+ * What it is worth, measured at tower housing where the labour market clears:
+ * a full band is +19% of the ledger at 14 districts and +10% at 49 — against
+ * the shop multiplier's 35 to 46%, so it is a major line and not the game. On
+ * the demand side it pushes industrial demand *down* by 0.28 and 0.52 of a
+ * point, which at MAX_DISTRICTS takes a signal that was pinned at its upper
+ * bound and puts it back in the middle of its range. That is the right
+ * direction: a band of works is supply, and a built-out city is short of it.
+ */
+export const ESTATE_YIELD = 1.4;
+
+/**
+ * Hands one estate plot needs, against JOBS_PER_INDUSTRIAL's 20 inside the city.
+ *
+ * The number that makes an estate a different thing from a works on Mill
+ * Street rather than a bigger one, and it is what a shed on open ground with a
+ * yard around it actually is: more output, fewer people. So the two kinds of
+ * industry buy different things — the works inside the city pull residents in
+ * through the jobs they make, and the estates bring goods and money.
+ *
+ * Measured, and the drift is what the number was set from. Jobs land on
+ * residential demand and a whole band of them lands hard. Taken at the rung
+ * where the labour market actually clears — tower housing, see WORKING_SHARE —
+ * and before `clampDemand`, because a built-out city sits on its bounds under
+ * this model already:
+ *
+ *              full band's raw R drift    at 14 districts    at 49
+ *   20 jobs    (JOBS_PER_INDUSTRIAL)              +0.44      +0.82
+ *    6 jobs                                       +0.13      +0.25
+ *
+ * At 20 the band pushed a signal already sitting at +0.73 straight through its
+ * bound, leaving the housing discount stuck there with nothing left to say. At
+ * 6 it is a lift a player can watch move, and the top of the range stays inside
+ * the bounds at every rung of the ladder.
+ * See tools/estates.calibrate.mjs; the industrial side of the same drift is in
+ * ESTATE_YIELD's own measurement.
+ */
+export const JOBS_PER_ESTATE_PLOT = 6;
+
+/**
+ * How many districts the city must own before it may build outside its limits.
+ *
+ * The progression gate, and a count rather than a share because there is no
+ * land to measure: an estate stands on ground the city does not own and never
+ * will. Fourteen puts the highway a little past the port, which opens on the
+ * tenth to sixteenth annexation depending on the seed — the two are separate
+ * features and neither gates the other, but they should not both arrive in the
+ * same afternoon.
+ *
+ * Worth stating plainly, because it is a property of the annexation gate rather
+ * than of this number: the calibrator's best policy reaches ten districts in
+ * *336* simulated hours and stalls there at 66.5% developed against a 70% gate.
+ * So both the port and the estates sit past its horizon, and so does most of
+ * the run up to MAX_DISTRICTS. That is a pacing question about
+ * ANNEX_MIN_OCCUPANCY and the cost curves, and moving this number would hide it
+ * rather than answer it.
+ */
+export const HIGHWAY_MIN_DISTRICTS = 14;
+
+/**
+ * What a parcel off the highway costs.
+ *
+ * Derived rather than picked, and the derivation is the whole ordering between
+ * the two kinds of industry: an estate opens at what the city's *last*
+ * in-district works would cost with every industrial plot it owns built on. So
+ * filling your own industrial land is always the cheaper move and the band is
+ * what you buy when there is none left — which is exactly the fiction, and it
+ * is why the in-district industrial zone did not have to be weakened to make
+ * room for this one.
+ *
+ * It is still the better deal at the margin once it opens, and it has to be or
+ * nobody would ever take it: a parcel is nine plots at ESTATE_YIELD, so it buys
+ * about 12.6 works' worth of output for the price of one, against an in-district
+ * curve that has already compounded 182 times. What the player is buying past
+ * that point is a fresh curve.
+ */
+const ESTATE_ANCHOR_WORKS = FRONTAGE_TARGET.industrial * HIGHWAY_MIN_DISTRICTS;
+export const ESTATE_BASE = INDUSTRY_BASE * INDUSTRY_GROWTH ** ESTATE_ANCHOR_WORKS;
+
+/**
+ * How hard a parcel compounds.
+ *
+ * Gentler than the landmarks or the port because the band holds far more of
+ * them: at 1.35 over the twenty-six parcels this build's seed leaves dry, the
+ * last one costs about 1,800 times the first — the same spread INDUSTRY_GROWTH
+ * covers in fifty-seven buildings. Steeper and the back half of the band would
+ * be content nobody reaches; flatter and the whole band is one purchase.
+ */
+export const ESTATE_GROWTH = 1.35;
+
+/**
+ * What the road out of town costs: exactly what the last district did.
+ *
+ * Derived against the annexation curve rather than against the parcels, because
+ * that is the decision it stands beside — a player at the gate is choosing
+ * between one more district of their own land and the road to somebody else's.
+ * Anchoring it to a parcel instead would have priced the enabler above the
+ * feature: an estate opens at what a fully built city's last works costs, which
+ * at fourteen districts is eleven times the price of the fourteenth.
+ */
+export const HIGHWAY_COST = ANNEX_BASE * ANNEX_GROWTH ** (HIGHWAY_MIN_DISTRICTS - 1);
 
 // -------------------------------------------------------------------- policy
 

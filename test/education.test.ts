@@ -26,7 +26,7 @@ import {
 import { Game } from '../src/sim/game';
 import { CityLayout } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { housed } from './levels';
+import { housed, housedOn } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -84,24 +84,36 @@ describe('education is a gate, not a mood', () => {
 });
 
 describe('education coverage', () => {
-  it('pools schools and universities against the housing stock', () => {
-    const s = state({ ...housed(24, 2), schools: 2, schoolStaff: 1 });
-    // A tower stands on two plots and holds both plots' worth. See LEVEL_HOUSING.
-    const people = 24 * 140;
-    expect(educationCoverage(s)).toBeCloseTo((2 * (school?.capacity ?? 0)) / people, 9);
+  it('pools schools and universities against the housing land', () => {
+    // Two districts' worth of housing land, whatever level stands on it.
+    const plots = 48;
+    const s = state({ ...housedOn(plots, 2), schools: 2, schoolStaff: 1 });
+    expect(educationCoverage(s)).toBeCloseTo((2 * (school?.plots ?? 0)) / plots, 9);
 
-    const withUni = { ...s, universities: 1, universityStaff: 1 };
-    // Capped at everybody, like every other coverage: one university is nearly
-    // three times what a district of towers needs on its own.
+    const withUni = { ...s, universities: 2, universityStaff: 1 };
     expect(educationCoverage(withUni)).toBeCloseTo(
-      Math.min(1, (2 * (school?.capacity ?? 0) + (university?.capacity ?? 0)) / people),
+      Math.min(1, (2 * (school?.plots ?? 0) + 2 * (university?.plots ?? 0)) / plots),
       9,
     );
     expect(educationCoverage(withUni)).toBe(1);
   });
 
-  it('weighs a university far more heavily than a school', () => {
-    expect(university?.capacity ?? 0).toBeGreaterThan((school?.capacity ?? 0) * 3);
+  /**
+   * The top rung is the pair's, not either one's. A university reaches more
+   * land than a school and there is one site for it against 1.2 school sites,
+   * so neither type alone clears LEVEL_EDUCATION's 0.85 — which is what makes
+   * the last level something the city finishes rather than something it buys.
+   */
+  it('needs both types for the top rung, and neither alone', () => {
+    expect(university?.plots ?? 0).toBeGreaterThan(school?.plots ?? 0);
+    const top = LEVEL_EDUCATION[LEVELS - 1] ?? 1;
+    const plots = 24;
+    const schoolsOnly = state({ ...housedOn(plots, 2), schools: 1, schoolStaff: 1 });
+    const uniOnly = state({ ...housedOn(plots, 2), universities: 1, universityStaff: 1 });
+    const both = { ...schoolsOnly, universities: 1, universityStaff: 1 };
+    expect(educationCoverage(schoolsOnly)).toBeLessThan(top);
+    expect(educationCoverage(uniOnly)).toBeLessThan(top);
+    expect(educationCoverage(both)).toBeGreaterThanOrEqual(top);
   });
 
   it('reads as covered only where there is no housing to teach', () => {

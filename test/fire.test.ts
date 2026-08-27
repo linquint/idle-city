@@ -151,36 +151,37 @@ describe('ignition is reproducible', () => {
     // fire coverage underneath it. Three things pin it:
     //
     //   - every home is already at the top level, so `promotable` is zero and
-    //     no cohort can move. A climbing city is the destabiliser here — each
-    //     promotion multiplies residents and drops coverage under itself;
-    //   - hospitals, police and parks all cover the population outright, so
+    //     no cohort can move. A climbing city is the destabiliser here — a
+    //     promotion moves the population the occupancy target is read from;
+    //   - hospitals, police and parks all cover the housing land outright, so
     //     happiness settles rather than oscillating, and occupancy with it;
-    //   - fire alone is left short: one station against ~5,400 residents is
-    //     coverage 0.28, which puts the response at 70.6s — inside
+    //   - fire alone is left short: one station reaches 31 of the 110 housing
+    //     plots, coverage 0.28, which puts the response at 70.3s — inside
     //     BURN_OUT_SECONDS, so nothing burns down and the counts never move.
     //
     // That leaves 72% of the base rate over 622 buildings, about 22 fires an
     // hour. Every ignition attempt costs exactly three draws, so the cursor is
     // the fire history in one number. Measured: 22 ignitions either way, gap 0.
     //
-    // The counts moved when merging arrived and the shape did not. A top-level
-    // building stands on two plots, so the same 622 buildings need far more land
-    // than 21 districts hold — and the same 5,400 residents come from 9 homes
-    // rather than 22. Commerce and industry carry the building count instead,
-    // which is what keeps the ignition rate exactly where it was.
+    // The housing count moved when coverage became land-denominated and the
+    // shape did not. Coverage no longer collapses under a levelled city, so
+    // leaving fire short takes housing *land* rather than housing density: 55
+    // top-level homes on 110 plots against one station. Commerce and industry
+    // carry the rest of the building count, which is what keeps the ignition
+    // rate where it was.
     const patch = (): Partial<GameState> => ({
       districts: 49,
-      ...built(9, 473, 140, 3),
+      ...built(55, 427, 140, 3),
       occupancyR: 0.7,
       occupancyC: 0.7,
       occupancyI: 0.7,
-      hospitals: 7,
+      hospitals: 6,
       hospitalStaff: 1,
       police: 5,
       policeStaff: 1,
       fire: 1,
       fireStaff: 1,
-      parks: 5,
+      parks: 19,
       cash: 0,
     });
     const away = at(patch());
@@ -190,7 +191,7 @@ describe('ignition is reproducible', () => {
 
     const ignitions = (g: Game): number => g.state.fireCursor / 3;
     expect(ignitions(watched)).toBeGreaterThan(10);
-    expect(away.state.homes).toBe(9);
+    expect(away.state.homes).toBe(55);
     expect(away.state.homeLevels).toEqual(watched.state.homeLevels);
     const gap = Math.abs(ignitions(away) - ignitions(watched));
     expect(gap).toBeLessThanOrEqual(Math.max(1, ignitions(watched) * 0.01));
