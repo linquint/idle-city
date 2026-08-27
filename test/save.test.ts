@@ -6,6 +6,7 @@ import {
   OCCUPANCY_EMPTY,
   OCCUPANCY_FULL,
   SERVICES,
+  TAX_NEUTRAL,
   TAX_STEPS,
 } from '../src/sim/config';
 import {
@@ -19,16 +20,24 @@ import {
   industryCapacity,
   landmarkCoverage,
   landmarkSiteCapacity,
+  faresWaived,
+  income,
+  landValue,
+  netIncome,
   parkCapacity,
+  plantCapacity,
+  powerRatio,
   residents,
   serviceAllowed,
   taxStep,
+  upkeep,
   serviceCount,
   shopCapacity,
   siteCapacity,
 } from '../src/sim/economy';
 import { BUILDABLE_PARKS_PER_DISTRICT } from '../src/sim/layout';
 import { load, migrate, save, SAVE_KEY, secondsAway } from '../src/sim/save';
+import { Game } from '../src/sim/game';
 import { createState, SAVE_VERSION, type GameState } from '../src/sim/state';
 import { built, cohort, housed, mix, trading } from './levels';
 
@@ -871,5 +880,137 @@ describe('a doctored save', () => {
     const state = migrate(doctored({ fireCursor: Number.NaN, fireHazard: Number.NaN }), 0);
     expect(state?.fireCursor).toBe(0);
     expect(state?.fireHazard).toBe(0);
+  });
+});
+
+describe('every version this game has written', () => {
+  /**
+   * The batch-level claim, as one sweep: a save from any build this game has
+   * ever shipped opens, and the city it opens into is *legal* — not merely
+   * non-null. Legal means every invariant the simulation reads without checking:
+   * cash finite and non-negative, land inside what the districts own, the
+   * bounded signals inside their bounds, and every derived read finite.
+   *
+   * Run forward a minute afterwards as well, because a state that is legal at
+   * rest and diverges on the first tick is the failure this is really for — v9
+   * added a wage bill that leaves the treasury and a power ratio that caps
+   * occupancy, and both are the kind of thing that reads fine and then runs
+   * away.
+   */
+  const legal = (state: GameState): void => {
+    expect(state.version).toBe(SAVE_VERSION);
+    expect(Number.isFinite(state.cash)).toBe(true);
+    expect(state.cash).toBeGreaterThanOrEqual(0);
+    expect(state.districts).toBeGreaterThanOrEqual(1);
+    expect(state.districts).toBeLessThanOrEqual(MAX_DISTRICTS);
+    expect(plotsOf(state, 'home')).toBeLessThanOrEqual(homeCapacity(state));
+    expect(plotsOf(state, 'shop')).toBeLessThanOrEqual(shopCapacity(state));
+    expect(plotsOf(state, 'industry')).toBeLessThanOrEqual(industryCapacity(state));
+    expect(state.plants).toBeLessThanOrEqual(plantCapacity(state));
+    expect(state.happiness).toBeGreaterThanOrEqual(0);
+    expect(state.happiness).toBeLessThanOrEqual(1);
+    for (const key of ['demandR', 'demandC', 'demandI'] as const) {
+      expect(Math.abs(state[key])).toBeLessThanOrEqual(1);
+    }
+    for (const value of [income(state), upkeep(state), netIncome(state), powerRatio(state), landValue(state)]) {
+      expect(Number.isFinite(value)).toBe(true);
+    }
+    expect(powerRatio(state)).toBeGreaterThan(0);
+    expect(landValue(state)).toBeGreaterThan(0);
+  };
+
+  const saves: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ['v1, homes and cash', { version: 1, homes: 40, cash: 900 }],
+    ['no version field at all', { homes: 12 }],
+    ['v2, the old civic names', { version: 2, homes: 30, clinics: 2, schools: 1, stations: 1, cash: 500 }],
+    ['v4, one global tier', { version: 4, homes: 24, tier: 2, cash: 1e5, districts: 3 }],
+    ['v5, cohorts without parcels', { version: 5, homes: 24, homeLevels: [0, 0, 24, 0], districts: 2 }],
+    [
+      'v8, policies and a highway',
+      {
+        version: 8,
+        homes: 24,
+        shops: 45,
+        industry: 13,
+        districts: 5,
+        taxRate: TAX_STEPS.length - 1,
+        freeTransport: true,
+        autoDevelop: true,
+        highway: true,
+        estates: 3,
+        cash: 1e6,
+      },
+    ],
+    [
+      'v9, everything this build can hold',
+      {
+        version: SAVE_VERSION,
+        homes: 24,
+        districts: 2,
+        plants: 1,
+        plantStaff: 1,
+        cityHall: true,
+        airport: false,
+        cash: 5_000,
+      },
+    ],
+  ];
+
+  for (const [name, raw] of saves) {
+    it(`opens ${name}, and stays legal a minute later`, () => {
+      const state = migrate(raw, 0);
+      expect(state).not.toBeNull();
+      legal(state as GameState);
+      const game = new Game(state as GameState);
+      for (let i = 0; i < 600; i++) game.advance(0.1);
+      legal(game.state as GameState);
+    });
+  }
+
+  it('opens a save that is lying about everything', () => {
+    // Every field out of range at once, in both directions, including the three
+    // v9 added. Clamped rather than rejected, which is the rule this whole file
+    // is about.
+    const state = migrate({
+      version: 99,
+      homes: 1e9,
+      shops: -5,
+      industry: Number.NaN,
+      districts: 900,
+      demandR: 50,
+      plants: 1e6,
+      plantStaff: 9,
+      cash: -1,
+      happiness: 9,
+      cityHall: 'yes',
+      airport: true,
+      taxRate: 77,
+    });
+    expect(state).not.toBeNull();
+    legal(state as GameState);
+    // The three v9 fields specifically: a string is not true, an airport with no
+    // highway is not an airport, and plants are bounded by the land.
+    expect(state?.cityHall).toBe(false);
+    expect(state?.airport).toBe(false);
+    expect(state?.plants).toBe(state?.districts);
+    const game = new Game(state as GameState);
+    for (let i = 0; i < 600; i++) game.advance(0.1);
+    legal(game.state as GameState);
+  });
+
+  it('grants a v8 city its policies and leaves a v9 one to earn them', () => {
+    // The one field in this file that defaults to true for an older save, read
+    // through what it actually gates rather than through the boolean.
+    const old = migrate({ version: 8, taxRate: TAX_STEPS.length - 1, freeTransport: true });
+    expect(taxStep(old as GameState)).toBe(TAX_STEPS[TAX_STEPS.length - 1]);
+    expect(faresWaived(old as GameState)).toBe(true);
+
+    const fresh = migrate({ version: SAVE_VERSION, taxRate: TAX_STEPS.length - 1, freeTransport: true });
+    expect(taxStep(fresh as GameState)).toBe(TAX_STEPS[TAX_NEUTRAL]);
+    expect(faresWaived(fresh as GameState)).toBe(false);
+    // And the choice is kept rather than overwritten, so a hall bought later
+    // puts the city straight back on its own rate.
+    expect(fresh?.taxRate).toBe(TAX_STEPS.length - 1);
+    expect(fresh?.freeTransport).toBe(true);
   });
 });
