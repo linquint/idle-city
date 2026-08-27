@@ -154,6 +154,50 @@ canvas {
 .corner > * { pointer-events: auto; }
 .corner .hud { position: static; }
 
+/* The ticker: a few lines above the dock saying what just happened.
+   No plate behind it, because it is canvas chrome rather than a panel — it
+   appears and goes again, and a box that stayed empty most of the time would
+   read as a broken panel. It keeps the pointer events off so a fire notice
+   cannot swallow a click meant for the city underneath. */
+.ticker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+.ticker:empty { display: none; }
+.tick {
+  margin: 0;
+  padding: 3px 8px;
+  border-radius: 3px;
+  background: rgba(11, 17, 27, 0.72);
+  border-left: 2px solid var(--dim);
+  color: var(--concrete);
+  /* Wide lines wrap rather than widening the column the dock sets. */
+  overflow-wrap: anywhere;
+  animation: tick-in 220ms ease-out;
+}
+/* Three weights, because the three things a ticker says are not equally
+   urgent: something was lost, something is stuck, something happened. */
+.tick.bad { border-left-color: #e0574b; color: #f0b4ae; }
+.tick.warn { border-left-color: var(--sodium); color: #f3cf9d; }
+.tick.good { border-left-color: var(--signal); }
+
+@keyframes tick-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The same rule render/buildings.ts and render/view.ts already follow. A
+   notification that slides is a notification that moves the eye, which is
+   exactly what somebody with this set has asked it not to do. */
+@media (prefers-reduced-motion: reduce) {
+  .tick { animation: none; }
+}
+
 .dock {
   display: flex;
   flex-direction: column;

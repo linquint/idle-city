@@ -39,6 +39,11 @@ src/
   core/    rng, formatting, events. Imports nothing.
 ```
 
+Nothing in `sim/` or `core/` may use a TypeScript feature that *emits* rather
+than annotates — a constructor parameter property is the one that catches people
+out. The calibrators run these modules straight through Node's type-stripping
+loader, so anything it refuses stops `npm run economy:calibrate` at the import.
+
 `src/sim` is a plain object and some functions over it. It has no DOM, no
 timers, no renderer — which is why the whole simulation is unit-testable in
 Node, why offline progress is a loop rather than a special case, and why a save
@@ -113,6 +118,26 @@ function of counts — a prefix sum, read in O(1) because `income` runs ten time
 a second. The `LevelCohort` comment in `state.ts` named exactly this as the
 condition under which per-instance state would earn its cost; it does not, yet,
 and the comment now says why the door is ajar rather than open.
+
+**The ticker is a byproduct, not a record.** Fires, stalled housing, level-up
+waves and services slipping below full coverage all used to happen silently
+unless you were looking at the right part of the screen. `core/events.ts` is a
+typed union and a bounded ring; `Game` pushes into it at the same places the
+away-report counters are already bumped; the HUD drains it each paint into a
+polite live region. None of it reaches `GameState`, nothing is saved, and no
+simulation read consults it — a city with the log thrown away is the same city,
+and `test/events.test.ts` asserts exactly that by stepping two games identically
+and comparing their states.
+
+Two things make it readable rather than a firehose. Runs **coalesce** — one line
+saying "12 homes became apartments" rather than twelve saying one did — and the
+merge happens on *both* sides of the handover, because the HUD drains every
+frame and by the second building of a wave the first has already been taken.
+And **catch-up is silent**: a twelve-hour absence emits thousands of events, and
+the "while you were away" sheet is modal, has the player's attention, and
+already lists every one of these categories with an exact count. A ticker
+replaying it underneath would say the same facts twice and push the live ones
+out of a sixteen-entry buffer first.
 
 **Style is a hash, not a field.** Each zone has three styles at every level — 45
 looks in all — and a style is a parameter set rather than a mesh: proportions, a

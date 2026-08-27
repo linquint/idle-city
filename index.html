@@ -28,6 +28,12 @@
      above it by an offset would have to guess. -->
 <div class="corner">
 
+<!-- A polite live region rather than a div that mutates silently: fires, level-up
+     waves and stalled housing all happen somewhere the player is not looking,
+     and a ticker nobody can hear is the same problem one line further on. -->
+<div class="ticker" id="ticker" role="status" aria-live="polite" aria-atomic="false"
+  aria-label="Recent events"></div>
+
 <aside class="hud card" id="inspect" hidden aria-label="Selected building">
   <div class="card-head">
     <p class="card-title" id="inspect-title">Detached housing</p>

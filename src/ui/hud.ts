@@ -1,3 +1,4 @@
+import { EventLog, type GameEvent } from '../core/events';
 import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
   ANNEX_MIN_OCCUPANCY,
@@ -137,6 +138,34 @@ const ZONE_PLOTS: Record<ZoneKind, number> = {
   industry: BUILDABLE_INDUSTRIAL_PER_DISTRICT,
 };
 
+/**
+ * Seconds a ticker line stays on screen, in simulated time.
+ *
+ * Longer than EVENT_COALESCE_SECONDS on purpose: a promotion wave keeps merging
+ * into its line for thirty seconds at a time, and a line that expired inside
+ * that window would vanish and reappear with the count reset while the same wave
+ * was still running. Forty-five leaves it standing until the run is genuinely
+ * over.
+ */
+const TICKER_SECONDS = 45;
+
+/**
+ * Lines the ticker shows at once.
+ *
+ * Four, against a buffer of sixteen. The buffer is bounded so nothing can grow
+ * without limit; this is bounded because a stack of notices tall enough to reach
+ * the hint text is a wall rather than a ticker, and the newest four are the ones
+ * worth reading.
+ */
+const TICKER_LINES = 4;
+
+/** What the ticker calls each zone, in the plural a count reads well against. */
+const ZONE_PLURAL: Record<ZoneKind, string> = {
+  home: 'homes',
+  shop: 'shops',
+  industry: 'works',
+};
+
 /** Below this a chip would say "-0%", which is noise rather than information. */
 const CHIP_DEADBAND = 0.005;
 /** Demand moves slowly; without a deadband the arrow flickers on rounding. */
@@ -173,6 +202,7 @@ export class Hud {
   private readonly nodes = {
     cash: el('cash'),
     rate: el('rate'),
+    ticker: el('ticker'),
     ledgerCash: el('ledger-cash'),
     ledgerGross: el('ledger-gross'),
     ledgerUpkeep: el('ledger-upkeep'),
@@ -361,6 +391,19 @@ export class Hud {
 
   private since = 0;
 
+  /**
+   * The ticker's own log, and the reason there are two.
+   *
+   * The simulation's log is drained every paint, so by the time the second
+   * building of a wave climbs the first has already been taken out of it and
+   * there is nothing to merge into. Coalescing therefore has to happen on this
+   * side of the handover as well — same class, same merge rule, and this one is
+   * never drained. See `EventLog`.
+   */
+  private readonly ticker = new EventLog();
+  /** What the ticker last rendered, so an unchanged live region is left alone. */
+  private tickerShown = '';
+
   constructor(
     private readonly game: Game,
     private readonly layout: CityLayout,
@@ -402,6 +445,10 @@ export class Hud {
     n.reset.addEventListener('click', () => {
       if (!confirm('Clear the city and start over? This cannot be undone.')) return;
       this.game.reset();
+      // The ticker is the one part of the HUD that holds anything across a
+      // paint, so it is the one part a reset has to be told about.
+      this.ticker.clear();
+      this.tickerShown = '';
       this.hooks.onReset();
       this.paint();
     });
@@ -550,6 +597,8 @@ export class Hud {
     // separate row in the Treasury tab, where the difference is the point.
     n.rate.textContent = `${fmt(netIncome(s))}/s`;
 
+    this.paintTicker(s);
+
     if (this.open === 'build') this.paintBuild(s);
     else if (this.open === 'treasury') this.paintTreasury(s);
     else if (this.open === 'demand') this.paintDemand(s);
@@ -559,6 +608,97 @@ export class Hud {
     else this.paintEstates(s);
 
     this.paintCard(s);
+  }
+
+  /**
+   * One ticker line, in words.
+   *
+   * The wording lives here rather than in `core/events.ts` for the reason every
+   * label in this file does: an event is data about what the city did, and what
+   * to call it is a decision about the HUD. `core/` imports nothing and would
+   * have to be handed LEVEL names and service names to say any of this.
+   *
+   * The tone is what a `tick` class picks up: `bad` for something lost, `warn`
+   * for something stuck, `good` for something earned, and nothing for the rest.
+   */
+  private tickLine(event: GameEvent): { text: string; tone: string } {
+    const many = (n: number): string => fmtInt(n);
+    switch (event.kind) {
+      case 'fire-started':
+        return {
+          text: event.count > 1
+            ? `${many(event.count)} fires in the ${ZONE_LABEL[event.zone].toLowerCase()} zone`
+            : `Fire in the ${ZONE_LABEL[event.zone].toLowerCase()} zone`,
+          tone: 'warn',
+        };
+      case 'fire-out':
+        return {
+          text: event.count > 1 ? `${many(event.count)} fires put out` : 'Fire put out',
+          tone: 'good',
+        };
+      case 'fire-lost':
+        return {
+          text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} lost to fire`,
+          tone: 'bad',
+        };
+      case 'blocked':
+        // The blocker string itself, because it is already the sentence every
+        // other disabled control in this HUD says. Two wordings for one state
+        // would be two things for a player to reconcile.
+        return { text: `Housing stalled — ${event.reason.toLowerCase()}`, tone: 'warn' };
+      case 'level-up': {
+        const names = ZONE_LEVEL_NAMES[event.zone];
+        return {
+          text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} became ${names[event.level] ?? `level ${event.level + 1}`}`,
+          tone: 'good',
+        };
+      }
+      case 'merged':
+        return {
+          text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} merged into their neighbours`,
+          tone: '',
+        };
+      case 'abandoned':
+        return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} boarded up`, tone: 'bad' };
+      case 'recovered':
+        return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} reopened`, tone: 'good' };
+      case 'annexed':
+        return { text: `District ${many(event.districts)} annexed`, tone: 'good' };
+      case 'coverage': {
+        const service = SERVICES.find((entry) => entry.key === event.service);
+        return {
+          text: `${service?.coverLabel ?? 'Coverage'} fell to ${pct(event.coverage)}`,
+          tone: 'warn',
+        };
+      }
+    }
+  }
+
+  /**
+   * The ticker, drained and rendered.
+   *
+   * Rewritten only when the words change, which matters more here than
+   * elsewhere: this is a live region, so every mutation is something a screen
+   * reader may read out. A `replaceChildren` on every paint would announce the
+   * same four lines ten times a second.
+   */
+  private paintTicker(s: Readonly<GameState>): void {
+    for (const event of this.game.drainEvents()) this.ticker.push(event);
+    this.ticker.expire(s.elapsed - TICKER_SECONDS);
+
+    const shown = this.ticker.entries.slice(-TICKER_LINES).map((event) => this.tickLine(event));
+    const rendered = shown.map((line) => `${line.tone}|${line.text}`).join('\n');
+    if (rendered === this.tickerShown) return;
+    this.tickerShown = rendered;
+
+    this.nodes.ticker.replaceChildren(
+      ...shown.map((line) => {
+        const node = document.createElement('p');
+        node.className = line.tone ? `tick ${line.tone}` : 'tick';
+        node.textContent = line.text;
+        return node;
+      }),
+    );
   }
 
   private paintTreasury(s: Readonly<GameState>): void {

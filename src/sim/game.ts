@@ -1,3 +1,4 @@
+import { EventLog, EVENT_COVERAGE_LOST, type GameEvent } from '../core/events.ts';
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
   CATCHUP_MAX_ABANDONED,
@@ -35,6 +36,7 @@ import {
   canBuildTerminal,
   canMergeParcel,
   civicBuildings,
+  coverage,
   clampDemand,
   demandStep,
   demandTargets,
@@ -43,6 +45,7 @@ import {
   happinessStep,
   happinessTarget,
   highwayCost,
+  homeBlocker,
   homeCost,
   ignitionRate,
   income,
@@ -299,6 +302,39 @@ export class Game {
   private annexesLeft = Number.POSITIVE_INFINITY;
   /** Reused by `promote`, which runs every tick and must not allocate. */
   private readonly scratch: number[] = new Array<number>(LEVELS).fill(0);
+  /**
+   * Things that happened, for the ticker.
+   *
+   * Not state, and the distinction is load-bearing: nothing here reaches
+   * `GameState`, nothing is saved, and no simulation read consults it. Dropping
+   * the whole log on the floor would leave an identical city. See
+   * `core/events.ts`.
+   */
+  private readonly log = new EventLog();
+  /**
+   * Whether events are being recorded at all.
+   *
+   * Off for the length of a `catchUp` call, and that is the one interesting
+   * design question this feature had. A twelve-hour absence emits thousands of
+   * events, and the two honest options were a summary event per category or
+   * nothing at all. Nothing at all wins because the summary already exists: the
+   * "while you were away" sheet is modal, has the player's attention, and lists
+   * every one of these categories with an exact count. A ticker replaying the
+   * same facts underneath it would say them twice and worse — and the second
+   * copy would push the *live* events out of a sixteen-entry buffer before the
+   * player had finished reading the first.
+   */
+  private recording = true;
+  /**
+   * The last housing blocker announced, so the ticker says it once.
+   *
+   * `homeBlocker` returns the same string on every tick it is true, and the
+   * event is about the *transition*. Coalescing would collapse the repeats into
+   * one line with a count of thirty-six thousand, which is a different lie.
+   */
+  private blocked: string | null = null;
+  /** Which services were covering the whole city last tick. Same reasoning. */
+  private readonly covering = new Set<string>();
 
   constructor(state: GameState = createState()) {
     this.inner = state;
@@ -314,6 +350,22 @@ export class Game {
 
   get state(): Readonly<GameState> {
     return this.inner;
+  }
+
+  /**
+   * Everything that has happened since the last time anybody asked.
+   *
+   * Draining rather than reading, so two consumers cannot both act on one event
+   * and a consumer that stops asking cannot leave the buffer growing. The HUD is
+   * the only caller.
+   */
+  drainEvents(): GameEvent[] {
+    return this.log.drain();
+  }
+
+  /** The one place an event is recorded, so `catchUp` can silence all of them. */
+  private emit(event: GameEvent): void {
+    if (this.recording) this.log.push(event);
   }
 
   /**
@@ -359,6 +411,64 @@ export class Game {
     // tenth of a second — the same reasoning fires already follow.
     this.autoAnnex();
     if (s.autoDevelop) this.autoDevelop(8);
+    // Last, and after auto-development, so what the ticker reports is the tick's
+    // settled state rather than a state the same tick went on to change.
+    this.watchTransitions();
+  }
+
+  /**
+   * The two events that are about a line being crossed rather than a thing
+   * being done.
+   *
+   * Everything else here is emitted where it happens — a fire starts, a parcel
+   * merges — and these two have no such moment: they are conditions that become
+   * true and stay true. So they are edge-triggered against what was last
+   * announced, because the alternative is a line that says "residents are
+   * leaving x 36,000" after an hour of it being the case.
+   */
+  private watchTransitions(): void {
+    const s = this.inner;
+    // Three tests in a deliberate order. The *state* is whether housing is
+    // blocked at all, so it clears the moment it is not; the reason is what has
+    // to change for the line to be worth printing again; and the cash test only
+    // gates the announcement, because "you cannot afford it" is already on the
+    // button next to a price.
+    //
+    // Ordering them the other way round was measured and is wrong: with the cash
+    // test outermost the condition flickers every time auto-development spends
+    // the treasury, and one hour announced "residents are leaving" seven times.
+    const reason = homeBlocker(s);
+    if (reason === null) this.blocked = null;
+    else if (reason !== this.blocked && s.cash >= homeCost(s)) {
+      this.blocked = reason;
+      this.emit({ kind: 'blocked', at: s.elapsed, reason, count: 1 });
+    }
+
+    // A city with no housing reads as fully covered — `coverage` is the share a
+    // service *fails* and it fails nothing when nothing is built — so without
+    // this a fresh game would announce all six services falling short the
+    // instant the first house went up. They were never covering anything.
+    if (housingPlots(s) <= 0) {
+      this.covering.clear();
+      return;
+    }
+    for (const service of SERVICES) {
+      const reach = coverage(s, service);
+      // Armed at a full 1 and fired past EVENT_COVERAGE_LOST, so the line is not
+      // printed every time the number wobbles across the top of its range.
+      if (reach >= 1) {
+        this.covering.add(service.key);
+        continue;
+      }
+      if (reach >= EVENT_COVERAGE_LOST || !this.covering.delete(service.key)) continue;
+      this.emit({
+        kind: 'coverage',
+        at: s.elapsed,
+        service: service.key,
+        coverage: reach,
+        count: 1,
+      });
+    }
   }
 
   // ------------------------------------------------------------------ fire
@@ -388,12 +498,14 @@ export class Game {
         this.lossesLeft--;
         this.demolish(fire.kind);
         this.firesLost++;
+        this.emit({ kind: 'fire-lost', at: s.elapsed, zone: fire.kind, count: 1 });
       } else {
         // Past the loss budget the fire still ends, it just ends well. The
         // alternative — leaving it burning — would hand a returning player a
         // city permanently on fire, which is worse than the thing being guarded
         // against.
         this.firesExtinguished++;
+        this.emit({ kind: 'fire-out', at: s.elapsed, zone: fire.kind, count: 1 });
       }
     }
     s.fires.length = write;
@@ -489,6 +601,7 @@ export class Game {
 
     s.fires.push({ kind, index, startedAt: s.elapsed });
     this.firesStarted++;
+    this.emit({ kind: 'fire-started', at: s.elapsed, zone: kind, count: 1 });
   }
 
 
@@ -734,6 +847,16 @@ export class Game {
       levels[l] = (levels[l] ?? 0) - take;
       levels[l + 1] = (levels[l + 1] ?? 0) + take;
       left -= take;
+      // One event for the whole run, not one per building. A pass already moves
+      // a cohort at a time, and `EventLog` merges consecutive passes on the same
+      // rung — so a wave that takes five minutes is still one line.
+      this.emit({
+        kind: 'level-up',
+        at: this.inner.elapsed,
+        zone: kind,
+        level: l + 1,
+        count: take,
+      });
     }
     return budget - left;
   }
@@ -766,6 +889,7 @@ export class Game {
     // adds the merged parcel back and comes out exactly where it started.
     setCount(s, kind, countOf(s, kind) - 1);
     this.merged++;
+    this.emit({ kind: 'merged', at: s.elapsed, zone: kind, count: 1 });
     return true;
   }
 
@@ -793,6 +917,7 @@ export class Game {
       this.abandonsLeft -= take;
       this.abandoned += take;
       moved += take;
+      this.emit({ kind: 'abandoned', at: s.elapsed, zone: kind, count: take });
     }
     return moved;
   }
@@ -818,6 +943,7 @@ export class Game {
     levels[0] = (levels[0] ?? 0) + (take - onMerged);
     setAbandoned(s, kind, abandonedOf(s, kind) - take);
     this.recovered += take;
+    this.emit({ kind: 'recovered', at: s.elapsed, zone: kind, count: take });
     return take;
   }
 
@@ -977,6 +1103,7 @@ export class Game {
     s.cash -= annexCost(s);
     s.districts++;
     this.annexed++;
+    this.emit({ kind: 'annexed', at: s.elapsed, districts: s.districts, count: 1 });
     return true;
   }
 
@@ -1042,6 +1169,10 @@ export class Game {
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
     this.annexesLeft = Number.POSITIVE_INFINITY;
+    this.recording = true;
+    this.log.clear();
+    this.blocked = null;
+    this.covering.clear();
   }
 
   /**
@@ -1191,6 +1322,9 @@ export class Game {
     // The hard guard, for the length of this call and no longer. However many
     // fires resolve badly across a twelve-hour absence, the city comes back at
     // most one building smaller; the rest are put out instead and still counted.
+    // Silent for the length of this call. See `recording` for why the away
+    // sheet is the better place for an absence to be reported.
+    this.recording = false;
     this.lossesLeft = CATCHUP_MAX_LOSSES;
     // The same guard for decay. However long the absence, the city comes back
     // at most CATCHUP_MAX_ABANDONED plots darker than it was left.
@@ -1205,6 +1339,7 @@ export class Game {
     );
     const dt = credited / steps;
     for (let i = 0; i < steps; i++) this.step(dt);
+    this.recording = true;
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
     this.annexesLeft = Number.POSITIVE_INFINITY;
