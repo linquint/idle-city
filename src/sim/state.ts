@@ -35,9 +35,17 @@ export type FireKind = ZoneKind;
  * and stays a pure function of counts. The save stays a handful of numbers and
  * positions stay derived.
  *
- * If a spatially varying input ever arrives — a pollution radius, per-district
- * coverage, anything a building's own position changes the answer to — that is
- * the point at which per-instance state earns its cost, and not before.
+ * One has arrived and it still does not. Land value (see `landValue`) reads a
+ * plot's centrality, so two houses at the same level genuinely earn different
+ * rents — the condition this comment named. What keeps the cohorts is that the
+ * k-th home's plot is a pure function of its ordinal and the seed, so the mean
+ * over the first n of them is still a pure function of counts and the ledger
+ * needs no more than that mean. The door is ajar rather than open.
+ *
+ * What would push it the rest of the way is an input that varies per building
+ * *and* cannot be summarised: a per-building age, a per-building tenant, a
+ * modifier applied to one building and not its neighbour. Anything the city can
+ * recompute from `{ homes, mergedR }` and the seed belongs here instead.
  */
 export type LevelCohort = number[];
 
@@ -55,7 +63,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 9;
 
 /**
  * The entire game, in a handful of fields.
@@ -187,6 +195,50 @@ export interface GameState {
   cruiseTerminals: number;
   cargoTerminals: number;
   /**
+   * Power plants, one per district's reserved 2x2 square.
+   *
+   * A count and a staffing ramp, in the same shape as a civic building and for
+   * the same reasons — but not a `Service`: it has no coverage, carries no
+   * happiness weight and is not on the 2x2 civic interleave. What it feeds is
+   * `powerCap`, a ratio of supply to draw that caps occupancy, which is the
+   * city's second resource and the first thing in the game that can be short.
+   *
+   * Where a plant stands falls out of its ordinal exactly as everything else
+   * does: one square a district, so the i-th plant is on the i-th district's.
+   */
+  plants: number;
+  plantStaff: number;
+  /**
+   * The city hall. One per city, on district 0's reserved 2x2 square.
+   *
+   * A boolean and nothing else, which is the whole of what it is: it holds no
+   * level, has no coverage, carries no happiness weight and stands in exactly
+   * one place. What it does is *gate* — the tax rate, free transport and
+   * auto-development are all policy, and a city with nobody to set policy runs
+   * at TAX_NEUTRAL with fares on. That is already what a fresh city gets, so
+   * nothing about the opening minutes changes.
+   *
+   * The stored policy fields survive without it rather than being overwritten:
+   * `taxStep` reads neutral while there is no hall and the player's own choice
+   * again the moment there is one. A save that predates this gets a hall on
+   * migration — see `migrate` — because those cities set their rates under the
+   * old rules and had every right to.
+   */
+  cityHall: boolean;
+  /**
+   * The airport: one per city, on open ground past the far side of the estates.
+   *
+   * A boolean, and the second thing the city builds on land it does not own.
+   * Where it stands is a pure function of the seed exactly as an estate's plot
+   * is — see `airportCell` — and it is counted apart from every plot total for
+   * the same reason: the city does not own the ground.
+   *
+   * What it buys is tourism without a coast. `visitors` is the existing path and
+   * the airport is worth AIRPORT_VISITORS cruise berths on it, happiness scaling
+   * and all — so a miserable city gets a runway and no tourists.
+   */
+  airport: boolean;
+  /**
    * The road out of town, and the works standing along it.
    *
    * A boolean and a count, and the boolean is the progression gate: the highway
@@ -315,6 +367,10 @@ export function createState(now = Date.now()): GameState {
     stadiums: 0,
     cruiseTerminals: 0,
     cargoTerminals: 0,
+    plants: 0,
+    plantStaff: 0,
+    cityHall: false,
+    airport: false,
     highway: false,
     estates: 0,
     hospitals: 0,

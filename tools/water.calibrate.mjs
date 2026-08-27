@@ -17,9 +17,11 @@
  *   node tools/water.calibrate.mjs [seeds]
  */
 import {
+  AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   CELL,
   DISTRICT_SPAN,
+  HIGHWAY_MIN_DISTRICTS,
   LEVEL_NAMES,
   MAX_DISTRICTS,
   TERMINALS,
@@ -29,6 +31,7 @@ import {
   exportMarket,
   income,
   terminalCapacity,
+  upkeep,
 } from '../src/sim/economy.ts';
 import { createState } from '../src/sim/state.ts';
 import { Waters, WATER_TILE } from '../src/sim/water.ts';
@@ -245,6 +248,55 @@ for (const districts of [FIRST_COAST, 25, MAX_DISTRICTS]) {
         ` ${(LEVEL_NAMES[level] ?? '').padEnd(16)} ${f(income(base), 0).padStart(9)}` +
         ` ${`${(fares * 100).toFixed(2)}%`.padStart(7)} ${`${(cruise * 100).toFixed(2)}%`.padStart(8)}` +
         ` ${`+${move.toFixed(3)}`.padStart(17)}`,
+    );
+  }
+}
+
+/**
+ * The airport, measured against the berths it is priced in.
+ *
+ * AIRPORT_VISITORS says what it is worth in cruise terminals, so the honest
+ * check is to read it the same way a berth is read above — as a share of the
+ * ledger — on the two cities that matter: an *inland* one, which is what the
+ * building exists for and which has no other tourism at all, and a coastal one
+ * with the whole waterfront, which is where it must not be a strict upgrade.
+ *
+ * The wage bill is here rather than in tools/upkeep.calibrate.mjs because it is
+ * the one payroll figure in the game that is not its building's opening price —
+ * see AIRPORT_PAYROLL — so what it is worth has to be read where the rest of the
+ * airport is.
+ */
+console.log('\nwhat the airport is worth');
+console.log(
+  `  ${'districts'.padStart(9)} ${'coast'.padEnd(7)} ${'housing'.padEnd(16)}` +
+    ` ${'tourism'.padStart(8)} ${'export tap'.padStart(10)} ${'wages'.padStart(7)}`,
+);
+for (const districts of [HIGHWAY_MIN_DISTRICTS, MAX_DISTRICTS]) {
+  for (const level of [0, 2, 4]) {
+    const base = { ...coastalCity(level, districts), highway: true };
+    // Inland: no berths at all, which is the state the airport exists to fix.
+    const inland = { ...base, cruiseTerminals: 0, cargoTerminals: 0 };
+    const flown = { ...inland, airport: true };
+    // Coastal: the whole waterfront already bought, so the airport is the last
+    // thing added rather than the first.
+    const quays = {
+      ...base,
+      cruiseTerminals: terminalCapacity(base),
+      cargoTerminals: terminalCapacity(base),
+    };
+    const both = { ...quays, airport: true };
+    const share = (a, b) => `${(((income(a) - income(b)) / income(b)) * 100).toFixed(2)}%`;
+    const wages = ((upkeep(flown) - upkeep(inland)) / income(flown)) * 100;
+    console.log(
+      `  ${String(districts).padStart(9)} ${'inland'.padEnd(7)} ${(LEVEL_NAMES[level] ?? '').padEnd(16)}` +
+        ` ${share(flown, inland).padStart(8)}` +
+        ` ${`x${(exportMarket(flown) / exportMarket(inland)).toFixed(2)}`.padStart(10)}` +
+        ` ${`${wages.toFixed(2)}%`.padStart(7)}`,
+    );
+    console.log(
+      `  ${''.padStart(9)} ${'coastal'.padEnd(7)} ${''.padEnd(16)}` +
+        ` ${share(both, quays).padStart(8)}` +
+        ` ${`x${(exportMarket(both) / exportMarket(quays)).toFixed(2)}`.padStart(10)}`,
     );
   }
 }

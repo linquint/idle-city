@@ -7,7 +7,7 @@
  * It reports, per policy:
  *   - the longest continuous stretch each demand signal spends pinned at +-1
  *   - whether any cost curve is ever non-monotonic in n
- *   - time to first rezone, first annex and first service
+ *   - time to first rezone, first annex, first service and the city hall
  *   - happiness at 1h / 6h / 24h
  *   - the share of income attributable to the shop multiplier at 1h / 6h / 24h,
  *     which is what stops a cheap commercial curve collapsing the game into
@@ -36,6 +36,11 @@ import {
 } from '../src/sim/config.ts';
 import {
   canAnnex,
+  canBuildCityHall,
+  canBuildPlant,
+  cityHallCost,
+  plantCost,
+  powerRatio,
   canBuildHome,
   canBuildIndustry,
   canBuildPark,
@@ -69,8 +74,57 @@ const fmtTime = (s) =>
 const idle = () => {};
 
 /** Auto-develop, exactly as the game plays it while you are away. */
+/**
+ * Auto-develop, exactly as the game plays it while you are away — once it can.
+ *
+ * The switch is policy and policy needs a city hall, so this policy plays the
+ * opening by hand and then stops playing. Until the hall is up it buys housing,
+ * which is what auto-development itself would buy at that point and what a
+ * player saving for anything does; from the hall onward it touches nothing.
+ *
+ * Bootstrapping it is not a convenience. A policy that only flipped the switch
+ * would sit at START_CASH forever now, since the switch does nothing without
+ * the hall and nothing else in the policy buys anything — measured, 24 hours
+ * and zero buildings. That would be a broken probe rather than a finding.
+ */
 const auto = (game) => {
-  if (!game.state.autoDevelop) game.setAutoDevelop(true);
+  const s = game.state;
+  if (!s.cityHall) {
+    if (canBuildCityHall(s)) game.buildCityHall();
+    else bootstrap(game);
+    return;
+  }
+  if (!s.autoDevelop) game.setAutoDevelop(true);
+};
+
+/**
+ * The opening, played by hand: whatever the city is short of, then housing.
+ *
+ * Deliberately the same priority `Game.autoDevelop` uses, because that is what
+ * it is standing in for. Buying only housing was measured first and stalls at
+ * four homes — the happiness gate closes with no hospital behind it, income
+ * falls to the floor, and the treasury reaches 835 in twenty-four hours against
+ * a hall that costs 1,500. That is the tutorial working rather than a price
+ * being wrong, but it makes the probe a measurement of the tutorial instead of
+ * of the hall.
+ */
+const bootstrap = (game) => {
+  const s = game.state;
+  for (let guard = 0; guard < 16; guard++) {
+    let bought = false;
+    if (powerRatio(s) < 1 && canBuildPlant(s)) bought = game.buildPlant();
+    for (const service of SERVICES) {
+      if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
+        bought = game.buildService(service);
+        break;
+      }
+    }
+    if (!bought && s.homes > 0 && recreationCoverage(s) < 1 && canBuildPark(s)) {
+      bought = game.buildPark();
+    }
+    if (!bought && s.demandR >= 0 && canBuildHome(s)) bought = game.buildHome();
+    if (!bought) return;
+  }
 };
 
 /**
@@ -85,6 +139,17 @@ const disciplined = (game) => {
   for (let guard = 0; guard < 64; guard++) {
     if (canAnnex(s) && game.annex()) continue;
     const options = [];
+    // The hall is a purchase like any other and sits in the same pool, so what
+    // the sweep measures is a player choosing it against a hospital rather than
+    // one handed it for free.
+    if (canBuildCityHall(s)) options.push([cityHallCost(), () => game.buildCityHall()]);
+    // And a plant whenever the grid is short. A policy that ignored power would
+    // measure the brownout rather than the thing it was written to measure:
+    // without this, a disciplined city stalls at 626 residents and never leaves
+    // towers, because the cap holds occupancy under LEVEL_UP_OCCUPANCY forever.
+    if (powerRatio(s) < 1 && canBuildPlant(s)) {
+      options.push([plantCost(s), () => game.buildPlant()]);
+    }
     for (const service of SERVICES) {
       if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
         options.push([serviceCost(s, service), () => game.buildService(service)]);
@@ -128,6 +193,8 @@ const greedy = (game) => {
     if (s.homes > 0 && recreationCoverage(s) < 1 && canBuildPark(s)) {
       options.push([0, () => game.buildPark()]);
     }
+    if (canBuildCityHall(s)) options.push([0, () => game.buildCityHall()]);
+    if (powerRatio(s) < 1 && canBuildPlant(s)) options.push([0, () => game.buildPlant()]);
     if (canAnnex(s)) options.push([-1, () => game.annex()]);
     if (options.length === 0) return;
     options.sort((a, b) => a[0] - b[0]);
@@ -179,7 +246,7 @@ class PinTracker {
 function run(policy) {
   const game = new Game(createState(0));
   const pins = { R: new PinTracker(), C: new PinTracker(), I: new PinTracker() };
-  const firsts = { level: null, top: null, annex: null, service: null };
+  const firsts = { level: null, top: null, annex: null, service: null, hall: null };
   const happy = {};
   const share = {};
   // What the surcharge is actually doing in the first ten minutes: how long
@@ -202,6 +269,7 @@ function run(policy) {
     if (firsts.top === null && s.homeLevels[LEVEL_CAPACITY.length - 1] > 0) firsts.top = t;
     if (firsts.annex === null && s.districts > 1) firsts.annex = t;
     if (firsts.service === null && civicBuildings(s) > 0) firsts.service = t;
+    if (firsts.hall === null && s.cityHall) firsts.hall = t;
     for (const mark of [3600, 6 * 3600, 24 * 3600]) {
       if (happy[mark] === undefined && t >= mark) {
         happy[mark] = s.happiness;
@@ -279,7 +347,8 @@ for (const [name, policy] of POLICIES) {
   );
   console.log(
     `  first level-up: ${fmtTime(firsts.level)}   first top level: ${fmtTime(firsts.top)}   ` +
-      `first annex: ${fmtTime(firsts.annex)}   first service: ${fmtTime(firsts.service)}`,
+      `first annex: ${fmtTime(firsts.annex)}   first service: ${fmtTime(firsts.service)}   ` +
+      `city hall: ${fmtTime(firsts.hall)}`,
   );
   console.log(
     `  happiness:      1h ${((happy[3600] ?? 0) * 100).toFixed(0)}%  ` +
@@ -374,7 +443,17 @@ function equilibrium(level) {
     const standing = s.homes - s.abandonedR;
     const levels = [0, 0, 0, 0];
     levels[level] = standing;
-    Object.assign(s, { homeLevels: levels, occupancyR: 0.92 });
+    // Lit as well as pinned. This asks what a *demand-neutral* district settles
+    // at, and a browned-out one is not demand-neutral: the power cap drags
+    // commercial and industrial occupancy down, their demand targets follow, and
+    // the probe buys a district's worth of shops it would never have wanted.
+    // Measured without it, the towers row read 176 shops against 69.
+    Object.assign(s, {
+      homeLevels: levels,
+      occupancyR: 0.92,
+      plants: s.districts,
+      plantStaff: 1,
+    });
   };
   for (let step = 0; step < 400; step++) {
     pin();

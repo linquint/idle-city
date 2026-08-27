@@ -62,6 +62,26 @@ export const PALETTE = {
   // dark. The two sizes share a palette and differ in silhouette.
   landmark: 0xe4dccb,
   landmarkRoof: 0x9c6f4f,
+  // The city hall. Pale limestone like a landmark, on the one roof colour
+  // nothing else in the city wears — the map already has mint, cornflower, red,
+  // two browns and a lime on 2x2 roofs, and a seventh blue would be the police
+  // station at a glance. There is exactly one of these in a city, so it has to
+  // be findable rather than merely different.
+  hall: 0xd3cfc4,
+  hallRoof: 0x9a8fb8,
+  // A power plant is industrial rather than civic, so it wears the industry's
+  // own concrete and its stack colour — what tells it apart from a works is the
+  // silhouette (two cooling towers on a 2x2 square) and the lit vent between
+  // them, not a colour nothing else has.
+  plant: 0x4c5a71,
+  plantRoof: 0x38455a,
+  // The airport. An apron is made ground like an estate's yard and a runway is
+  // road, so both borrow what the city already uses for those — what makes the
+  // shape legible from the play camera is the *markings*, which are the one
+  // white surface anywhere on the map.
+  apron: 0x6f7683,
+  runway: 0x2a3140,
+  marking: 0xe8ecf2,
   // The waterfront. A quay is a deck the colour of the kerbs the city already
   // has, because it is the same thing: made ground with something standing on
   // it. Hulls are darker than anything on land so a ship reads against the

@@ -11,6 +11,9 @@ import {
   cityRadius,
   DISTRICT_WIDTH,
   districtCoord,
+  housingCentrality,
+  housingCentralityBase,
+  housingCentralityMean,
   isRoad,
   planFor,
   PLOTS_PER_DISTRICT,
@@ -216,6 +219,9 @@ describe('plot book', () => {
     // sale lists never saw, which is the whole point of reserving them.
     for (let i = 0; i < layout.landmarkLargeSites; i++) square(layout.landmarkLargeSiteCell(i), 3);
     for (let i = 0; i < layout.landmarkSmallSites; i++) square(layout.landmarkSmallSiteCell(i), 2);
+    // The city hall's square, reserved in every district and built on in one.
+    for (let i = 0; i < layout.cityHallSites; i++) square(layout.cityHallSiteCell(i), 2);
+    for (let i = 0; i < layout.powerPlantSites; i++) square(layout.powerPlantCell(i), 2);
     for (const c of layout.spareSquares) square(c, 2);
     for (const cell of layout.courtyards) seen.add(key(cell));
     expect(seen.size).toBe(PLOTS_PER_DISTRICT * 9);
@@ -243,7 +249,10 @@ describe('plot book', () => {
     // The 2x2 claim divides exactly between the things that use it and the
     // things that do not, and the spare pool is the two together.
     const usedSquares =
-      FRONTAGE_TARGET.civicSites + FRONTAGE_TARGET.landmarkSmallSites;
+      FRONTAGE_TARGET.civicSites +
+      FRONTAGE_TARGET.landmarkSmallSites +
+      FRONTAGE_TARGET.cityHallSites +
+      FRONTAGE_TARGET.powerSites;
     expect(usedSquares).toBeLessThanOrEqual(FRONTAGE_TARGET.squares);
     expect(SPARE_PLOTS_PER_DISTRICT).toBe(
       (FRONTAGE_TARGET.squares - usedSquares) * 4 + courtyard - BUILDABLE_PARKS_PER_DISTRICT,
@@ -261,6 +270,8 @@ describe('plot book', () => {
       expect(plan.universities).toHaveLength(FRONTAGE_TARGET.universitySites);
       expect(plan.landmarksLarge).toHaveLength(FRONTAGE_TARGET.landmarkLargeSites);
       expect(plan.landmarksSmall).toHaveLength(FRONTAGE_TARGET.landmarkSmallSites);
+      expect(plan.cityHalls).toHaveLength(FRONTAGE_TARGET.cityHallSites);
+      expect(plan.powerPlants).toHaveLength(FRONTAGE_TARGET.powerSites);
       // Nothing overlaps: a plot reserved for one square is not for sale and is
       // not in another square.
       const seen = new Set<number>();
@@ -278,6 +289,8 @@ describe('plot book', () => {
         ...plan.landmarksLarge,
         ...plan.landmarksSmall,
         ...plan.sites,
+        ...plan.cityHalls,
+        ...plan.powerPlants,
         ...plan.spareSquares,
       ]) {
         take(site.cells);
@@ -319,5 +332,63 @@ describe('plot book', () => {
     const spread = Math.max(...cells.map((c) => Math.hypot(c.x - cx, c.z - cz)));
     // A scattered quarter would spread across most of the district's diagonal.
     expect(spread).toBeLessThan(DISTRICT_SPAN * 0.6);
+  });
+});
+
+describe('land value', () => {
+  /**
+   * The prefix table `landValue` reads, checked against the definition it is a
+   * shortcut for. `income` runs ten times a second, so the mean over the first
+   * n housing plots has to be a subtraction rather than a walk — and a
+   * subtraction that disagreed with the walk would be a rent nobody could
+   * account for.
+   */
+  it('means what a walk over the plots would mean, at every count', () => {
+    const districts = 4;
+    const plots = districts * RESIDENTIAL_PER_DISTRICT;
+    let sum = 0;
+    for (let n = 1; n <= plots; n++) {
+      sum += housingCentrality(n - 1, districts);
+      expect(housingCentralityMean(n, districts)).toBeCloseTo(sum / n, 12);
+    }
+    expect(housingCentralityBase(districts)).toBeCloseTo(sum / plots, 12);
+  });
+
+  it('scores every housing plot inside the range citygen promises', () => {
+    // 1 at a district's middle and 0 at its furthest corner. A plot outside
+    // that band would mean the block lookup had fallen through to a road.
+    for (let i = 0; i < MAX_DISTRICTS * RESIDENTIAL_PER_DISTRICT; i++) {
+      const score = housingCentrality(i, MAX_DISTRICTS);
+      expect(score).toBeGreaterThan(0);
+      expect(score).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('does not move a plot already scored when the city expands', () => {
+    // The same guarantee the plot lists carry, one level up: a house does not
+    // change what it is worth because a district was annexed on the far side of
+    // the map. The *normaliser* moves, and deliberately — see
+    // `housingCentralityBase` — but the plot's own score never does.
+    const small = [];
+    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) small.push(housingCentrality(i, 1));
+    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) {
+      expect(housingCentrality(i, MAX_DISTRICTS)).toBe(small[i]);
+    }
+  });
+
+  it('clamps rather than reading off the end of the land', () => {
+    const last = housingCentrality(MAX_DISTRICTS * RESIDENTIAL_PER_DISTRICT - 1, MAX_DISTRICTS);
+    expect(housingCentrality(1e9, MAX_DISTRICTS)).toBe(last);
+    expect(housingCentrality(-5, MAX_DISTRICTS)).toBe(housingCentrality(0, MAX_DISTRICTS));
+    expect(housingCentralityMean(0, 1)).toBe(0);
+  });
+
+  it('varies enough between plots to be worth reading', () => {
+    // The premise of the whole feature: if every housing plot scored the same
+    // there would be nothing to redistribute. Checked inside one district, so
+    // this is about the street plan rather than about the spiral.
+    const scores = [];
+    for (let i = 0; i < RESIDENTIAL_PER_DISTRICT; i++) scores.push(housingCentrality(i, 1));
+    expect(Math.max(...scores) - Math.min(...scores)).toBeGreaterThan(0.2);
   });
 });

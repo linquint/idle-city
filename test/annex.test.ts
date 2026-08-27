@@ -151,14 +151,14 @@ describe('the catch-up guard', () => {
     // Auto-development on, or the city annexes once and then sits on empty land
     // it never builds out — the trigger is a *share*, so a second district is
     // only earned by filling the first.
-    const game = at(ready({ cash: 1e30, autoDevelop: true }));
+    const game = at(ready({ cash: 1e30, autoDevelop: true, cityHall: true }));
     const report = game.catchUp(12 * 3_600);
     expect(report.districts).toBe(CATCHUP_MAX_ANNEXES);
     expect(game.state.districts).toBe(1 + CATCHUP_MAX_ANNEXES);
   });
 
   it('gives the next absence its own budget rather than spending it once', () => {
-    const game = at(ready({ cash: 1e30, autoDevelop: true }));
+    const game = at(ready({ cash: 1e30, autoDevelop: true, cityHall: true }));
     game.catchUp(12 * 3_600);
     const again = game.catchUp(12 * 3_600);
     expect(again.districts).toBeGreaterThan(0);
@@ -168,13 +168,13 @@ describe('the catch-up guard', () => {
   it('is unlimited while the player is watching', () => {
     // A district that arrives while you are looking at it is a thing that
     // happened; the guard is about the ones that arrive while you are not.
-    const game = at(ready({ cash: 1e30, autoDevelop: true }));
+    const game = at(ready({ cash: 1e30, autoDevelop: true, cityHall: true }));
     for (let i = 0; i < 2_000; i++) game.advance(0.1);
     expect(game.state.districts).toBeGreaterThan(1 + CATCHUP_MAX_ANNEXES);
   });
 
   it('reports what it took while you were away', () => {
-    const game = at(ready({ cash: 1e30, autoDevelop: true }));
+    const game = at(ready({ cash: 1e30, autoDevelop: true, cityHall: true }));
     const report = game.catchUp(6 * 3_600);
     expect(report.districts).toBeGreaterThan(0);
     // And the cash it spent doing it is in the ledger rather than vanishing:

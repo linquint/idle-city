@@ -5,7 +5,12 @@ import {
   AUTO_ANNEX_RESERVE,
   BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
+  AIRPORT_BASE,
+  AIRPORT_EXPORT_LIFT,
+  AIRPORT_PAYROLL,
+  AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
+  CITY_HALL_BASE,
   CIVIC_RAMP_SECONDS,
   CIVIC_SERVICES,
   ABANDON_SECONDS,
@@ -40,8 +45,10 @@ import {
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
   JOBS_PER_ESTATE_PLOT,
+  LAND_VALUE_SPREAD,
   LANDMARKS,
   LANDMARK_MOOD,
+  LEVEL_CAPACITY,
   LEVEL_EDUCATION,
   LEVEL_FOOTPRINT,
   LEVEL_HOUSING,
@@ -59,6 +66,13 @@ import {
   OCCUPANCY_TAU,
   PARK_BASE,
   PARK_GROWTH,
+  POWER_BASE,
+  POWER_EXPONENT,
+  POWER_FLOOR,
+  POWER_PER_PLANT,
+  POWER_PER_PLOT,
+  POWER_PLANT_BASE,
+  POWER_PLANT_GROWTH,
   PLOTS_PER_PARK,
   PRICE_DISCOUNT_MAX,
   PRICE_SURCHARGE_MAX,
@@ -75,10 +89,15 @@ import {
   SHOP_SUPPLY,
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
+  TAX_NEUTRAL,
   TAX_STEPS,
   TERMINALS,
   TRANSIT_LABOUR_DRAW,
   TRANSIT_WORKFORCE,
+  UPKEEP_ARREARS_TAU,
+  UPKEEP_GROWTH,
+  UPKEEP_RATE,
+  UPKEEP_RESERVE_SECONDS,
   VISITOR_SPEND,
   VISITORS_PER_RESIDENT,
   WORKING_SHARE,
@@ -87,16 +106,20 @@ import {
   type Terminal,
 } from './config.ts';
 import { ZONE, type Zone } from './citygen.ts';
-import { ESTATE_CELLS } from './estates.ts';
+import { AIRPORT_SITED, ESTATE_CELLS } from './estates.ts';
 import {
   BUILDABLE_COMMERCIAL_PER_DISTRICT,
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_PARKS_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
+  POWER_SITES_PER_DISTRICT,
   LANDMARK_LARGE_SITES_PER_DISTRICT,
   LANDMARK_SMALL_SITES_PER_DISTRICT,
   coastalDistricts,
+  housingCentrality,
+  housingCentralityBase,
+  housingCentralityMean,
   landmarkPlotsCovered,
   parcelBook,
   UNIVERSITY_SITES_PER_DISTRICT,
@@ -324,7 +347,13 @@ export const occupancyTarget = (s: GameState, kind: ZoneKind): number => {
     OCCUPANCY_FLOOR +
     (OCCUPANCY_FULL - OCCUPANCY_FLOOR) * mood +
     OCCUPANCY_DEMAND * clampDemand(demandOf(s, kind));
-  return Math.max(0, Math.min(1, wanted));
+  // Power is a *cap* rather than a third term, and multiplying rather than
+  // subtracting is what makes it one: a city short of power cannot fill its
+  // buildings however happy it is, and a city with power to spare gains nothing
+  // from the surplus. Applied to all three zones — a shop with no power does not
+  // trade either — and floored by POWER_FLOOR, which is what keeps the loop from
+  // having a fixed point at nothing.
+  return Math.max(0, Math.min(1, wanted)) * powerCap(s);
 };
 
 /** Fraction of the gap occupancy closes over `dt`. Same form as `demandStep`. */
@@ -335,17 +364,46 @@ export const occupancyStep = (dt: number): number =>
 export const isVacant = (s: GameState, kind: ZoneKind): boolean =>
   occupancyOf(s, kind) < OCCUPANCY_EMPTY;
 
-/** Whether a zone has been empty long enough to start writing buildings off. */
+/**
+ * Whether a zone has been empty long enough to start writing buildings off.
+ *
+ * Never the *last* one standing, and that is the same rule OCCUPANCY_FLOOR is:
+ * a neglected city should feel like one that has stopped growing, not one that
+ * has been switched off. The floor kept occupancy off zero and stopped short of
+ * this, because occupancy is a share of a stock and a stock of nothing has no
+ * share. A zone written off to the last building holds no level, houses nobody
+ * and earns *exactly* zero — and with residents at zero the rent line is zero,
+ * happiness has nothing to be about, the occupancy target sits under
+ * OCCUPANCY_EMPTY forever and `isRecovering` never opens. Measured on a city of
+ * six ruined homes and fifteen shops: twelve simulated hours, income 0.00e+0 at
+ * every one of them, and nothing the player could press.
+ *
+ * One home left standing is 0.32 residents at the occupancy floor and about
+ * 0.026 a second, which is a hospital in an hour and a half. Slow enough to
+ * read as the consequence it is, and not a save you have to throw away.
+ *
+ * Found while calibrating LAND_VALUE_SPREAD: the discount-chasing policy in
+ * tools/economy.calibrate.mjs sits on the edge of this for three and a half
+ * hours of a 24-hour run, and a 2.7% change in the ledger decided which side of
+ * it the run landed on. The cliff is what made the constant unmeasurable.
+ */
 export const isAbandoning = (s: GameState, kind: ZoneKind): boolean =>
-  isVacant(s, kind) && vacantOf(s, kind) >= ABANDON_SECONDS && standingOf(s, kind) > 0;
+  isVacant(s, kind) && vacantOf(s, kind) >= ABANDON_SECONDS && standingOf(s, kind) > 1;
 
 /** Whether a zone has ruins to bring back and the occupancy to justify it. */
 export const isRecovering = (s: GameState, kind: ZoneKind): boolean =>
   !isVacant(s, kind) && abandonedOf(s, kind) > 0;
 
-/** Buildings a zone writes off per second, once it is past ABANDON_SECONDS. */
+/**
+ * Buildings a zone writes off per second, once it is past ABANDON_SECONDS.
+ *
+ * Against the stock it may actually lose rather than the whole of it, so the
+ * rate goes to zero as the zone approaches its last building instead of
+ * stopping dead against the guard in `isAbandoning`. A rate that ignored the
+ * floor would bank drift the pass could never spend.
+ */
 export const abandonRate = (s: GameState, kind: ZoneKind): number =>
-  standingOf(s, kind) / ABANDON_SPREAD_SECONDS;
+  Math.max(0, standingOf(s, kind) - 1) / ABANDON_SPREAD_SECONDS;
 
 /** Buildings a zone brings back per second. Four times the rate it lost them. */
 export const recoverRate = (s: GameState, kind: ZoneKind): number =>
@@ -494,6 +552,10 @@ export const plotCapacity = (s: GameState): number =>
  * existing city's build-out by about 2% and move the annexation gate under
  * players who have never opened the tab. They are an amenity that happens to be
  * expensive, not land the city is selling.
+ *
+ * The city hall is out on the same rule, and it is the clearest case of all:
+ * there is one of them in a whole city, so counting it would move the gate by a
+ * different amount at every district count.
  */
 export const plotsUsed = (s: GameState): number =>
   plotsOf(s, 'home') + plotsOf(s, 'shop') + plotsOf(s, 'industry') + civicBuildings(s);
@@ -612,11 +674,19 @@ export const staffing = (s: GameState, key: ServiceKey): number =>
 /**
  * Sites of one type the city has land for.
  *
- * Two answers, because there are two kinds of site. The four 2x2 types share one
- * city-wide list by a fixed interleave — hospitals take 4k, police 4k+1, fire
- * 4k+2, schools 4k+3 — so with 6 sites a district the first district gets
- * 2/2/1/1 and they even out from there. A university stands on its own 3x3 list,
- * one to a district, and does not touch the interleave at all.
+ * Two answers, because there are two kinds of site. The *five* 2x2 types share
+ * one city-wide list by a fixed interleave — hospitals take 5k, police 5k+1,
+ * fire 5k+2, schools 5k+3 and depots 5k+4 — so with 6 sites a district the first
+ * district gets 2/1/1/1/1 and they even out from there. A university stands on
+ * its own 3x3 list, one to a district, and does not touch the interleave at all.
+ *
+ * The divisor is `CIVIC_SERVICES.length` and it is the one number in this file
+ * that must never move for convenience. Adding a sixth 2x2 type would change it
+ * and move every hospital, police station, fire station, school and depot in the
+ * city onto a different square — a returning player would watch their city
+ * rearrange itself around a save that had not changed. Anything new that wants a
+ * 2x2 square gets a list of its own sliced after these, the way the city hall
+ * does and the way `landmarksSmall` is sliced before them.
  */
 export const siteCapacity = (s: GameState, key: ServiceKey): number => {
   if (key === 'university') return universitySiteCapacity(s);
@@ -664,7 +734,7 @@ export const serviceNeeded = (s: GameState, service: Service): number =>
  */
 export const covered = (s: GameState, service: Service): number => {
   const reach = serviceCount(s, service.key) * staffing(s, service.key) * service.plots;
-  return service.key === 'transit' && s.freeTransport ? reach * (1 + FREE_TRANSPORT_REACH) : reach;
+  return service.key === 'transit' && faresWaived(s) ? reach * (1 + FREE_TRANSPORT_REACH) : reach;
 };
 
 /** The transit service, or undefined if the table is ever built without one. */
@@ -698,7 +768,7 @@ export const riders = (s: GameState): number =>
  * which is the whole of what the policy costs.
  */
 export const fareIncome = (s: GameState): number =>
-  s.freeTransport ? 0 : riders(s) * FARE_PER_RIDER;
+  faresWaived(s) ? 0 : riders(s) * FARE_PER_RIDER;
 
 /**
  * Share of the city's housing land a service reaches, capped at all of it.
@@ -835,7 +905,20 @@ export const hasCoast = (s: GameState): boolean => terminalCapacity(s) > 0;
  * nobody at all sails to one for a holiday.
  */
 export const visitors = (s: GameState): number =>
-  s.cruiseTerminals * residents(s) * VISITORS_PER_RESIDENT * Math.max(0, Math.min(1, s.happiness));
+  berthsLanding(s) * residents(s) * VISITORS_PER_RESIDENT * Math.max(0, Math.min(1, s.happiness));
+
+/**
+ * Berths' worth of arrivals the city has, quay and runway together.
+ *
+ * The airport lands visitors on the same path a cruise terminal does rather
+ * than on a second one, which is what keeps `visitors` a single expression and
+ * keeps the happiness scaling — the term that makes tourism the one income line
+ * in the game that goes to *zero* in a miserable city rather than to
+ * HAPPINESS_FLOOR. Nobody's holiday is somewhere grim, and that is as true of a
+ * flight as of a cruise.
+ */
+export const berthsLanding = (s: GameState): number =>
+  s.cruiseTerminals + (s.airport ? AIRPORT_VISITORS : 0);
 
 /** What those visitors spend, per second, before tax. */
 export const cruiseIncome = (s: GameState): number => visitors(s) * VISITOR_SPEND;
@@ -940,6 +1023,33 @@ export function highwayBlocker(s: GameState): string | null {
   return highwayAllowed(s) ? null : `Needs ${HIGHWAY_MIN_DISTRICTS} districts`;
 }
 
+/**
+ * Whether the city could have an airport at all: the road, and the ground.
+ *
+ * The road is the progression gate, and it is the estates' gate rather than one
+ * of its own because it is the same gate — the airport stands at the end of the
+ * same spur, on land the city does not own, and a second district count for the
+ * same road would be two numbers saying one thing.
+ *
+ * The ground is the other half and is a property of the seed: the band is a
+ * fixed strip with the water already taken out of it, and a seed that drowned
+ * every candidate runway leaves the city with nowhere to put one. See
+ * `airportCell`.
+ */
+export const airportAllowed = (s: GameState): boolean => s.highway && AIRPORT_SITED;
+
+/** Flat: there is one airport, so there is no n to compound over. */
+export const airportCost = (): number => AIRPORT_BASE;
+
+export const canBuildAirport = (s: GameState): boolean =>
+  !s.airport && airportAllowed(s) && s.cash >= airportCost();
+
+export function airportBlocker(s: GameState): string | null {
+  if (s.airport) return 'Built';
+  if (!s.highway) return 'No highway yet';
+  return AIRPORT_SITED ? null : 'Nowhere to put one';
+}
+
 export function estateBlocker(s: GameState): string | null {
   if (!s.highway) return 'No highway yet';
   return s.estates >= estateCapacity(s) ? 'No parcels left' : null;
@@ -1000,7 +1110,7 @@ export const happinessTarget = (s: GameState): number => {
   // that has held for three cycles. See LANDMARK_MOOD.
   const policy =
     taxStep(s).mood +
-    (s.freeTransport ? FREE_TRANSPORT_MOOD : 0) +
+    (faresWaived(s) ? FREE_TRANSPORT_MOOD : 0) +
     LANDMARK_MOOD * landmarkCoverage(s);
   return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
@@ -1026,9 +1136,19 @@ export const bindingTerm = (s: GameState): HappinessTerm => {
   return worst;
 };
 
-/** The tax setting the city is on. Clamped, so a doctored save picks a real one. */
+/**
+ * The tax setting the city is *on*, which is not always the one it has stored.
+ *
+ * Neutral until there is a city hall, because a rate is policy and policy needs
+ * somebody to set it. The stored field is left exactly as the player left it —
+ * overwriting it would lose a choice they made and could not see being lost —
+ * so a hall bought later puts the city straight back on its own rate.
+ *
+ * Clamped as well, so a doctored save picks a real step.
+ */
 export const taxStep = (s: GameState): (typeof TAX_STEPS)[number] => {
-  const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(s.taxRate)));
+  const wanted = hasPolicy(s) ? s.taxRate : TAX_NEUTRAL;
+  const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(wanted)));
   return TAX_STEPS[at] as (typeof TAX_STEPS)[number];
 };
 
@@ -1160,7 +1280,13 @@ export const exportMarket = (s: GameState): number =>
   // The cargo berths lift the tap rather than opening a second one beside it,
   // so there is still one number the outside world's appetite is made of and
   // one place to look when industrial demand is wrong. See CARGO_EXPORT_LIFT.
-  (1 + CARGO_EXPORT_LIFT * s.cargoTerminals);
+  //
+  // Air freight is the second lift and it *adds* inside the same bracket rather
+  // than multiplying it. That is what keeps it from double-counting against a
+  // cargo terminal: a city with both has one tap raised twice, not two taps for
+  // the same goods — and a multiplicative form would have made the airport worth
+  // most to the city that least needs it. See AIRPORT_EXPORT_LIFT.
+  (1 + CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0));
 
 export const jobs = (s: GameState): number =>
   openOf(s, 'shop', SHOP_JOBS) +
@@ -1328,6 +1454,80 @@ export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** 
 
 // -------------------------------------------------------------------- income
 
+// -------------------------------------------------------------- land value
+
+/**
+ * What one housing plot's centrality does to its rent.
+ *
+ * The game's first spatially varying input, and the shape of it is the whole
+ * design. `citygen` scores each block 1 at its district's middle and 0 at its
+ * furthest corner; a plot inherits its block's score; and rent is multiplied by
+ * `1 + LAND_VALUE_SPREAD x (score - the city's mean score)`. Centred on the
+ * mean rather than on a constant, so the factor redistributes rent across the
+ * build order and adds none — see LAND_VALUE_SPREAD for why that matters more
+ * than the spread itself does.
+ *
+ * Floored at zero. The spread is a constant rather than save data so it cannot
+ * arrive out of range, but a multiplier that could go negative is a rent that
+ * could go negative, and that is worth one comparison to rule out for good.
+ */
+const valueOf = (score: number, base: number): number =>
+  Math.max(0, 1 + LAND_VALUE_SPREAD * (score - base));
+
+/**
+ * The city's rent multiplier: the mean land value over the housing it has built.
+ *
+ * A cohort-level mean, not a per-building modifier, and that is the line this
+ * feature deliberately does not cross. `LevelCohort` in state.ts says
+ * per-instance state earns its cost the moment a spatially varying input
+ * arrives; this is that input, and it still does not, because the k-th home's
+ * plot is a pure function of its ordinal and the seed and so the mean over the
+ * first n of them is a pure function of counts. The door is ajar rather than
+ * open: what would push it the rest of the way is an input that varies per
+ * building *and* cannot be summarised — a per-building age, a per-building
+ * tenant, anything the city cannot recompute from `{ homes, mergedR }`.
+ *
+ * One for a city with no housing, so the opening is unaffected by a term about
+ * where housing is.
+ *
+ * O(1). `income` runs ten times a second and this is two prefix-table reads —
+ * see `LandValue` in layout.ts, which is why it is not a memo.
+ */
+export const landValue = (s: GameState): number => {
+  const plots = plotsOf(s, 'home');
+  if (plots <= 0) return 1;
+  return valueOf(
+    housingCentralityMean(plots, s.districts),
+    housingCentralityBase(s.districts),
+  );
+};
+
+/**
+ * What one parcel's land is worth, for the inspector.
+ *
+ * The number that genuinely differs between two identical houses now, which is
+ * why `buildingIncome` takes a plot at all. Averaged over the parcel rather than
+ * read off its first plot: a merged tower stands on two, and they can sit in
+ * different blocks.
+ */
+export const parcelLandValue = (s: GameState, plot: number, plots = 1): number => {
+  const span = Math.max(1, Math.floor(plots));
+  let score = 0;
+  for (let i = 0; i < span; i++) score += housingCentrality(plot + i, s.districts);
+  return valueOf(score / span, housingCentralityBase(s.districts));
+};
+
+/**
+ * What the city's premises add to every plot of housing it owns.
+ *
+ * One expression rather than two, because `income` and `ledgerScale` both need
+ * it and a copy in each is a copy that drifts. What varies between them is the
+ * arguments: `income` passes the burning share taken off, and `ledgerScale`
+ * deliberately does not — a fire furloughs nobody.
+ */
+const bonuses = (shops: number, industry: number, districts: number): number =>
+  1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (districts - 1);
+
 /**
  * Cash per second, with everything currently on fire earning nothing.
  *
@@ -1347,7 +1547,13 @@ export const income = (s: GameState): number => {
   return (
     (people *
       RENT *
-      (1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (s.districts - 1)) *
+      // Where the housing is, not just how much of it there is. A mean over the
+      // plots the city has built, normalised so a built-out city earns exactly
+      // what flat rent earned — see `landValue`. Inside the rent bracket and
+      // nowhere else: fares are paid by riders and tourism by visitors, and
+      // neither of them cares which street the payer lives on.
+      landValue(s) *
+      bonuses(shops, industry, s.districts) *
       incomeMultiplier(s) +
       // Fares. Outside the bracket above rather than inside it, because they
       // are not rent: a fare does not scale with the shop multiplier or the
@@ -1365,6 +1571,320 @@ export const income = (s: GameState): number => {
     taxStep(s).income
   );
 };
+
+// -------------------------------------------------------------------- power
+
+/**
+ * What one *building* draws at each level, in level-0 plots.
+ *
+ * The footprint times the level's own capacity ratio raised to POWER_EXPONENT.
+ * The footprint is there for the reason SHOP_JOBS carries it — a merged building
+ * stands on two plots and draws for both — and the exponent is what makes power
+ * different from every other per-plot ladder in this file: jobs, trips, supply
+ * and output are all flat per plot at every level, and this one is not.
+ *
+ * Derived from LEVEL_CAPACITY rather than typed, so the two can never drift.
+ */
+export const POWER_LADDER = LEVEL_CAPACITY.map(
+  (capacity, l) =>
+    (LEVEL_FOOTPRINT[l] ?? 1) *
+    (capacity / (LEVEL_CAPACITY[0] ?? 1)) ** POWER_EXPONENT,
+) as readonly number[];
+
+/** What one zone's standing stock draws. Ruins hold no level and so draw nothing. */
+const zoneDraw = (s: GameState, kind: ZoneKind, per: number): number =>
+  cohortAgainst(levelsOf(s, kind), POWER_LADDER) * per;
+
+/**
+ * What the city draws, per second, in level-0 plots.
+ *
+ * Standing stock rather than occupied stock, and that is the load-bearing
+ * choice: an empty house still draws its share because the grid is sized to the
+ * building, and if draw fell with occupancy a brownout would cure itself and
+ * there would be no decision in it. A *ruin* draws nothing, because it holds no
+ * level and so appears in no cohort.
+ *
+ * The estates draw too. They are industrial plots on land the city does not own,
+ * so they are added here rather than folded into the cohort — the same place and
+ * for the same reason `estateJobs` is added to `jobs` — and they are built to the
+ * standard of the city's own works, which is what `industryScale` says.
+ */
+export const powerDemand = (s: GameState): number =>
+  zoneDraw(s, 'home', POWER_PER_PLOT.residential) +
+  zoneDraw(s, 'shop', POWER_PER_PLOT.commercial) +
+  zoneDraw(s, 'industry', POWER_PER_PLOT.industrial) +
+  estatePlots(s) * POWER_PER_PLOT.industrial * industryScale(s) ** POWER_EXPONENT;
+
+/**
+ * What the city can make, per second.
+ *
+ * POWER_BASE is the grid it starts connected to and never loses — see that
+ * constant for why a fresh city must not be short of a resource it has no way to
+ * make yet. Plants are scaled by `cityScale` for the reason the estates are
+ * scaled by `industryScale`: a plant has no level of its own to climb, so it is
+ * built to the standard of the city around it.
+ *
+ * Staffing is a factor, so a plant that opened this instant is not carrying the
+ * grid yet — the same ninety-second ramp every civic building has, and the same
+ * thing an unpaid wage bill takes back.
+ */
+export const powerSupply = (s: GameState): number =>
+  POWER_BASE + s.plants * s.plantStaff * POWER_PER_PLANT * cityScale(s);
+
+/**
+ * Supply over draw. Above 1 the city has power to spare.
+ *
+ * Derived, never integrated, and that is a decision rather than an omission:
+ * occupancy already lags on a 120-second constant and demand on 25, so a third
+ * lagged signal feeding the first would make the whole loop sluggish and
+ * impossible to read. The ratio moves the instant a plant opens; what takes two
+ * minutes to answer is the occupancy it caps.
+ *
+ * One for a city that draws nothing, so an empty map is not short of anything.
+ */
+export const powerRatio = (s: GameState): number => {
+  const draw = powerDemand(s);
+  return draw <= 0 ? 1 : powerSupply(s) / draw;
+};
+
+/**
+ * What a shortfall does to occupancy: a cap, proportional, with a floor.
+ *
+ * The whole shape of the feature. A browned-out city empties gradually and
+ * visibly rather than flipping to zero income, so the failure is legible and
+ * reversible — and POWER_FLOOR is what stops the loop having a fixed point at
+ * nothing. See that constant for why 0.35 and not less: at OCCUPANCY_FULL it
+ * lands at 0.322 against an OCCUPANCY_EMPTY of 0.25, so a blacked-out but happy
+ * city loses its residents and keeps its buildings.
+ */
+export const powerCap = (s: GameState): number =>
+  POWER_FLOOR + (1 - POWER_FLOOR) * Math.max(0, Math.min(1, powerRatio(s)));
+
+/** Plant sites the city owns: one a district, and every one buildable. */
+export const plantCapacity = (s: GameState): number =>
+  s.districts * POWER_SITES_PER_DISTRICT;
+
+export const plantCost = (s: GameState): number =>
+  POWER_PLANT_BASE * POWER_PLANT_GROWTH ** s.plants;
+
+export const canBuildPlant = (s: GameState): boolean =>
+  s.plants < plantCapacity(s) && s.cash >= plantCost(s);
+
+/** Why the plant button is off. Land is the only gate a plant has. */
+export function plantBlocker(s: GameState): string | null {
+  return s.plants >= plantCapacity(s) ? 'No sites left' : null;
+}
+
+// ---------------------------------------------------------------- city hall
+
+/**
+ * Whether the city has anybody to set policy.
+ *
+ * The one gate the city hall is, named once so that the three things it gates
+ * read alike. `taxStep` falls back to TAX_NEUTRAL without it, `freeTransport`
+ * to fares-on, and `Game.step` runs no auto-development — every one of which is
+ * exactly what a fresh city already gets, so the opening is unchanged.
+ */
+export const hasPolicy = (s: GameState): boolean => s.cityHall;
+
+/**
+ * Whether free transport is actually in force.
+ *
+ * Read instead of `s.freeTransport` everywhere it matters — the depot's reach,
+ * the fares, the mood — because the stored flag is the player's *choice* and
+ * this is whether the city can act on it. Keeping the two apart is what lets a
+ * v8 city's setting survive intact rather than being overwritten on load.
+ */
+export const faresWaived = (s: GameState): boolean => s.cityHall && s.freeTransport;
+
+/** Flat: there is one city hall, so there is no n to compound over. */
+export const cityHallCost = (): number => CITY_HALL_BASE;
+
+export const canBuildCityHall = (s: GameState): boolean =>
+  !s.cityHall && s.cash >= cityHallCost();
+
+/** Why the city hall button is off. Built, or a matter of money. */
+export function cityHallBlocker(s: GameState): string | null {
+  return s.cityHall ? 'Built' : null;
+}
+
+/**
+ * Why a policy control is off, phrased for the HUD.
+ *
+ * The same blocker-reason idiom every other disabled control in this HUD
+ * follows: a string when the control is dead for a reason worth saying, null
+ * when it is live.
+ */
+export function policyBlocker(s: GameState): string | null {
+  return hasPolicy(s) ? null : 'Needs a city hall';
+}
+
+// ------------------------------------------------------------------ upkeep
+
+/**
+ * `1 + g + ... + g^(n-1)`, the compounded total of `n` buildings.
+ *
+ * The same sum every cost curve in this file implies and none of them had to
+ * state, because a purchase only ever asks what the *next* one costs. Upkeep
+ * asks what all of them cost at once, so the closed form is worth having: a
+ * 49-district city may own 59 buildings of a type and this runs ten times a
+ * second.
+ */
+const compounded = (growth: number, n: number): number =>
+  n <= 0 ? 0 : growth === 1 ? n : (growth ** n - 1) / (growth - 1);
+
+/**
+ * What a plot of this city is worth against a plot of a fresh one, in the terms
+ * the ledger is actually made of.
+ *
+ * The yardstick the wage bill is indexed to, and the measurement is the whole
+ * reason it is not simply `cityScale`. A flat rate per building was tried first
+ * and falls away to nothing, which the brief for this feature predicted; scaling
+ * by `cityScale` alone was tried second and *also* falls away, which it did not.
+ * Measured on cities built out to their own frontage with every service the land
+ * allows, a bill scaled by `cityScale` is 4.6% of the ledger at one district of
+ * apartments and 0.0% at forty-nine of megastructures — three orders of
+ * magnitude of drift, and a decision that only exists for the first hour.
+ *
+ * The reason is that the ledger climbs the level ladder *twice*. Rent is
+ * `residents x RENT x (1 + SHOP_BONUS x shops + ...)`, and both brackets grow
+ * with LEVEL_SCALE — once through the people paying and once through the
+ * premises multiplying what they pay — so income is quadratic in a term
+ * `cityScale` only covers once. This is the product of the two, so it is exactly
+ * as quadratic as the thing it is chasing: measured, the upkeep share is
+ * identical to three significant figures at apartments, towers and
+ * megastructures. See tools/upkeep.calibrate.mjs.
+ *
+ * Four terms are deliberately absent, and they are absent for one reason: a
+ * bill that fell with the things that make a city poorer would cancel exactly
+ * the pressure it exists to apply. Mood and the tax rate are policy, and a city
+ * cannot furlough its hospitals by taxing itself. A fire sends nobody home.
+ * And *occupancy* is out on the same rule, which is why this reads the cohorts
+ * rather than `effectiveOf` — a half-empty city owes the same wages on a
+ * smaller income, so the share climbs as the city struggles, which is what
+ * makes the bankruptcy rule reachable at all.
+ *
+ * One for a fresh city, since `cityScale` and `bonuses` are each one there — so
+ * UPKEEP_RATE keeps its meaning as a payback period measured at the opening.
+ */
+export const ledgerScale = (s: GameState): number =>
+  cityScale(s) *
+  bonuses(
+    cohortScale(s.shopLevels),
+    cohortScale(s.industryLevels) + estatePlots(s) * ESTATE_YIELD * industryScale(s),
+    s.districts,
+  );
+
+/**
+ * The city's whole civic payroll, in cash of opening price.
+ *
+ * Split out from `upkeep` and given the growth as an argument for one reason:
+ * tools/upkeep.calibrate.mjs sweeps UPKEEP_GROWTH, and a sweep that reimplemented
+ * this sum would be measuring a second copy of the formula rather than the one
+ * the game charges.
+ *
+ * Staffing is a factor, and it is the term that keeps the bankruptcy rule from
+ * deadlocking: an unpaid payroll is a cheaper payroll, so a city that cannot pay
+ * stops paying, its coverage falls to what it can afford, and its income
+ * recovers against a smaller bill. See UPKEEP_ARREARS_TAU.
+ */
+export const civicPayroll = (s: GameState, growth = UPKEEP_GROWTH): number => {
+  let payroll = 0;
+  for (const service of SERVICES) {
+    payroll +=
+      service.base *
+      compounded(growth, serviceCount(s, service.key)) *
+      staffing(s, service.key);
+  }
+  // The city hall is on the payroll and is the one entry with no staffing term,
+  // because it has no staffing scalar to have: it is a boolean, and there is
+  // nothing to average a second one into. What that costs is that arrears cannot
+  // make the hall cheaper the way they make a hospital cheaper — measured, it is
+  // 15.1% of a one-district city's bill and 2.0% of its gross income, falling to
+  // 0.2% and 0.0% at forty-nine — and UPKEEP_KEEP_SHARE is what guarantees the
+  // treasury grows underneath it either way. A flat cost against a payroll that
+  // grows with the city, so it is a real line early and a rounding error late,
+  // which is the right way round for the building that unlocks the away switch.
+  if (s.cityHall) payroll += CITY_HALL_BASE;
+  // Plants are on the payroll and *do* have a staffing scalar, unlike the hall,
+  // so an unpaid wage bill browns the city out — which is the one place two of
+  // these features touch. The guard is that the loop is bounded at both ends:
+  // POWER_FLOOR holds occupancy at a third whatever the grid is doing, and
+  // UPKEEP_KEEP_SHARE keeps the treasury growing whatever the arrears are. See
+  // test/power.test.ts, where the pair is run together and has to climb out.
+  payroll +=
+    POWER_PLANT_BASE * compounded(growth, s.plants) * s.plantStaff;
+  // The airport, at a figure of its own rather than at what it cost to open —
+  // see AIRPORT_PAYROLL, which is the one building in the game where the two
+  // are unrelated. Like the hall it has no staffing scalar and so cannot be
+  // made cheaper by arrears; unlike the hall it is the dearest single thing the
+  // city runs.
+  if (s.airport) payroll += AIRPORT_PAYROLL;
+  return payroll;
+};
+
+/**
+ * What one civic type costs to run, per second. The breakdown `upkeep` sums.
+ *
+ * Priced off `Service.base` rather than as a column of its own, so a university
+ * costs more to run than a police station without a second table to keep in step
+ * with the first. What that buys is stated plainly because it is lopsided: a
+ * university opens at 7,200 against a hospital's 130, so at the ceiling the land
+ * allows it is 85% of the whole bill. That is the intended reading rather than a
+ * defect — the university is the building that unlocks the top of the skyline,
+ * and it is now the one with a running cost worth thinking about — but it does
+ * mean the other five types are a tenth of the wage bill between them, and a
+ * later cycle that wants coverage itself to be the budget decision will need a
+ * measured `upkeep` column rather than this derivation.
+ */
+export const serviceUpkeep = (s: GameState, service: Service): number =>
+  UPKEEP_RATE *
+  service.base *
+  compounded(UPKEEP_GROWTH, serviceCount(s, service.key)) *
+  staffing(s, service.key) *
+  ledgerScale(s);
+
+/**
+ * The whole wage bill, per second.
+ *
+ * Deliberately a read of its own rather than a term inside `income`. `income`
+ * is what the city's buildings *earn* — the shop multiplier, the fares, the
+ * tourism — and the inspector, the estates panel and `buildingIncome` all mean
+ * exactly that when they read it. What the city is left with is `netIncome`,
+ * and the two must not be conflated: charging upkeep inside `income` would make
+ * every marginal-value readout in the HUD quietly wrong.
+ */
+export const upkeep = (s: GameState): number =>
+  UPKEEP_RATE * civicPayroll(s) * ledgerScale(s);
+
+/** What the treasury actually gains per second. The number the dock shows. */
+export const netIncome = (s: GameState): number => income(s) - upkeep(s);
+
+/**
+ * Fraction of a payroll lost over `dt` at a given unpaid share of the bill.
+ *
+ * The same exponential form as `demandStep` and `happinessStep`, and here for
+ * the same reason: catch-up steps whole minutes and the linear form
+ * `x -= x * dt / TAU` goes negative the moment `dt` passes TAU. This saturates
+ * at 1 for any step size, so an hour of arrears taken in one step leaves the
+ * same staffing as an hour taken in thirty-six thousand ticks.
+ *
+ * `shortfall` is the share of the bill that went unpaid, so it scales the rate
+ * rather than the target: a city a penny short of its wages barely moves, and
+ * one paying nothing at all empties its payroll on UPKEEP_ARREARS_TAU.
+ */
+export const arrearsStep = (dt: number, shortfall: number): number =>
+  1 - Math.exp((-Math.max(0, shortfall) * Math.max(0, dt)) / UPKEEP_ARREARS_TAU);
+
+/**
+ * Cash the automatic passes hold back when the ledger is running negative.
+ *
+ * Zero for a solvent city, which is every city that has not overbought — so this
+ * changes nothing about how auto-development behaves until the moment it would
+ * otherwise dig the hole deeper. See UPKEEP_RESERVE_SECONDS.
+ */
+export const upkeepReserve = (s: GameState): number =>
+  Math.max(0, -netIncome(s)) * UPKEEP_RESERVE_SECONDS;
 
 // ------------------------------------------------------------------ can-build
 
@@ -1405,12 +1925,19 @@ export const canAnnex = (s: GameState): boolean =>
 /**
  * Whether the city will take the next district on its own this tick.
  *
- * Everything the button needs plus a reserve, so the automatic pass spends a
+ * Everything the button needs plus two reserves, so the automatic pass spends a
  * surplus rather than the treasury. A player who wants the land before the
  * surplus is there presses the button; that is the override.
+ *
+ * The second reserve is `upkeepReserve`, and it is the half that answers to the
+ * wage bill rather than to the price. Annexing does not raise upkeep on its own
+ * — a district is land, not a payroll — but it stretches the services the city
+ * already runs across more of it, and a city already failing to make its wages
+ * has no business buying anything at all. Zero for a solvent city, so this is
+ * inert until it matters.
  */
 export const willAutoAnnex = (s: GameState): boolean =>
-  canAnnex(s) && s.cash >= annexCost(s) * (1 + AUTO_ANNEX_RESERVE);
+  canAnnex(s) && s.cash >= annexCost(s) * (1 + AUTO_ANNEX_RESERVE) + upkeepReserve(s);
 
 /**
  * Why the city is not expanding, phrased for the HUD.
@@ -1454,7 +1981,18 @@ export function homeBlocker(s: GameState): string | null {
  *
  * Every term but the level is city-wide, which is why the inspector says so.
  */
-export const buildingIncome = (s: GameState, kind: ZoneKind, level: number): number => {
+export const buildingIncome = (
+  s: GameState,
+  kind: ZoneKind,
+  level: number,
+  /**
+   * The parcel this building stands on, as a flat housing-plot index and a
+   * plot count. Optional, and only read for housing: it is what makes two
+   * identical houses worth different amounts. Omitted, a home is quoted at the
+   * city's mean land value, which is what it was worth before this existed.
+   */
+  parcel?: { readonly plot: number; readonly plots: number },
+): number => {
   if (level < 0) return 0;
   const mood = incomeMultiplier(s);
   if (kind === 'home') {
@@ -1463,7 +2001,11 @@ export const buildingIncome = (s: GameState, kind: ZoneKind, level: number): num
       SHOP_BONUS * effectiveOf(s, 'shop') +
       INDUSTRY_BONUS * effectiveOf(s, 'industry') +
       DISTRICT_BONUS * (s.districts - 1);
-    return (LEVEL_HOUSING[level] ?? 0) * s.occupancyR * RENT * bonuses * mood;
+    const land =
+      parcel === undefined
+        ? landValue(s)
+        : parcelLandValue(s, parcel.plot, parcel.plots);
+    return (LEVEL_HOUSING[level] ?? 0) * s.occupancyR * RENT * land * bonuses * mood;
   }
   const share = kind === 'shop' ? SHOP_BONUS : INDUSTRY_BONUS;
   return (

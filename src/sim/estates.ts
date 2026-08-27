@@ -1,4 +1,4 @@
-import { MAX_DISTRICTS } from './config.ts';
+import { CELL, DISTRICT_SPAN, MAX_DISTRICTS } from './config.ts';
 import { cityRadius } from './layout.ts';
 import { WATERS, WATER_TILE, type Shore } from './water.ts';
 
@@ -138,6 +138,91 @@ export const ESTATE_CELLS = cells.length;
 export function estateCell(i: number): EstateCell | null {
   return cells[i] ?? null;
 }
+
+// ------------------------------------------------------------------ airport
+
+/**
+ * How long the runway is, and how deep the apron behind it.
+ *
+ * Three districts long and one wide, and the proportion is the point: an airport
+ * is the anti-tower taken further than industry takes it. A works competes on
+ * footprint against a building; this competes on footprint against a *district*,
+ * which is what makes it read as something the city could never have fitted
+ * inside its own streets however much it wanted to.
+ *
+ * 180 rather than more, because the band it stands behind is 624 across and a
+ * runway approaching that would read as a second edge to the map rather than as
+ * a thing at the end of the road.
+ */
+export const AIRPORT_LENGTH = 3 * DISTRICT_SPAN * CELL;
+export const AIRPORT_DEPTH = DISTRICT_SPAN * CELL;
+
+/**
+ * How far the airport stands beyond the far edge of the estates.
+ *
+ * The same half-tile of clearance ESTATE_GAP puts between the band and the city,
+ * and for the same reason: the spur runs through it. An airport that touched the
+ * back of the estates would have the band road running along its apron.
+ */
+const AIRPORT_GAP = WATER_TILE / 2;
+
+/** Where the apron's centreline sits, in the coast frame. */
+const AIRPORT_U = ESTATE_FAR - AIRPORT_GAP - AIRPORT_DEPTH / 2;
+
+/**
+ * Whether a runway laid along the shore at `v` is clear of water.
+ *
+ * Sampled along its length rather than asked as one square, because a square
+ * bounding a 180 x 60 strip is 180 x 180 — three times the ground the airport
+ * actually stands on, and enough to reject a site the river merely passes near.
+ * Each sample is `dryAround` on a square of the apron's own depth, so the
+ * lattice is the same one every other dryness test in the game uses.
+ */
+function dryRunway(v: number): boolean {
+  const at: Shore = { x: 0, z: 0 };
+  const steps = Math.ceil(AIRPORT_LENGTH / AIRPORT_DEPTH);
+  for (let i = 0; i <= steps; i++) {
+    const along = v - AIRPORT_LENGTH / 2 + (i * AIRPORT_LENGTH) / steps;
+    WATERS.toWorld(AIRPORT_U, along, at);
+    if (!WATERS.dryAround(at.x, at.z, AIRPORT_DEPTH / 2)) return false;
+  }
+  return true;
+}
+
+/**
+ * Where the airport stands, or null if the water leaves nowhere for it.
+ *
+ * On the spur's own axis if the ground allows, and shifted along the shore a
+ * runway at a time if it does not — outward both ways, exactly as the estate
+ * columns are ordered and for the same reason: a site chosen from one end would
+ * put the airport off to one side for no reason a player could see.
+ *
+ * Computed once. There is one airport and it never moves, so this is a constant
+ * that happens to need the water field to work itself out.
+ */
+const airport: EstateCell | null = (() => {
+  const reach = Math.ceil(((ESTATE_COLS + 1) * ESTATE_PITCH) / AIRPORT_LENGTH);
+  for (let k = 0; k <= reach; k++) {
+    for (const v of k === 0 ? [0] : [k * AIRPORT_LENGTH, -k * AIRPORT_LENGTH]) {
+      if (dryRunway(v)) return { u: AIRPORT_U, v };
+    }
+  }
+  return null;
+})();
+
+/** Where the airport stands, in the coast frame. Null when the water took it. */
+export function airportCell(): EstateCell | null {
+  return airport;
+}
+
+/**
+ * Whether the map has anywhere to put an airport at all.
+ *
+ * A seed could in principle drown every candidate site, and the honest answer
+ * then is that this city cannot have one rather than that it has one under
+ * water. `airportBlocker` reads this, so the button says so.
+ */
+export const AIRPORT_SITED = airport !== null;
 
 /**
  * How far along the shore the built estates reach, in world units either side.

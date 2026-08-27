@@ -1,7 +1,14 @@
 import * as THREE from 'three';
 import { hash01, mixSeed } from '../core/rng';
 import { SEED } from '../sim/config';
-import { ESTATE_SPAN, estateCell, type EstateCell } from '../sim/estates';
+import {
+  AIRPORT_DEPTH,
+  AIRPORT_LENGTH,
+  airportCell,
+  ESTATE_SPAN,
+  estateCell,
+  type EstateCell,
+} from '../sim/estates';
 import type { GameState } from '../sim/state';
 import { WATERS, type Shore } from '../sim/water';
 import { GrowableInstancedMesh } from './growable';
@@ -41,15 +48,50 @@ const STACK_H = 9;
 /** Instances one parcel wants of each mesh. One of everything. */
 const PER_PARCEL = 1;
 
-/** The estates layer. Four meshes, rebuilt only when the count moves. */
+// ------------------------------------------------------------------ airport
+
+/** The apron, as a share of the ground the airport stands on. */
+const APRON = 0.96;
+const APRON_H = 0.55;
+/** The runway, as a share of the apron. Long and narrow — that is a runway. */
+const RUNWAY_WIDE = 0.34;
+const RUNWAY_H = 0.15;
+/** Centreline dashes: how many, how long, how wide. */
+const MARKS = 9;
+const MARK_LONG = 0.055;
+const MARK_WIDE = 0.035;
+const MARK_H = 0.06;
+
+/**
+ * Everything the city builds beyond its own edge: the estates, and the airport.
+ *
+ * One layer rather than two, because they are the same drawing problem — flat
+ * ground in the coast frame, placed by an ordinal and the seed, rebuilt only
+ * when a count moves — and they share the `box` helper that turns a coast-frame
+ * rectangle into a scaled world-space matrix. A second layer would be a second
+ * copy of that.
+ *
+ * The airport is drawn with plain meshes rather than instanced ones, and that is
+ * the one place it differs from everything around it. Instancing amortises a
+ * per-instance cost over many instances; there is exactly one airport, and three
+ * plain meshes toggled visible is both fewer objects and less machinery than one
+ * instance of three instanced ones. It is outside BUILDING_MESH_BUDGET for the
+ * same reason the estates and the port are: that budget is the three zone
+ * ladders, which grow with the city, and these grow with the *table*.
+ */
 export class Estates {
   private readonly yards: GrowableInstancedMesh;
   private readonly sheds: GrowableInstancedMesh;
   private readonly roofs: GrowableInstancedMesh;
   private readonly stacks: GrowableInstancedMesh;
+  /** The apron, the strip and the centreline. Built once, shown when built. */
+  private readonly apron: THREE.Mesh;
+  private readonly runway: THREE.Mesh;
+  private readonly marks: GrowableInstancedMesh;
   private readonly dummy = new THREE.Object3D();
   private readonly point: Shore = { x: 0, z: 0 };
   private shown = -1;
+  private shownAirport = false;
 
   constructor(scene: THREE.Scene) {
     // Made ground, in the same colour the districts stand on: an estate is a
@@ -82,9 +124,40 @@ export class Estates {
       4,
       { castShadow: true },
     );
+
+    // Flat plates rather than boxes with a silhouette, which is the whole of
+    // what an airport looks like from above — the runway reads because it is
+    // dark against pale made ground and because of the dashes down it, not
+    // because anything stands up.
+    // Height baked into the geometry rather than into the scale, exactly as
+    // every mesh above does it — `box` writes a scale of (alongU, 1, alongV),
+    // so anything expecting to be scaled vertically would come out one unit
+    // tall whatever it asked for.
+    const plate = (color: number, height: number): THREE.Mesh => {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1, height, 1),
+        new THREE.MeshLambertMaterial({ color }),
+      );
+      mesh.receiveShadow = true;
+      mesh.visible = false;
+      scene.add(mesh);
+      return mesh;
+    };
+    this.apron = plate(PALETTE.apron, APRON_H);
+    this.runway = plate(PALETTE.runway, RUNWAY_H);
+    this.marks = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(1, MARK_H, 1),
+      new THREE.MeshLambertMaterial({ color: PALETTE.marking }),
+      MARKS,
+      { name: 'airport:marks' },
+    );
+    this.marks.count = 0;
+    this.marks.flush();
   }
 
   sync(state: Readonly<GameState>): void {
+    this.syncAirport(state);
     if (state.estates === this.shown) return;
     this.shown = state.estates;
 
@@ -113,6 +186,59 @@ export class Estates {
     this.sheds.flush();
     this.roofs.flush();
     this.stacks.flush();
+  }
+
+  /**
+   * The airport, which is either there or not.
+   *
+   * Written once when the boolean turns over rather than every frame, exactly
+   * as the estates are rebuilt only when their count moves. A `null` cell means
+   * the water took every candidate site, which `airportAllowed` already refuses
+   * to sell — this is the belt to that braces.
+   */
+  private syncAirport(state: Readonly<GameState>): void {
+    if (state.airport === this.shownAirport) return;
+    this.shownAirport = state.airport;
+    const cell = state.airport ? airportCell() : null;
+    this.apron.visible = cell !== null;
+    this.runway.visible = cell !== null;
+    if (!cell) {
+      this.marks.count = 0;
+      this.marks.flush();
+      return;
+    }
+
+    this.box(cell.u, cell.v, AIRPORT_DEPTH * APRON, AIRPORT_LENGTH * APRON, APRON_H / 2);
+    this.apron.position.copy(this.dummy.position);
+    this.apron.scale.copy(this.dummy.scale);
+
+    this.box(
+      cell.u,
+      cell.v,
+      AIRPORT_DEPTH * RUNWAY_WIDE,
+      AIRPORT_LENGTH * APRON,
+      APRON_H + RUNWAY_H / 2,
+    );
+    this.runway.position.copy(this.dummy.position);
+    this.runway.scale.copy(this.dummy.scale);
+
+    // Dashes down the middle, evenly spaced and inset from both thresholds, so
+    // the strip reads as a runway rather than as a long dark yard.
+    this.marks.ensure(MARKS);
+    const run = AIRPORT_LENGTH * APRON;
+    for (let i = 0; i < MARKS; i++) {
+      const along = cell.v + (((i + 0.5) / MARKS) * run - run / 2);
+      this.box(
+        cell.u,
+        along,
+        AIRPORT_DEPTH * MARK_WIDE,
+        AIRPORT_LENGTH * MARK_LONG,
+        APRON_H + RUNWAY_H + MARK_H / 2,
+      );
+      this.marks.setMatrixAt(i, this.dummy.matrix);
+    }
+    this.marks.count = MARKS;
+    this.marks.flush();
   }
 
   private parcel(cell: EstateCell, ordinal: number, slot: number): void {

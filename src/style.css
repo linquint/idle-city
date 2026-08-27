@@ -154,6 +154,50 @@ canvas {
 .corner > * { pointer-events: auto; }
 .corner .hud { position: static; }
 
+/* The ticker: a few lines above the dock saying what just happened.
+   No plate behind it, because it is canvas chrome rather than a panel — it
+   appears and goes again, and a box that stayed empty most of the time would
+   read as a broken panel. It keeps the pointer events off so a fire notice
+   cannot swallow a click meant for the city underneath. */
+.ticker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+.ticker:empty { display: none; }
+.tick {
+  margin: 0;
+  padding: 3px 8px;
+  border-radius: 3px;
+  background: rgba(11, 17, 27, 0.72);
+  border-left: 2px solid var(--dim);
+  color: var(--concrete);
+  /* Wide lines wrap rather than widening the column the dock sets. */
+  overflow-wrap: anywhere;
+  animation: tick-in 220ms ease-out;
+}
+/* Three weights, because the three things a ticker says are not equally
+   urgent: something was lost, something is stuck, something happened. */
+.tick.bad { border-left-color: #e0574b; color: #f0b4ae; }
+.tick.warn { border-left-color: var(--sodium); color: #f3cf9d; }
+.tick.good { border-left-color: var(--signal); }
+
+@keyframes tick-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The same rule render/buildings.ts and render/view.ts already follow. A
+   notification that slides is a notification that moves the eye, which is
+   exactly what somebody with this set has asked it not to do. */
+@media (prefers-reduced-motion: reduce) {
+  .tick { animation: none; }
+}
+
 .dock {
   display: flex;
   flex-direction: column;
@@ -242,6 +286,10 @@ button.tab[aria-selected='true'] {
 }
 .v.cash { color: var(--signal); }
 .v.rate { color: var(--sodium); }
+/* The wage bill reads as an outgoing, in the same red the price surcharge uses:
+   the Treasury tab now has three rates in it and two of them point the same way,
+   so colour is what tells the one that does not apart at a glance. */
+.v.upkeep { color: #e0574b; }
 
 /* Plots are counted per zone, so the row carries three of them. The dots are
    the same colours the Z overlay paints the map with. */
@@ -274,7 +322,22 @@ button.tab[aria-selected='true'] {
 .cap + .services,
 .cap + .rci,
 .cap + .steps { margin-bottom: 14px; }
+/* A bare readout row followed by the next caption. `.services` carries the gap
+   for the rows inside it; a `.svc` standing on its own — the Taxes tab has two —
+   has none, so the caption underneath it sat on its baseline. */
+.svc + .cap { margin-top: 12px; }
 .services:last-child { margin-bottom: 0; }
+
+/* The one line on a panel that says why the rest of it is dead. Same idiom as
+   every blocker reason in this HUD, given a place to stand rather than being
+   crammed onto a control that is already showing a price. */
+.note {
+  margin: -4px 0 14px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--dim);
+}
+.note:empty { display: none; }
 
 .rci-row {
   display: flex;
@@ -487,16 +550,32 @@ button.civic {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 8px 9px;
+  /* 7px rather than 9: both civic rows carry four buttons now, and the widest
+     of them says "University" against a 266px panel. Measured, 9px overflows
+     the row by 4px and 7px leaves 12px in hand.
+
+     That settles the row; the budget it leaves each *name* is the thing to
+     remember when adding a button. Four equal quarters of 266 with a 6px gap
+     is a 62px button, and at 11px monospace a name clears its border by
+     62 - 1 - 7 - 6.63n. So seven characters clear by 8px, eight ("Hospital")
+     by one, and nine do not fit at all — which is why the university's button
+     says Campus. Letting the buttons size to their contents instead would fit
+     any name, at the cost of a row that twitches every time a cost crosses a
+     thousands boundary. */
+  padding: 8px 7px;
   font-size: 11px;
   border-color: rgba(127, 168, 255, 0.3);
+  /* Shrink before the row does. A button that has to give up a pixel is a
+     better failure than a row that scrolls sideways under a panel with no
+     scrollbar on it. */
+  min-width: 0;
 }
 button.civic:hover:not(:disabled) { background: rgba(127, 168, 255, 0.1); border-color: var(--civic); }
 button.civic .cost { color: var(--civic); font-size: 10px; }
 /* Parks share the civic row because they buy the same thing — a happiness term
    — but they are not a service, so they get the signal green rather than the
-   civic blue. Four buttons in the row, so the padding comes down a little. */
-button.civic.park { border-color: rgba(99, 198, 168, 0.3); padding-inline: 7px; }
+   civic blue. */
+button.civic.park { border-color: rgba(99, 198, 168, 0.3); }
 button.civic.park:hover:not(:disabled) { background: rgba(99, 198, 168, 0.1); border-color: var(--signal); }
 button.civic.park .cost { color: var(--signal); }
 /* built / allowed, so the population gate is visible before it bites. */
@@ -517,6 +596,20 @@ button.civic.transit { border-color: rgba(95, 191, 164, 0.4); }
 button.civic.transit:hover:not(:disabled) { border-color: #5fbfa4; }
 button.civic.transit .cost { color: #5fbfa4; }
 button.civic.transit:disabled { border-color: #1c2739; }
+
+/* Power is neither a gate nor an earner — it is the one thing the city can run
+   out of — so it wears the sodium the lights and the fire-station doors already
+   use. Nothing else on this row is warm. */
+button.civic.power { border-color: rgba(240, 166, 75, 0.4); }
+button.civic.power:hover:not(:disabled) { border-color: var(--sodium); }
+button.civic.power .cost { color: var(--sodium); }
+button.civic.power:disabled { border-color: #1c2739; }
+
+/* A service row goes green at full coverage; the power row goes *red* when the
+   grid is short, because the two say opposite things. Coverage is something to
+   finish and power is something to not run out of. */
+.svc.short .built,
+.svc.short .covers { color: #e0574b; }
 
 button.civic:disabled { border-color: #1c2739; }
 button.civic:disabled .cost,

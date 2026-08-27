@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ANNEX_MIN_OCCUPANCY,
   FRONTAGE_TARGET,
+  LAND_VALUE_SPREAD,
   HOME_BASE,
   INDUSTRY_BASE,
   LEVEL_CAPACITY,
@@ -12,6 +13,7 @@ import {
 } from '../src/sim/config';
 import {
   annexBlocker,
+  buildingIncome,
   canAnnex,
   canBuildHome,
   canBuildIndustry,
@@ -24,6 +26,8 @@ import {
   income,
   industryCapacity,
   industryCost,
+  landValue,
+  parcelLandValue,
   plotCapacity,
   plotsUsed,
   residents,
@@ -35,6 +39,7 @@ import {
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   CIVIC_SITES_PER_DISTRICT,
+  housingCentrality,
   PLOTS_PER_DISTRICT,
   UNIVERSITY_SITES_PER_DISTRICT,
 } from '../src/sim/layout';
@@ -240,5 +245,102 @@ describe('annexation', () => {
     );
     expect(canAnnex(maxed)).toBe(false);
     expect(annexBlocker(maxed)).toBe('City limits reached');
+  });
+});
+
+describe('land value', () => {
+  /**
+   * The constraint the whole feature is built around, and the reason the
+   * multiplier is centred on the city's own mean rather than on a constant.
+   *
+   * RENT, HOME_BASE and the first tier's capacity together set how long the
+   * first house takes to pay for itself — the number the opening minute lives
+   * or dies on. If centrality changed what a built-out city earns, all three
+   * would be re-opened. It redistributes rent across the build order and adds
+   * none.
+   *
+   * Exact rather than to a tolerance, because the normaliser is the mean over
+   * exactly the plots being averaged: 1e-12 is the double's own precision on a
+   * sum of a thousand terms, not a slack the design needs.
+   */
+  it('leaves a built-out city earning exactly what flat rent earned it', () => {
+    for (const districts of [1, 4, 12, 25, MAX_DISTRICTS]) {
+      const plots = districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT;
+      const s = state({ districts, ...housed(plots) });
+      expect(landValue(s)).toBeCloseTo(1, 12);
+    }
+  });
+
+  it('is one for a city with no housing at all', () => {
+    expect(landValue(state())).toBe(1);
+    expect(landValue(state({ ...housed(0), districts: 4 }))).toBe(1);
+  });
+
+  it('redistributes rather than adding: the plot means average to one', () => {
+    // The per-plot form of the same claim, so a change to `parcelLandValue`
+    // that broke the centring could not hide behind the city-wide mean.
+    const districts = 12;
+    const plots = districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT;
+    const s = state({ districts, ...housed(plots) });
+    let sum = 0;
+    for (let i = 0; i < plots; i++) sum += parcelLandValue(s, i);
+    expect(sum / plots).toBeCloseTo(1, 12);
+  });
+
+  it('makes two identical houses worth different rents', () => {
+    // The point of it, and the thing the inspector now says. Same level, same
+    // city, different plot — the game's first spatially varying input.
+    const districts = 4;
+    const plots = districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT;
+    const s = state({ districts, ...housed(plots) });
+    let best = 0;
+    let worst = 1;
+    let bestPlot = 0;
+    let worstPlot = 0;
+    for (let i = 0; i < plots; i++) {
+      const score = housingCentrality(i, districts);
+      if (score > best) {
+        best = score;
+        bestPlot = i;
+      }
+      if (score < worst) {
+        worst = score;
+        worstPlot = i;
+      }
+    }
+    const dear = buildingIncome(s, 'home', 0, { plot: bestPlot, plots: 1 });
+    const cheap = buildingIncome(s, 'home', 0, { plot: worstPlot, plots: 1 });
+    expect(dear).toBeGreaterThan(cheap);
+    // And by exactly the spread the config says, not by some other amount.
+    expect(dear / cheap).toBeCloseTo(
+      parcelLandValue(s, bestPlot) / parcelLandValue(s, worstPlot),
+      9,
+    );
+    expect(dear / cheap - 1).toBeCloseTo(LAND_VALUE_SPREAD * (best - worst) / parcelLandValue(s, worstPlot), 9);
+  });
+
+  it('quotes a home at the city mean when no parcel is given', () => {
+    // The inspector hands one in; everything else does not, and has to keep
+    // getting the answer it got before this existed.
+    const s = state({ districts: 4, ...housed(30) });
+    const mean = buildingIncome(s, 'home', 0);
+    let sum = 0;
+    for (let i = 0; i < 30; i++) sum += buildingIncome(s, 'home', 0, { plot: i, plots: 1 });
+    expect(sum / 30).toBeCloseTo(mean, 9);
+  });
+
+  it('averages a merged parcel over both its plots', () => {
+    const s = state({ districts: 4, ...housed(40) });
+    const pair = parcelLandValue(s, 6, 2);
+    expect(pair).toBeCloseTo((parcelLandValue(s, 6) + parcelLandValue(s, 7)) / 2, 12);
+  });
+
+  it('leaves commerce and industry alone', () => {
+    // Land value is a rent term. A shop earns through the multiplier and a
+    // works through the goods cycle, and neither of those knows about streets.
+    const s = state({ districts: 4, ...housed(30), shops: 10, occupancyC: 1 });
+    expect(buildingIncome(s, 'shop', 0, { plot: 0, plots: 1 })).toBe(
+      buildingIncome(s, 'shop', 0, { plot: 90, plots: 1 }),
+    );
   });
 });

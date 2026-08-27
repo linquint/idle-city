@@ -1,3 +1,4 @@
+import { EventLog, type GameEvent } from '../core/events';
 import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
   ANNEX_MIN_OCCUPANCY,
@@ -18,7 +19,11 @@ import {
   ZONE_LEVEL_NAMES,
   LEVELS,
   MAX_DISTRICTS,
+  MERGE_LEVEL,
   SERVICES,
+  TAX_NEUTRAL,
+  AIRPORT_EXPORT_LIFT,
+  AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   HIGHWAY_MIN_DISTRICTS,
   TERMINALS,
@@ -38,7 +43,16 @@ import {
   canBuildEstate,
   canBuildHighway,
   canBuildShop,
+  airportAllowed,
+  airportBlocker,
+  airportCost,
+  berthsLanding,
+  canBuildAirport,
+  canBuildCityHall,
+  canBuildPlant,
   canBuildTerminal,
+  cityHallBlocker,
+  cityHallCost,
   cruiseIncome,
   demandTargets,
   educationCoverage,
@@ -64,8 +78,18 @@ import {
   landmarkCoverage,
   landmarkReadings,
   industryCost,
+  netIncome,
+  parcelLandValue,
+  faresWaived,
   parkBlocker,
   parkCapacity,
+  plantBlocker,
+  plantCapacity,
+  plantCost,
+  policyBlocker,
+  powerCap,
+  powerDemand,
+  powerRatio,
   levelAt,
   mergedOf,
   parkCost,
@@ -85,6 +109,7 @@ import {
   shopCost,
   terminalBlocker,
   terminalReadings,
+  upkeep,
   visitors,
   willAutoAnnex,
 } from '../sim/economy';
@@ -96,6 +121,7 @@ import {
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   createPlacement,
+  housingCentrality,
   portDistrict,
   type CityLayout,
 } from '../sim/layout';
@@ -123,7 +149,7 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 };
 
 /** The tabs the docked control is split into, in the order they are shown. */
-const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'port', 'estates'] as const;
+const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'trade', 'estates'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /** Plots one district sells of each zone. Turns a plot index into a district. */
@@ -131,6 +157,34 @@ const ZONE_PLOTS: Record<ZoneKind, number> = {
   home: BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   shop: BUILDABLE_COMMERCIAL_PER_DISTRICT,
   industry: BUILDABLE_INDUSTRIAL_PER_DISTRICT,
+};
+
+/**
+ * Seconds a ticker line stays on screen, in simulated time.
+ *
+ * Longer than EVENT_COALESCE_SECONDS on purpose: a promotion wave keeps merging
+ * into its line for thirty seconds at a time, and a line that expired inside
+ * that window would vanish and reappear with the count reset while the same wave
+ * was still running. Forty-five leaves it standing until the run is genuinely
+ * over.
+ */
+const TICKER_SECONDS = 45;
+
+/**
+ * Lines the ticker shows at once.
+ *
+ * Four, against a buffer of sixteen. The buffer is bounded so nothing can grow
+ * without limit; this is bounded because a stack of notices tall enough to reach
+ * the hint text is a wall rather than a ticker, and the newest four are the ones
+ * worth reading.
+ */
+const TICKER_LINES = 4;
+
+/** What the ticker calls each zone, in the plural a count reads well against. */
+const ZONE_PLURAL: Record<ZoneKind, string> = {
+  home: 'homes',
+  shop: 'shops',
+  industry: 'works',
 };
 
 /** Below this a chip would say "-0%", which is noise rather than information. */
@@ -169,7 +223,10 @@ export class Hud {
   private readonly nodes = {
     cash: el('cash'),
     rate: el('rate'),
+    ticker: el('ticker'),
     ledgerCash: el('ledger-cash'),
+    ledgerGross: el('ledger-gross'),
+    ledgerUpkeep: el('ledger-upkeep'),
     ledgerRate: el('ledger-rate'),
     earned: el('earned'),
     residents: el('residents'),
@@ -236,9 +293,22 @@ export class Hud {
     taxSteps: el('tax-steps'),
     taxIncome: el('tax-income'),
     taxMood: el('tax-mood'),
+    cityHall: el<HTMLButtonElement>('build-cityhall'),
+    cityHallLabel: el('build-cityhall-label'),
+    cityHallCost: el('build-cityhall-cost'),
+    cityHallNote: el('cityhall-note'),
     freeTransport: el<HTMLButtonElement>('free-transport'),
     freeFares: el('free-fares'),
     freeEffect: el('free-effect'),
+    plant: el<HTMLButtonElement>('build-plant'),
+    plantCost: el('build-plant-cost'),
+    plantAllowance: el('build-plant-built'),
+    power: el('power'),
+    powerBuilt: el('power-built'),
+    powerRatio: el('power-ratio'),
+    powerRow: el('power-built').parentElement as HTMLElement,
+    powerDraw: el('power-draw'),
+    powerEffect: el('power-effect'),
     transit: el('transit'),
     transitFares: el('transit-fares'),
     transitLabour: el('transit-labour'),
@@ -250,6 +320,9 @@ export class Hud {
     portSpend: el('port-spend'),
     portExports: el('port-exports'),
     portLift: el('port-lift'),
+    airport: el<HTMLButtonElement>('build-airport'),
+    airportLabel: el('build-airport-label'),
+    airportCost: el('build-airport-cost'),
     highway: el<HTMLButtonElement>('build-highway'),
     highwayLabel: el('build-highway-label'),
     highwayCost: el('build-highway-cost'),
@@ -355,6 +428,19 @@ export class Hud {
 
   private since = 0;
 
+  /**
+   * The ticker's own log, and the reason there are two.
+   *
+   * The simulation's log is drained every paint, so by the time the second
+   * building of a wave climbs the first has already been taken out of it and
+   * there is nothing to merge into. Coalescing therefore has to happen on this
+   * side of the handover as well — same class, same merge rule, and this one is
+   * never drained. See `EventLog`.
+   */
+  private readonly ticker = new EventLog();
+  /** What the ticker last rendered, so an unchanged live region is left alone. */
+  private tickerShown = '';
+
   constructor(
     private readonly game: Game,
     private readonly layout: CityLayout,
@@ -365,6 +451,7 @@ export class Hud {
     n.shop.addEventListener('click', () => this.act(() => this.game.buildShop()));
     n.industry.addEventListener('click', () => this.act(() => this.game.buildIndustry()));
     n.park.addEventListener('click', () => this.act(() => this.game.buildPark()));
+    n.plant.addEventListener('click', () => this.act(() => this.game.buildPlant()));
     for (const row of this.landmarkNodes) {
       row.button.addEventListener('click', () =>
         this.act(() => this.game.buildLandmark(row.landmark)),
@@ -375,6 +462,7 @@ export class Hud {
         this.act(() => this.game.buildTerminal(row.terminal)),
       );
     }
+    n.airport.addEventListener('click', () => this.act(() => this.game.buildAirport()));
     n.highway.addEventListener('click', () => this.act(() => this.game.buildHighway()));
     n.estate.addEventListener('click', () => this.act(() => this.game.buildEstate()));
     n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
@@ -382,6 +470,8 @@ export class Hud {
     for (const { service, button } of this.serviceNodes) {
       button.addEventListener('click', () => this.act(() => this.game.buildService(service)));
     }
+
+    n.cityHall.addEventListener('click', () => this.act(() => this.game.buildCityHall()));
 
     n.freeTransport.addEventListener('click', () => {
       this.game.setFreeTransport(!this.game.state.freeTransport);
@@ -396,6 +486,10 @@ export class Hud {
     n.reset.addEventListener('click', () => {
       if (!confirm('Clear the city and start over? This cannot be undone.')) return;
       this.game.reset();
+      // The ticker is the one part of the HUD that holds anything across a
+      // paint, so it is the one part a reset has to be told about.
+      this.ticker.clear();
+      this.tickerShown = '';
       this.hooks.onReset();
       this.paint();
     });
@@ -538,23 +632,133 @@ export class Hud {
     const n = this.nodes;
 
     n.cash.textContent = fmt(s.cash);
-    n.rate.textContent = `${fmt(income(s))}/s`;
+    // Net, not gross. The dock's one rate is what the treasury is actually
+    // gaining, so a city whose wage bill has passed its rent reads as falling
+    // rather than as earning — see `netIncome`. What the buildings *earn* is a
+    // separate row in the Treasury tab, where the difference is the point.
+    n.rate.textContent = `${fmt(netIncome(s))}/s`;
+
+    this.paintTicker(s);
 
     if (this.open === 'build') this.paintBuild(s);
     else if (this.open === 'treasury') this.paintTreasury(s);
     else if (this.open === 'demand') this.paintDemand(s);
     else if (this.open === 'taxes') this.paintTaxes(s);
     else if (this.open === 'landmarks') this.paintLandmarks(s);
-    else if (this.open === 'port') this.paintPort(s);
+    else if (this.open === 'trade') this.paintTrade(s);
     else this.paintEstates(s);
 
     this.paintCard(s);
   }
 
+  /**
+   * One ticker line, in words.
+   *
+   * The wording lives here rather than in `core/events.ts` for the reason every
+   * label in this file does: an event is data about what the city did, and what
+   * to call it is a decision about the HUD. `core/` imports nothing and would
+   * have to be handed LEVEL names and service names to say any of this.
+   *
+   * The tone is what a `tick` class picks up: `bad` for something lost, `warn`
+   * for something stuck, `good` for something earned, and nothing for the rest.
+   */
+  private tickLine(event: GameEvent): { text: string; tone: string } {
+    const many = (n: number): string => fmtInt(n);
+    switch (event.kind) {
+      case 'fire-started':
+        return {
+          text: event.count > 1
+            ? `${many(event.count)} fires in the ${ZONE_LABEL[event.zone].toLowerCase()} zone`
+            : `Fire in the ${ZONE_LABEL[event.zone].toLowerCase()} zone`,
+          tone: 'warn',
+        };
+      case 'fire-out':
+        return {
+          text: event.count > 1 ? `${many(event.count)} fires put out` : 'Fire put out',
+          tone: 'good',
+        };
+      case 'fire-lost':
+        return {
+          text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} lost to fire`,
+          tone: 'bad',
+        };
+      case 'blocked':
+        // The blocker string itself, because it is already the sentence every
+        // other disabled control in this HUD says. Two wordings for one state
+        // would be two things for a player to reconcile.
+        return { text: `Housing stalled — ${event.reason.toLowerCase()}`, tone: 'warn' };
+      case 'level-up': {
+        const names = ZONE_LEVEL_NAMES[event.zone];
+        const to = names[event.level] ?? `level ${event.level + 1}`;
+        // The merge rung counts what results rather than what was consumed —
+        // two buildings go onto one parcel and one comes back — so it says
+        // "pairs" and every other rung does not. The alternative was a count
+        // that meant a different thing at one rung than at the others.
+        const from =
+          event.level === MERGE_LEVEL
+            ? `pairs of ${ZONE_PLURAL[event.zone]}`
+            : ZONE_PLURAL[event.zone];
+        return { text: `${many(event.count)} ${from} became ${to}`, tone: 'good' };
+      }
+      case 'abandoned':
+        return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} boarded up`, tone: 'bad' };
+      case 'recovered':
+        return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} reopened`, tone: 'good' };
+      case 'annexed':
+        return { text: `District ${many(event.districts)} annexed`, tone: 'good' };
+      case 'brownout':
+        return {
+          text: `Power short — occupancy capped at ${pct(event.cap)}`,
+          tone: 'bad',
+        };
+      case 'coverage': {
+        const service = SERVICES.find((entry) => entry.key === event.service);
+        return {
+          text: `${service?.coverLabel ?? 'Coverage'} fell to ${pct(event.coverage)}`,
+          tone: 'warn',
+        };
+      }
+    }
+  }
+
+  /**
+   * The ticker, drained and rendered.
+   *
+   * Rewritten only when the words change, which matters more here than
+   * elsewhere: this is a live region, so every mutation is something a screen
+   * reader may read out. A `replaceChildren` on every paint would announce the
+   * same four lines ten times a second.
+   */
+  private paintTicker(s: Readonly<GameState>): void {
+    for (const event of this.game.drainEvents()) this.ticker.push(event);
+    this.ticker.expire(s.elapsed - TICKER_SECONDS);
+
+    const shown = this.ticker.entries.slice(-TICKER_LINES).map((event) => this.tickLine(event));
+    const rendered = shown.map((line) => `${line.tone}|${line.text}`).join('\n');
+    if (rendered === this.tickerShown) return;
+    this.tickerShown = rendered;
+
+    this.nodes.ticker.replaceChildren(
+      ...shown.map((line) => {
+        const node = document.createElement('p');
+        node.className = line.tone ? `tick ${line.tone}` : 'tick';
+        node.textContent = line.text;
+        return node;
+      }),
+    );
+  }
+
   private paintTreasury(s: Readonly<GameState>): void {
     const n = this.nodes;
     n.ledgerCash.textContent = fmt(s.cash);
-    n.ledgerRate.textContent = fmt(income(s));
+    // Three rows rather than one, because with upkeep the single "per second"
+    // number could no longer answer either question a player asks of it: what
+    // the city earns and what it keeps are different amounts now, and the
+    // difference is the decision the tab exists for.
+    const due = upkeep(s);
+    n.ledgerGross.textContent = fmt(income(s));
+    n.ledgerUpkeep.textContent = due > 0 ? `−${fmt(due)}` : fmt(0);
+    n.ledgerRate.textContent = fmt(netIncome(s));
     n.earned.textContent = fmt(s.earned);
     n.residents.textContent = fmtInt(residents(s));
     // Plots taken, not buildings owned. A merged building covers two plots, so
@@ -631,6 +835,27 @@ export class Hud {
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
+    // Power gets a block of its own because it is the one thing the city can run
+    // *out* of. Three numbers, and the third is the one that matters: what a
+    // shortfall is currently costing, in the units the player watches — a cap on
+    // how full the city can get. A ratio on its own would be a number with no
+    // consequence attached to it.
+    const ratio = powerRatio(s);
+    const cap = powerCap(s);
+    n.powerBuilt.textContent = `${fmtInt(s.plants)}/${fmtInt(plantCapacity(s))}`;
+    n.powerRatio.textContent =
+      s.plants <= 0 && ratio >= 1 ? 'on the grid alone' : `${pct(Math.min(9.99, ratio))} supplied`;
+    n.powerRow.classList.toggle('short', ratio < 1);
+    n.powerDraw.textContent = fmtInt(powerDemand(s));
+    n.powerEffect.textContent =
+      ratio >= 1 ? 'no effect on occupancy' : `occupancy capped at ${pct(cap)}`;
+    n.power.setAttribute(
+      'aria-label',
+      `Power: ${s.plants} plants supplying ${Math.round(Math.min(9.99, ratio) * 100)} percent of ` +
+        `a load of ${Math.round(powerDemand(s))}` +
+        (ratio < 1 ? `, occupancy capped at ${Math.round(cap * 100)} percent` : ''),
+    );
+
     // Transport gets a block of its own for the same reason education does: it
     // answers a different question from happiness. What it says is what the
     // network earns and what it reaches, which are its two jobs.
@@ -674,13 +899,33 @@ export class Hud {
    */
   private paintTaxes(s: Readonly<GameState>): void {
     const n = this.nodes;
-    const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(s.taxRate)));
+    const why = policyBlocker(s);
+    n.cityHall.disabled = !canBuildCityHall(s);
+    n.cityHall.hidden = s.cityHall;
+    n.cityHallLabel.textContent = cityHallBlocker(s) ?? 'Build the city hall';
+    n.cityHallCost.textContent = fmt(cityHallCost());
+    n.cityHall.title = cityHallBlocker(s) ?? 'Build the city hall';
+    // The blocker-reason idiom, given a line of its own because it answers for
+    // the whole panel rather than for one control. Empty once the hall is up,
+    // and `.note:empty` takes the space back with it.
+    n.cityHallNote.textContent = why === null
+      ? ''
+      : `${why} — until then the city runs at ${
+          (TAX_STEPS[TAX_NEUTRAL] as (typeof TAX_STEPS)[number]).label
+        } with fares on.`;
+
+    // The rate the city is *on*, which is neutral while there is nobody to set
+    // one. `taxStep` says so, and the radio group has to agree with it or the
+    // panel shows a rate the ledger is not using.
+    const on = taxStep(s);
+    const at = TAX_STEPS.indexOf(on);
     for (let i = 0; i < this.taxButtons.length; i++) {
       const button = this.taxButtons[i];
       if (!button) continue;
       const step = TAX_STEPS[i] as (typeof TAX_STEPS)[number];
       button.setAttribute('aria-checked', String(i === at));
-      button.title = `${step.label}: income x${step.income.toFixed(2)}`;
+      button.disabled = why !== null;
+      button.title = why ?? `${step.label}: income x${step.income.toFixed(2)}`;
     }
     const step = taxStep(s);
     n.taxIncome.textContent = `x${step.income.toFixed(2)}`;
@@ -691,9 +936,15 @@ export class Hud {
 
     // A trade rather than an upgrade, so the panel states both sides of it: what
     // the fares are worth is what turning them off costs.
-    n.freeTransport.textContent = `Free transport · ${s.freeTransport ? 'on' : 'off'}`;
-    n.freeTransport.setAttribute('aria-pressed', String(s.freeTransport));
-    n.freeFares.textContent = s.freeTransport
+    // `faresWaived` rather than the stored flag: a save carried over from a
+    // build with no city hall keeps its setting, and the panel has to say
+    // whether the city is acting on it rather than what it once chose.
+    const waived = faresWaived(s);
+    n.freeTransport.textContent = `Free transport · ${waived ? 'on' : 'off'}`;
+    n.freeTransport.setAttribute('aria-pressed', String(waived));
+    n.freeTransport.disabled = why !== null;
+    n.freeTransport.title = why ?? 'Waive the fares';
+    n.freeFares.textContent = waived
       ? 'fares waived'
       : `${fmt(fareIncome(s))}/s in fares`;
     n.freeEffect.textContent = `reach +${Math.round(FREE_TRANSPORT_REACH * 100)}%, mood +${Math.round(
@@ -735,14 +986,19 @@ export class Hud {
   }
 
   /**
-   * The port panel: what a berth costs, and what the two kinds are earning.
+   * The trade panel: what a berth or a runway costs, and what they are earning.
    *
-   * Three readouts rather than two counts, because the two halves pay back in
+   * Called Trade rather than Port because an inland city has no port and does
+   * have an airport, and a player who has just built a runway should not have to
+   * look for it under the waterfront. The element ids are still `port-*`: they
+   * name the readouts the waterfront owns, which is what they are.
+   *
+   * Three readouts rather than two counts, because the halves pay back in
    * currencies a count cannot show. Visitors are people a second and tourism is
    * cash a second, so both are worth saying; exports are the tap industrial
    * demand is drawn against, and the lift is only legible next to it.
    */
-  private paintPort(s: Readonly<GameState>): void {
+  private paintTrade(s: Readonly<GameState>): void {
     const n = this.nodes;
     let berths = 0;
     for (const { terminal, built, allowed, cost } of terminalReadings(s)) {
@@ -755,23 +1011,32 @@ export class Hud {
       row.button.title = terminalBlocker(s, terminal) ?? terminal.buildLabel;
     }
 
+    const why = airportBlocker(s);
+    n.airport.disabled = !canBuildAirport(s);
+    n.airport.hidden = s.airport;
+    n.airportLabel.textContent = why ?? 'Build the airport';
+    n.airportCost.textContent = airportAllowed(s) ? fmt(airportCost()) : '—';
+    n.airport.title = why ?? `Worth ${AIRPORT_VISITORS} berths of arrivals, without a coast`;
+
     const first = portDistrict(s.districts);
-    n.portBerths.textContent = fmtInt(berths);
+    // Berths *landing* rather than berths owned, because the runway lands on the
+    // same path a quay does — see `berthsLanding`. An inland city reads three
+    // and no coast, which is the whole point of the building.
+    n.portBerths.textContent = `${fmtInt(berthsLanding(s))}/${fmtInt(berths + (s.airport ? AIRPORT_VISITORS : 0))}`;
     n.portWhere.textContent =
-      first < 0 ? 'no coast yet' : `first quay on district ${fmtInt(first + 1)}`;
+      first >= 0 ? `first quay on district ${fmtInt(first + 1)}`
+      : s.airport ? 'by air only'
+      : 'no coast yet';
 
     const heads = visitors(s);
     n.portVisitors.textContent = fmt(heads);
     n.portSpend.textContent =
-      s.cruiseTerminals <= 0
-        ? 'no cruise berths'
-        : `${fmt(cruiseIncome(s))}/s in tourism`;
+      berthsLanding(s) <= 0 ? 'nowhere to arrive' : `${fmt(cruiseIncome(s))}/s in tourism`;
 
     n.portExports.textContent = fmt(exportMarket(s));
+    const lift = CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0);
     n.portLift.textContent =
-      s.cargoTerminals <= 0
-        ? 'no cargo berths'
-        : `+${Math.round(CARGO_EXPORT_LIFT * s.cargoTerminals * 100)}% on the tap`;
+      lift <= 0 ? 'no freight yet' : `+${Math.round(lift * 100)}% on the tap`;
   }
 
   /**
@@ -858,6 +1123,10 @@ export class Hud {
     n.parkAllowance.textContent = `${fmtInt(s.parks)}/${fmtInt(parkCapacity(s))}`;
     n.park.disabled = !canBuildPark(s);
     n.park.title = parkBlocker(s) ?? 'Lay out a park';
+    n.plantCost.textContent = fmt(plantCost(s));
+    n.plantAllowance.textContent = `${fmtInt(s.plants)}/${fmtInt(plantCapacity(s))}`;
+    n.plant.disabled = !canBuildPlant(s);
+    n.plant.title = plantBlocker(s) ?? 'Break ground on a power plant';
 
     // The bar shows what the annexation gate actually reads, which is the
     // *working* share: a plot with a ruin on it is developed but not active,
@@ -883,8 +1152,14 @@ export class Hud {
     n.annex.disabled = !canAnnex(s);
     n.annex.title = annexWhy ?? 'Take the next district without waiting for a surplus';
 
-    n.auto.textContent = `Auto-develop · ${s.autoDevelop ? 'on' : 'off'}`;
-    n.auto.setAttribute('aria-pressed', String(s.autoDevelop));
+    // Auto-development is policy too, so it answers to the same gate the Taxes
+    // tab does — and says so on the label rather than only going grey.
+    const govern = policyBlocker(s);
+    const developing = s.autoDevelop && govern === null;
+    n.auto.textContent = govern ?? `Auto-develop · ${developing ? 'on' : 'off'}`;
+    n.auto.setAttribute('aria-pressed', String(developing));
+    n.auto.disabled = govern !== null;
+    n.auto.title = govern ?? 'Spend surplus cash while you are away';
   }
 
   /**
@@ -948,9 +1223,25 @@ export class Hud {
       rows.push(['Employs', level < 0 ? '0' : fmtInt(INDUSTRY_JOBS[level] ?? 0)]);
       rows.push(['Makes', level < 0 ? '0' : fmtInt(INDUSTRY_OUTPUT[level] ?? 0)]);
     }
+    // The first line in this card that is about *where* rather than about what.
+    // Two identical houses are worth different rents now — see `landValue` —
+    // and a card that showed the income without the reason would read as a bug.
+    if (ref.kind === 'home') {
+      const land = parcelLandValue(s, at.plot, at.plots);
+      rows.push([
+        'Land value',
+        `${land >= 1 ? '+' : '−'}${Math.abs(Math.round((land - 1) * 100))}% · ${
+          Math.round(housingCentrality(at.plot, s.districts) * 100)
+        }% central`,
+      ]);
+    }
     // Marginal, and labelled: what the ledger loses if this one goes. Every
-    // other term in it belongs to the whole city.
-    rows.push(['Adds to income', `${fmt(buildingIncome(s, ref.kind, level))}/s`]);
+    // other term in it belongs to the whole city — except the land, which is
+    // this building's alone and is why the parcel is handed in.
+    rows.push([
+      'Adds to income',
+      `${fmt(buildingIncome(s, ref.kind, level, { plot: at.plot, plots: at.plots }))}/s`,
+    ]);
     rows.push(['Expansion', promotionBlocker(s, ref.kind, level, at.parcelPlots) ?? 'Ready to climb']);
     rows.push(['Parcel', `#${at.plot + 1} · slot ${ref.slot + 1}`]);
 
@@ -990,8 +1281,14 @@ export class Hud {
     if (report.merges > 0) rows.push(['Buildings merged', fmtInt(report.merges)]);
     if (report.parks > 0) rows.push(['Parks laid out', fmtInt(report.parks)]);
     if (report.services > 0) rows.push(['Services opened', fmtInt(report.services)]);
+    if (report.plants > 0) rows.push(['Power plants opened', fmtInt(report.plants)]);
     if (report.districts > 0) rows.push(['Districts annexed', fmtInt(report.districts)]);
     if (report.spent > 1) rows.push(['Reinvested', fmt(report.spent)]);
+    // Alongside the reinvestment rather than folded into the collection, because
+    // they are two different stories: one is the city spending what it earned on
+    // itself, the other is what it owed whether or not it earned anything. A
+    // player whose services came back browned out is owed the second one.
+    if (report.wages > 1) rows.push(['Wages paid', fmt(report.wages)]);
     // Fires are reported even when none started, once any did: "0 lost" is the
     // half of the story that tells the player the fire service is working.
     if (report.firesStarted > 0) {

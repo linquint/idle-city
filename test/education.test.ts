@@ -26,7 +26,7 @@ import {
 import { Game } from '../src/sim/game';
 import { CityLayout } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { housed, housedOn } from './levels';
+import { housed, housedOn, powered } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -179,6 +179,11 @@ describe('the education gate on levelling', () => {
       schools,
       schoolStaff: 1,
       cash: 1e12,
+      // Lit, because this is a test about the education gate. A browned-out
+      // city caps its occupancy at POWER_FLOOR, which holds it under
+      // LEVEL_UP_OCCUPANCY — so without the grid this would stop climbing for
+      // a reason that has nothing to do with schools.
+      ...powered(),
     });
     for (let i = 0; i < 200; i++) game.catchUp(60);
 

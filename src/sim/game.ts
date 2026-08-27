@@ -1,3 +1,4 @@
+import { EventLog, EVENT_COVERAGE_LOST, type GameEvent } from '../core/events.ts';
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
   CATCHUP_MAX_ABANDONED,
@@ -12,6 +13,7 @@ import {
   MERGE_LEVEL,
   OFFLINE_CAP_SECONDS,
   SERVICES,
+  UPKEEP_KEEP_SHARE,
   TAX_STEPS,
   TICK_RATE,
   type Landmark,
@@ -20,10 +22,15 @@ import {
 } from './config.ts';
 import {
   annexCost,
+  arrearsStep,
   burnableBuildings,
   burnableOf,
   canAnnex,
+  airportCost,
+  canBuildAirport,
+  canBuildCityHall,
   canBuildHome,
+  canBuildPlant,
   canBuildIndustry,
   canBuildPark,
   canBuildService,
@@ -32,7 +39,9 @@ import {
   canBuildShop,
   canBuildTerminal,
   canMergeParcel,
+  cityHallCost,
   civicBuildings,
+  coverage,
   clampDemand,
   demandStep,
   demandTargets,
@@ -40,7 +49,9 @@ import {
   estateCost,
   happinessStep,
   happinessTarget,
+  hasPolicy,
   highwayCost,
+  homeBlocker,
   homeCost,
   ignitionRate,
   income,
@@ -58,8 +69,12 @@ import {
   occupancyStep,
   occupancyTarget,
   parkCost,
+  plantCost,
   canBuildLandmark,
   landmarkCost,
+  powerCap,
+  powerDemand,
+  powerRatio,
   promoteRate,
   recoverRate,
   abandonRate,
@@ -76,6 +91,9 @@ import {
   staffAfterBuild,
   staffStep,
   terminalCost,
+  netIncome,
+  upkeep,
+  upkeepReserve,
   willAutoAnnex,
   wouldBurnOut,
   ZONE_KINDS,
@@ -183,6 +201,16 @@ export interface AwayReport {
    */
   spent: number;
   /**
+   * Wages the city paid its civic buildings while nobody was watching.
+   *
+   * The third outgoing, and it has to be here for the ledger to close: `earned`
+   * is gross, so `earned - spent - wages` is the change in the treasury and any
+   * two of the three cannot account for the fourth. It is also the one line that
+   * explains a returning player's browned-out services — a city that could not
+   * make its wages comes back with staffing it did not lose to anything visible.
+   */
+  wages: number;
+  /**
    * Net change in each zone's building count.
    *
    * Net, and signed, because a count can now fall without anything being lost:
@@ -195,6 +223,8 @@ export interface AwayReport {
   industry: number;
   parks: number;
   services: number;
+  /** Power plants opened while away. Reported for the reason services are. */
+  plants: number;
   /** Parcels merged while away, across every zone. */
   merges: number;
   /**
@@ -229,6 +259,7 @@ interface AutoBuilt {
   industry: number;
   parks: number;
   services: number;
+  plants: number;
 }
 
 const TICK = 1 / TICK_RATE;
@@ -247,6 +278,11 @@ export class Game {
    * cannot reproduce the demand each purchase was actually priced against.
    */
   private autoSpend = 0;
+  /**
+   * Lifetime wages paid. Differenced by `catchUp` exactly as `autoSpend` is, and
+   * for the same reason: `step` has no notion of who is watching.
+   */
+  private wagesPaid = 0;
   /**
    * Lifetime fire tallies. `catchUp` differences them the same way it does
    * `autoSpend`, which keeps `step` free of any notion of who is watching.
@@ -279,6 +315,41 @@ export class Game {
   private annexesLeft = Number.POSITIVE_INFINITY;
   /** Reused by `promote`, which runs every tick and must not allocate. */
   private readonly scratch: number[] = new Array<number>(LEVELS).fill(0);
+  /**
+   * Things that happened, for the ticker.
+   *
+   * Not state, and the distinction is load-bearing: nothing here reaches
+   * `GameState`, nothing is saved, and no simulation read consults it. Dropping
+   * the whole log on the floor would leave an identical city. See
+   * `core/events.ts`.
+   */
+  private readonly log = new EventLog();
+  /**
+   * Whether events are being recorded at all.
+   *
+   * Off for the length of a `catchUp` call, and that is the one interesting
+   * design question this feature had. A twelve-hour absence emits thousands of
+   * events, and the two honest options were a summary event per category or
+   * nothing at all. Nothing at all wins because the summary already exists: the
+   * "while you were away" sheet is modal, has the player's attention, and lists
+   * every one of these categories with an exact count. A ticker replaying the
+   * same facts underneath it would say them twice and worse — and the second
+   * copy would push the *live* events out of a sixteen-entry buffer before the
+   * player had finished reading the first.
+   */
+  private recording = true;
+  /**
+   * The last housing blocker announced, so the ticker says it once.
+   *
+   * `homeBlocker` returns the same string on every tick it is true, and the
+   * event is about the *transition*. Coalescing would collapse the repeats into
+   * one line with a count of thirty-six thousand, which is a different lie.
+   */
+  private blocked: string | null = null;
+  /** Which services were covering the whole city last tick. Same reasoning. */
+  private readonly covering = new Set<string>();
+  /** Whether the grid was covering the load last tick. Same reasoning again. */
+  private lit = true;
 
   constructor(state: GameState = createState()) {
     this.inner = state;
@@ -294,6 +365,22 @@ export class Game {
 
   get state(): Readonly<GameState> {
     return this.inner;
+  }
+
+  /**
+   * Everything that has happened since the last time anybody asked.
+   *
+   * Draining rather than reading, so two consumers cannot both act on one event
+   * and a consumer that stops asking cannot leave the buffer growing. The HUD is
+   * the only caller.
+   */
+  drainEvents(): GameEvent[] {
+    return this.log.drain();
+  }
+
+  /** The one place an event is recorded, so `catchUp` can silence all of them. */
+  private emit(event: GameEvent): void {
+    if (this.recording) this.log.push(event);
   }
 
   /**
@@ -314,10 +401,14 @@ export class Game {
     s.cash += gain;
     s.earned += gain;
     s.elapsed += dt;
+    // Gross in, wages out, in that order and against the same state. `earned`
+    // is the gross line — it is what the city took, and what it then spent on
+    // wages is spending, exactly as auto-development's purchases are.
+    const arrears = this.payWages(upkeep(s) * dt, gain);
     // Staffing before happiness before demand: happiness reads coverage, and
     // the residential ceiling reads happiness. Integrating them out of order
     // would leave each one a tick behind the thing it is supposed to follow.
-    this.integrateStaffing(dt);
+    this.integrateStaffing(dt, arrears);
     this.integrateHappiness(dt);
     this.integrateDemand(dt);
     // Occupancy after both, because its target reads happiness and demand; the
@@ -334,7 +425,103 @@ export class Game {
     // is land the same tick can start building on rather than land that waits a
     // tenth of a second — the same reasoning fires already follow.
     this.autoAnnex();
-    if (s.autoDevelop) this.autoDevelop(8);
+    // Policy, and policy needs a city hall. Gated on the effect rather than on
+    // the stored flag, so a save that arrives with the switch on keeps it on and
+    // starts developing the moment the hall is built — see `hasPolicy`.
+    if (s.autoDevelop && hasPolicy(s)) this.autoDevelop(8);
+    // Last, and after auto-development, so what the ticker reports is the tick's
+    // settled state rather than a state the same tick went on to change.
+    this.watchTransitions();
+  }
+
+  /**
+   * Re-arms the edge-triggered watchers after a silent catch-up.
+   *
+   * Without this a condition that went true while the player was away is
+   * absorbed and never announced, because the edge it fires on has already been
+   * crossed. Measured on a *one-second* absence, which is what a reload costs: a
+   * city whose grid had gone short came back capped at 37% occupancy with an
+   * empty ticker and nothing on the default tab to say why.
+   *
+   * The rule this leaves is a good one to state plainly: **the ticker reports
+   * the state you came back to, not the history you missed.** Anything that went
+   * wrong and righted itself while you were away says nothing — that is what the
+   * "while you were away" sheet is for — and anything still wrong when you look
+   * says so once. The coverages are re-armed by assuming everything was covered
+   * when you left, which is exactly what makes "still short now" the thing that
+   * fires.
+   */
+  private rearm(): void {
+    this.blocked = null;
+    this.lit = true;
+    this.covering.clear();
+    for (const service of SERVICES) this.covering.add(service.key);
+  }
+
+  /**
+   * The two events that are about a line being crossed rather than a thing
+   * being done.
+   *
+   * Everything else here is emitted where it happens — a fire starts, a parcel
+   * merges — and these two have no such moment: they are conditions that become
+   * true and stay true. So they are edge-triggered against what was last
+   * announced, because the alternative is a line that says "residents are
+   * leaving x 36,000" after an hour of it being the case.
+   */
+  private watchTransitions(): void {
+    const s = this.inner;
+    // Three tests in a deliberate order. The *state* is whether housing is
+    // blocked at all, so it clears the moment it is not; the reason is what has
+    // to change for the line to be worth printing again; and the cash test only
+    // gates the announcement, because "you cannot afford it" is already on the
+    // button next to a price.
+    //
+    // Ordering them the other way round was measured and is wrong: with the cash
+    // test outermost the condition flickers every time auto-development spends
+    // the treasury, and one hour announced "residents are leaving" seven times.
+    const reason = homeBlocker(s);
+    if (reason === null) this.blocked = null;
+    else if (reason !== this.blocked && s.cash >= homeCost(s)) {
+      this.blocked = reason;
+      this.emit({ kind: 'blocked', at: s.elapsed, reason, count: 1 });
+    }
+
+    // The grid, on the same edge-triggered rule the coverages are on: it is a
+    // condition that becomes true and stays true, so the event is the crossing.
+    // Re-armed only by the ratio getting back over 1, so a city sitting short
+    // says so once rather than once a tick.
+    const ratio = powerRatio(s);
+    if (ratio >= 1) this.lit = true;
+    else if (this.lit && powerDemand(s) > 0) {
+      this.lit = false;
+      this.emit({ kind: 'brownout', at: s.elapsed, ratio, cap: powerCap(s), count: 1 });
+    }
+
+    // A city with no housing reads as fully covered — `coverage` is the share a
+    // service *fails* and it fails nothing when nothing is built — so without
+    // this a fresh game would announce all six services falling short the
+    // instant the first house went up. They were never covering anything.
+    if (housingPlots(s) <= 0) {
+      this.covering.clear();
+      return;
+    }
+    for (const service of SERVICES) {
+      const reach = coverage(s, service);
+      // Armed at a full 1 and fired past EVENT_COVERAGE_LOST, so the line is not
+      // printed every time the number wobbles across the top of its range.
+      if (reach >= 1) {
+        this.covering.add(service.key);
+        continue;
+      }
+      if (reach >= EVENT_COVERAGE_LOST || !this.covering.delete(service.key)) continue;
+      this.emit({
+        kind: 'coverage',
+        at: s.elapsed,
+        service: service.key,
+        coverage: reach,
+        count: 1,
+      });
+    }
   }
 
   // ------------------------------------------------------------------ fire
@@ -364,12 +551,14 @@ export class Game {
         this.lossesLeft--;
         this.demolish(fire.kind);
         this.firesLost++;
+        this.emit({ kind: 'fire-lost', at: s.elapsed, zone: fire.kind, count: 1 });
       } else {
         // Past the loss budget the fire still ends, it just ends well. The
         // alternative — leaving it burning — would hand a returning player a
         // city permanently on fire, which is worse than the thing being guarded
         // against.
         this.firesExtinguished++;
+        this.emit({ kind: 'fire-out', at: s.elapsed, zone: fire.kind, count: 1 });
       }
     }
     s.fires.length = write;
@@ -465,6 +654,7 @@ export class Game {
 
     s.fires.push({ kind, index, startedAt: s.elapsed });
     this.firesStarted++;
+    this.emit({ kind: 'fire-started', at: s.elapsed, zone: kind, count: 1 });
   }
 
 
@@ -477,16 +667,54 @@ export class Game {
    * leaves the four that were running exactly as they were and ramps the new
    * one in from empty.
    */
-  private integrateStaffing(dt: number): void {
+  private integrateStaffing(dt: number, arrears = 0): void {
     const s = this.inner;
     const k = staffStep(dt);
-    s.hospitalStaff = s.hospitals > 0 ? s.hospitalStaff + (1 - s.hospitalStaff) * k : 0;
-    s.policeStaff = s.police > 0 ? s.policeStaff + (1 - s.policeStaff) * k : 0;
-    s.fireStaff = s.fire > 0 ? s.fireStaff + (1 - s.fireStaff) * k : 0;
-    s.schoolStaff = s.schools > 0 ? s.schoolStaff + (1 - s.schoolStaff) * k : 0;
-    s.universityStaff =
-      s.universities > 0 ? s.universityStaff + (1 - s.universityStaff) * k : 0;
-    s.depotStaff = s.depots > 0 ? s.depotStaff + (1 - s.depotStaff) * k : 0;
+    // Two forces on one scalar: the ramp pulls it toward fully staffed, and
+    // unpaid wages pull it back toward empty. Applied in that order, so a city
+    // that pays its bill this tick sees no decay at all and a city paying none
+    // of it loses ground however hard the ramp pulls. Both are the exponential
+    // form, so the pair is safe at a 60-second catch-up step.
+    const kept = 1 - arrearsStep(dt, arrears);
+    const fill = (staff: number, built: number): number =>
+      built > 0 ? (staff + (1 - staff) * k) * kept : 0;
+    s.hospitalStaff = fill(s.hospitalStaff, s.hospitals);
+    s.policeStaff = fill(s.policeStaff, s.police);
+    s.fireStaff = fill(s.fireStaff, s.fire);
+    s.schoolStaff = fill(s.schoolStaff, s.schools);
+    s.universityStaff = fill(s.universityStaff, s.universities);
+    s.depotStaff = fill(s.depotStaff, s.depots);
+    // Plants ramp like everything else on the payroll, so a plant opened this
+    // instant is not yet carrying the grid — and an unpaid wage bill takes it
+    // back the same way. See `powerSupply`, which reads this.
+    s.plantStaff = fill(s.plantStaff, s.plants);
+  }
+
+  /**
+   * Pays what the treasury can cover and reports the share left owing.
+   *
+   * Cash is floored rather than allowed to run a deficit, which is the whole of
+   * the bankruptcy rule: the city cannot owe money, so what it fails to pay is
+   * taken out of its staffing instead — see UPKEEP_ARREARS_TAU for why that and
+   * not a demolition. The return is a *share* rather than an amount, because the
+   * decay is a rate and a rate scaled by an absolute shortfall would mean
+   * something different at every city size.
+   *
+   * Charged against this tick's *revenue* rather than against the treasury, and
+   * capped at 1 - UPKEEP_KEEP_SHARE of it. That cap is the difference between a
+   * brownout and a deadlock — see UPKEEP_KEEP_SHARE, which carries the two
+   * weaker rules that were measured first and the fixed points they settle at.
+   * Reserves are never spent on wages, so the treasury grows by at least a tenth
+   * of gross however deep the arrears run.
+   */
+  private payWages(due: number, gross: number): number {
+    const s = this.inner;
+    if (!(due > 0)) return 0;
+    const payable = Math.max(0, gross) * (1 - UPKEEP_KEEP_SHARE);
+    const paid = Math.max(0, Math.min(due, payable, s.cash));
+    s.cash -= paid;
+    this.wagesPaid += paid;
+    return 1 - paid / due;
   }
 
   /**
@@ -676,6 +904,16 @@ export class Game {
       levels[l] = (levels[l] ?? 0) - take;
       levels[l + 1] = (levels[l + 1] ?? 0) + take;
       left -= take;
+      // One event for the whole run, not one per building. A pass already moves
+      // a cohort at a time, and `EventLog` merges consecutive passes on the same
+      // rung — so a wave that takes five minutes is still one line.
+      this.emit({
+        kind: 'level-up',
+        at: this.inner.elapsed,
+        zone: kind,
+        level: l + 1,
+        count: take,
+      });
     }
     return budget - left;
   }
@@ -708,6 +946,10 @@ export class Game {
     // adds the merged parcel back and comes out exactly where it started.
     setCount(s, kind, countOf(s, kind) - 1);
     this.merged++;
+    // A merge is a promotion to MERGE_LEVEL, so it is reported as one rather
+    // than as a category of its own — see `GameEvent`. The count is the building
+    // that results, which is what the ticker's other rungs count too.
+    this.emit({ kind: 'level-up', at: s.elapsed, zone: kind, level: MERGE_LEVEL, count: 1 });
     return true;
   }
 
@@ -721,15 +963,21 @@ export class Game {
   private abandon(kind: ZoneKind, budget: number): number {
     const s = this.inner;
     const levels = levelsOf(s, kind);
+    // Never the last one standing — see `isAbandoning`, which carries the
+    // measurement. Bounded here as well as gated there, because a 60-second
+    // catch-up step arrives with a budget of tens and the gate only says
+    // whether the pass may run at all.
+    const spare = Math.max(0, standingOf(s, kind) - 1);
     let moved = 0;
-    for (let l = 0; l < LEVELS && moved < budget; l++) {
-      const take = Math.min(budget - moved, levels[l] ?? 0, this.abandonsLeft);
+    for (let l = 0; l < LEVELS && moved < spare; l++) {
+      const take = Math.min(budget - moved, spare - moved, levels[l] ?? 0, this.abandonsLeft);
       if (take <= 0) continue;
       levels[l] = (levels[l] ?? 0) - take;
       setAbandoned(s, kind, abandonedOf(s, kind) + take);
       this.abandonsLeft -= take;
       this.abandoned += take;
       moved += take;
+      this.emit({ kind: 'abandoned', at: s.elapsed, zone: kind, count: take });
     }
     return moved;
   }
@@ -755,6 +1003,7 @@ export class Game {
     levels[0] = (levels[0] ?? 0) + (take - onMerged);
     setAbandoned(s, kind, abandonedOf(s, kind) - take);
     this.recovered += take;
+    this.emit({ kind: 'recovered', at: s.elapsed, zone: kind, count: take });
     return take;
   }
 
@@ -841,6 +1090,57 @@ export class Game {
   }
 
   /**
+   * A power plant, on the 2x2 square its district reserves for one.
+   *
+   * Civic-shaped — a count, a staffing ramp, a cost curve and a wage bill — and
+   * not a `Service`: it has no coverage and carries no happiness weight. What it
+   * buys is the one thing a city can otherwise run out of. See `powerCap`.
+   */
+  buildPlant(): boolean {
+    const s = this.inner;
+    if (!canBuildPlant(s)) return false;
+    s.cash -= plantCost(s);
+    // Re-averaged rather than reset, exactly as a civic building's payroll is:
+    // the plants already running do not send their crews home because a new one
+    // opened, so the grid holds and then climbs to take the new one in.
+    s.plantStaff = staffAfterBuild(s.plantStaff, s.plants);
+    s.plants++;
+    return true;
+  }
+
+  /**
+   * The city hall: one 2x2 square in district 0, and the right to have policies.
+   *
+   * It earns nothing, covers nothing and carries no happiness weight — the four
+   * happiness weights sum to exactly 1 and re-opening that calibration to buy a
+   * UI gate would be a bad trade. What it buys is the Taxes tab and the
+   * auto-develop switch. See `hasPolicy`.
+   */
+  buildCityHall(): boolean {
+    const s = this.inner;
+    if (!canBuildCityHall(s)) return false;
+    s.cash -= cityHallCost();
+    s.cityHall = true;
+    return true;
+  }
+
+  /**
+   * The airport, at the end of the same road the estates line.
+   *
+   * The second thing the city builds on land it does not own, and the first that
+   * gives an inland city a reason to care about happiness beyond its own
+   * ledger: what it buys is arrivals on the existing tourism path, scaled by
+   * mood exactly as a cruise berth's are. See AIRPORT_VISITORS.
+   */
+  buildAirport(): boolean {
+    const s = this.inner;
+    if (!canBuildAirport(s)) return false;
+    s.cash -= airportCost();
+    s.airport = true;
+    return true;
+  }
+
+  /**
    * The road out of town. Bought once, and what it buys is the right to build
    * on land the city does not own — see HIGHWAY_MIN_DISTRICTS.
    */
@@ -914,6 +1214,7 @@ export class Game {
     s.cash -= annexCost(s);
     s.districts++;
     this.annexed++;
+    this.emit({ kind: 'annexed', at: s.elapsed, districts: s.districts, count: 1 });
     return true;
   }
 
@@ -947,7 +1248,17 @@ export class Game {
     this.inner.savedAt = at;
   }
 
+  /**
+   * The three policy setters, and all three refuse without a city hall.
+   *
+   * Refusing here as well as gating the effect is the same belt-and-braces
+   * `setTaxRate`'s clamp already is: the HUD disables these controls, and the
+   * simulation is what decides whether it is allowed to. A refusal leaves the
+   * stored value alone rather than resetting it, so nothing a player chose under
+   * an older build is lost by loading a newer one.
+   */
   setAutoDevelop(on: boolean): void {
+    if (!hasPolicy(this.inner)) return;
     this.inner.autoDevelop = on;
   }
 
@@ -956,11 +1267,13 @@ export class Game {
    * bug cannot put the simulation on a rate that does not exist.
    */
   setTaxRate(step: number): void {
+    if (!hasPolicy(this.inner)) return;
     this.inner.taxRate = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(step)));
   }
 
   /** Fares off, reach up, mood up. A trade, not an upgrade — see the constants. */
   setFreeTransport(on: boolean): void {
+    if (!hasPolicy(this.inner)) return;
     this.inner.freeTransport = on;
   }
 
@@ -968,6 +1281,7 @@ export class Game {
     this.inner = createState();
     this.accumulator = 0;
     this.autoSpend = 0;
+    this.wagesPaid = 0;
     this.firesStarted = 0;
     this.firesExtinguished = 0;
     this.firesLost = 0;
@@ -978,6 +1292,11 @@ export class Game {
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
     this.annexesLeft = Number.POSITIVE_INFINITY;
+    this.recording = true;
+    this.log.clear();
+    this.blocked = null;
+    this.covering.clear();
+    this.lit = true;
   }
 
   /**
@@ -999,7 +1318,7 @@ export class Game {
    */
   private autoDevelop(budget: number): AutoBuilt {
     const s = this.inner;
-    const built: AutoBuilt = { homes: 0, shops: 0, industry: 0, parks: 0, services: 0 };
+    const built: AutoBuilt = { homes: 0, shops: 0, industry: 0, parks: 0, services: 0, plants: 0 };
 
     for (let i = 0; i < budget; i++) {
       const options: Array<{ cost: number; buy: () => void }> = [];
@@ -1035,7 +1354,15 @@ export class Game {
           },
         });
       }
+      // Nothing that adds to the payroll while the payroll is already more than
+      // the city earns. The cash reserve below is a buffer and this is the rule
+      // it cannot express: a city sitting on a treasury would clear the reserve
+      // and go on buying coverage it has no income to staff, which is exactly
+      // the brownout an away player comes back to. Housing, commerce and
+      // industry stay on the table — they are how it earns its way out.
+      const solvent = netIncome(s) >= 0;
       for (const service of SERVICES) {
+        if (!solvent) break;
         // Housing land rather than residents, because that is what a service is
         // now short of. The two only differ for a city that has built houses
         // nobody is in, which is exactly the city that should still be allowed
@@ -1047,6 +1374,22 @@ export class Game {
           buy: () => {
             this.openService(service);
             built.services++;
+          },
+        });
+      }
+      // Power is a shortfall like any other and belongs in the same pool, and it
+      // is the one an away city most needs: a brownout caps occupancy, and a
+      // city left developing itself into one would come back emptier than it was
+      // left with nothing on screen to say why. Ahead of the rest by price alone
+      // — the pool is cheapest-first — which is the right order anyway, since a
+      // service covering land nobody is living on buys nothing.
+      if (powerRatio(s) < 1 && canBuildPlant(s)) {
+        shortfalls.push({
+          cost: plantCost(s),
+          buy: () => {
+            s.plantStaff = staffAfterBuild(s.plantStaff, s.plants);
+            s.plants++;
+            built.plants++;
           },
         });
       }
@@ -1071,6 +1414,12 @@ export class Game {
         undefined,
       );
       if (best === undefined) break;
+      // The third floor, and the one upkeep added: spend out of what is left
+      // *after* the wage bill is covered, not out of the treasury. Without it an
+      // away city buys the coverage it cannot staff, and the player comes back
+      // to full services with nobody in them. Zero for a solvent city, so this
+      // is inert until the ledger turns — see `upkeepReserve`.
+      if (best.cost > s.cash - upkeepReserve(s)) break;
       this.spend(best.cost);
       best.buy();
     }
@@ -1099,7 +1448,9 @@ export class Game {
       industry: this.inner.industry,
       parks: this.inner.parks,
       services: civicBuildings(this.inner),
+      plants: this.inner.plants,
       spend: this.autoSpend,
+      wages: this.wagesPaid,
       districts: this.inner.districts,
       started: this.firesStarted,
       extinguished: this.firesExtinguished,
@@ -1112,6 +1463,9 @@ export class Game {
     // The hard guard, for the length of this call and no longer. However many
     // fires resolve badly across a twelve-hour absence, the city comes back at
     // most one building smaller; the rest are put out instead and still counted.
+    // Silent for the length of this call. See `recording` for why the away
+    // sheet is the better place for an absence to be reported.
+    this.recording = false;
     this.lossesLeft = CATCHUP_MAX_LOSSES;
     // The same guard for decay. However long the absence, the city comes back
     // at most CATCHUP_MAX_ABANDONED plots darker than it was left.
@@ -1126,6 +1480,8 @@ export class Game {
     );
     const dt = credited / steps;
     for (let i = 0; i < steps; i++) this.step(dt);
+    this.recording = true;
+    this.rearm();
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
     this.annexesLeft = Number.POSITIVE_INFINITY;
@@ -1137,13 +1493,21 @@ export class Game {
       // What auto-development spent was earned first, so from the player's side
       // it is all collections. This is the actual outgoing, not a replay of the
       // cost curve — cost now depends on the demand at the moment of purchase.
-      earned: s.cash - before.cash + (this.autoSpend - before.spend),
+      // Wages are the other outgoing and are added back for the same reason: the
+      // city took the money in before it paid it out again.
+      earned:
+        s.cash -
+        before.cash +
+        (this.autoSpend - before.spend) +
+        (this.wagesPaid - before.wages),
       spent: this.autoSpend - before.spend,
+      wages: this.wagesPaid - before.wages,
       homes: s.homes - before.homes,
       shops: s.shops - before.shops,
       industry: s.industry - before.industry,
       parks: s.parks - before.parks,
       services: civicBuildings(s) - before.services,
+      plants: s.plants - before.plants,
       firesStarted: this.firesStarted - before.started,
       firesExtinguished: this.firesExtinguished - before.extinguished,
       firesLost: this.firesLost - before.lost,

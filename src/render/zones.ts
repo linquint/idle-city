@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { hash01 } from '../core/rng';
 import { ZONE } from '../sim/citygen';
-import { CELL } from '../sim/config';
+import { CELL, CIVIC_SERVICES } from '../sim/config';
 import { serviceCount } from '../sim/economy';
 import {
   BUILDABLE_PARKS_PER_DISTRICT as PARKS_PER_DISTRICT,
@@ -71,7 +71,8 @@ export class Courtyards {
 
   sync(state: Readonly<GameState>): void {
     const built = SERVICE_KEYS.map((key) => serviceCount(state, key));
-    const stamp = `${state.districts}:${state.parks}:${built.join(',')}`;
+    const stamp =
+      `${state.districts}:${state.parks}:${state.cityHall}:${state.plants}:${built.join(',')}`;
     if (stamp === this.stamp) return;
     this.stamp = stamp;
     this.layout.ensure(state.districts);
@@ -82,7 +83,9 @@ export class Courtyards {
     const laid = Math.min(state.parks, courtyards.length);
     // A site is empty until the building indexed onto it exists. The interleave
     // is fixed, so "site i is taken" is pure arithmetic over three counts.
-    const taken = (site: number): boolean => (built[site % 3] as number) > Math.floor(site / 3);
+    const types = SERVICE_KEYS.length;
+    const taken = (site: number): boolean =>
+      (built[site % types] as number) > Math.floor(site / types);
 
     let n = 0;
     const write = (cell: Coord): void => {
@@ -93,19 +96,36 @@ export class Courtyards {
       n++;
     };
 
+    // The city hall's squares are reserved in every district and built on in
+    // exactly one, so every one past the first is land nothing will ever stand
+    // on. Drawn for the same reason an empty civic site is: a reserved square
+    // left bare reads as a hole in the block rather than as held ground.
+    const halls = Math.max(0, this.layout.cityHallSites - (state.cityHall ? 1 : 0));
+    // Plant squares the city owns and has not built on. Unlike the hall's, these
+    // are all buildable — a district needs about 0.78 of a plant at the top of
+    // the level ladder — so this list empties as the city grows into it.
+    const plants = Math.max(0, this.layout.powerPlantSites - state.plants);
     let empty = 0;
     for (let i = 0; i < this.layout.civicSites; i++) if (!taken(i)) empty++;
-    this.pads.ensure(courtyards.length - laid + empty * 4);
+    this.pads.ensure(courtyards.length - laid + (empty + halls + plants) * 4);
 
-    for (let i = laid; i < courtyards.length; i++) write(courtyards[i] as Coord);
-    for (let i = 0; i < this.layout.civicSites; i++) {
-      if (taken(i)) continue;
-      // The site's four plots, from its lower-left corner.
-      const c = this.layout.civicSiteCell(i);
+    const quad = (c: Coord): void => {
       write(c);
       write({ x: c.x + 1, z: c.z });
       write({ x: c.x, z: c.z + 1 });
       write({ x: c.x + 1, z: c.z + 1 });
+    };
+
+    for (let i = laid; i < courtyards.length; i++) write(courtyards[i] as Coord);
+    for (let i = 0; i < this.layout.civicSites; i++) {
+      // The site's four plots, from its lower-left corner.
+      if (!taken(i)) quad(this.layout.civicSiteCell(i));
+    }
+    for (let i = state.cityHall ? 1 : 0; i < this.layout.cityHallSites; i++) {
+      quad(this.layout.cityHallSiteCell(i));
+    }
+    for (let i = state.plants; i < this.layout.powerPlantSites; i++) {
+      quad(this.layout.powerPlantCell(i));
     }
 
     this.pads.count = n;
@@ -225,8 +245,18 @@ export class Parks {
  */
 export type ZoneMode = 'off' | 'plan' | 'demand';
 
-/** Site index modulo 3, in the interleave's own order. */
-const SERVICE_KEYS = ['hospital', 'police', 'fire'] as const;
+/**
+ * The 2x2 civic types, in the interleave's own order.
+ *
+ * `CityLayout.civicSiteFor` hands type `offset` the sites at `i * n + offset`
+ * where n is the number of 2x2 types, so "is site s taken" is arithmetic over
+ * this list — and it has to be *this* list. It read three types and a modulo 3
+ * for two cycles after schools and depots joined the pool, which drew a pad
+ * under two buildings in every five and left two genuinely empty sites without
+ * one. Derived from CIVIC_SERVICES rather than typed out, so the next type to
+ * join cannot leave it behind again.
+ */
+const SERVICE_KEYS = CIVIC_SERVICES.map((service) => service.key);
 
 const CYCLE: readonly ZoneMode[] = ['off', 'plan', 'demand'];
 

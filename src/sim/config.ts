@@ -81,15 +81,17 @@ export const TARGET_PLOTS = 144;
  * exactly:
  *
  *   24 + 45 + 13 for sale
- *    + 9 x 4  2x2 squares   (6 civic, 1 small landmark, 2 spare)
+ *    + 9 x 4  2x2 squares   (6 civic, 1 small landmark, 1 city hall, 1 power)
  *    + 2 x 9  3x3 squares   (1 university, 1 large landmark)
  *    + 4      courtyard parks
  *    + 4      courtyard spare
  *   = 144
  *
- * so a district carries twelve deliberately empty plots — two 2x2 squares and
- * four courtyard plots — which is the land the next few features get to use
- * without this budget being re-cut under them again.
+ * so a district now carries four deliberately empty plots, all of them courtyard.
+ * It carried twelve when the span widened: the city hall took one of the two
+ * spare 2x2 squares and the power plant took the other, which is exactly what
+ * they were held back for. There is no 2x2 slack left, and the next feature that
+ * wants a square has to say where it is coming from.
  *
  * Measured over 20,000 street plans under exactly this reservation order, and
  * the tuple is the one the numbers picked rather than one they were fitted to:
@@ -129,15 +131,50 @@ export const FRONTAGE_TARGET = {
   industrial: 13,
   /**
    * 2x2 quads a district claims, all of them reserved before the build lists
-   * are drawn. Six go to civic, one to a small landmark, and the rest are spare
-   * — reserving the whole claim rather than only the squares something stands
-   * on is what keeps `homeCapacity` independent of build order.
+   * are drawn. Six go to civic, one to a small landmark, one to the city hall
+   * and one to a power plant — reserving the whole claim rather than only the
+   * squares something stands on is what keeps `homeCapacity` independent of
+   * build order. There is nothing spare in it any more.
    */
   squares: 9,
   /** 2x2 civic sites per district. 6 x 4 = 24 plots, mostly dead interior. */
   civicSites: 6,
   /** 2x2 landmark sites per district, taken from the same claim. */
   landmarkSmallSites: 1,
+  /**
+   * 2x2 city hall sites per district, sliced after the civic six.
+   *
+   * One per *district* for a building there is only ever one of in the whole
+   * city, and that is not waste — it is what keeps the plot budget uniform. The
+   * build lists are what is left after the reservations, `districtPlan` has no
+   * idea which district it is planning, and `onTarget` pins the same tuple for
+   * every one of them. Reserving the square only in district 0 would give that
+   * district one fewer housing plot than the rest and `homeCapacity` would stop
+   * being a multiplication.
+   *
+   * It comes out of the two squares a district already holds empty rather than
+   * out of CIVIC_SERVICES, which is the rule: adding a sixth entry to that table
+   * changes the divisor in `siteCapacity` and moves every hospital, police
+   * station, fire station, school and depot in the city onto a different site.
+   * A returning player would watch their city rearrange itself.
+   */
+  cityHallSites: 1,
+  /**
+   * 2x2 power plant sites per district, sliced after the city hall.
+   *
+   * The last of the nine, and worth stating plainly: this spends the slack.
+   * A district reserved twelve empty plots when the span widened — two 2x2
+   * squares and four courtyard plots — and the note on that said they were the
+   * land the next few features would get to use without the budget being re-cut.
+   * The city hall took one square and this takes the other, so what is left is
+   * four courtyard plots and nothing else. A tenth square would move
+   * FRONTAGE_TARGET.squares, which moves the sampler's acceptance rate, which is
+   * a district-generation change rather than a feature.
+   *
+   * One a district is not a coincidence either — it is the constraint that sets
+   * POWER_EXPONENT. See that constant for the table.
+   */
+  powerSites: 1,
   /** 3x3 university quads per district. Exactly one, reserved before the rest. */
   universitySites: 1,
   /** 3x3 landmark quads per district. Reserved alongside the university. */
@@ -499,6 +536,75 @@ export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85, 1] as const;
 export const RENT = 0.14;
 
 /**
+ * How far a plot's centrality may move its rent, either way.
+ *
+ * `citygen` has always scored every block 1 at its district's middle and 0 at
+ * its furthest corner, and rent has always ignored it. This is the coefficient
+ * that stops it doing so: a housing plot's rent is multiplied by
+ * `1 + LAND_VALUE_SPREAD x (centrality - the city's mean centrality)`, so the
+ * mean multiplier over a fully built city is exactly 1.
+ *
+ * That normalisation is the load-bearing part rather than a tidiness. RENT,
+ * HOME_BASE and the first tier's capacity together set how long the first house
+ * takes to pay for itself, which is the number the opening minute lives or dies
+ * on; if the centrality factor changed what a built-out city earns, all three
+ * would be re-opened. It redistributes rent across the build order and does not
+ * add or remove any.
+ *
+ * Measured over the plot lists themselves (tools/landvalue.calibrate.mjs). A
+ * housing plot's centrality runs 0.14 to 1.00 with a city-wide mean of 0.36 and
+ * a standard deviation of 0.14 to 0.17, so what a spread is worth on a plot is:
+ *
+ *   spread   worst plot   best plot    typical
+ *   0.2           -4.4%      +12.8%     +-2.8%
+ *   0.4           -8.9%      +25.5%     +-5.6%
+ *   0.8          -17.8%      +51.0%    +-11.3%
+ *   1.6          -35.6%     +102.1%    +-22.5%
+ *
+ * The bound on the other side is lumpiness, and it is what keeps this small.
+ * The build order is shuffled inside a district but the plots offered *first*
+ * are systematically off-centre — district 0's opening four sit at 0.178
+ * against its own mean of 0.300 — so the running mean starts below the
+ * normaliser and climbs to it. That is a swing in the *whole city's* income,
+ * arriving against a demand loop calibrated on flat rent and shown on no bar in
+ * the HUD. Past the first half-district, where there is an economy for it to be
+ * a swing in, the worst it ever reads:
+ *
+ *   spread    1 district   12 districts   49 districts
+ *   0.2            +0.4%          -1.5%          -1.4%
+ *   0.4            +0.8%          -2.9%          -2.8%
+ *   0.8            +1.7%          -5.8%          -5.7%
+ *   1.6            +3.4%         -11.7%         -11.3%
+ *
+ * 0.4 is the value that leaves the inspector something to say — a quarter more
+ * rent on the best plot in the city than on an identical house at the rim, and
+ * the difference between two neighbours worth about 6% — while the ledger swing
+ * stays under 3%. At 0.8 the swing is 6%, which is an eighth of
+ * PRICE_DISCOUNT_MAX arriving for reasons the player cannot see; at 0.2 the
+ * inspector's number rounds to nothing on most plots.
+ *
+ * Closed-loop over 24 hours (tools/economy.calibrate.mjs), against the same
+ * build with the spread at zero: auto-develop's first annex moves 1.64h ->
+ * 1.67h and its first service 25.6m -> 27.0m, and the disciplined policy the
+ * same, both inside 2%. The discount-chaser moves 3.87h -> 4.98h, or +29%, and
+ * that number is reported rather than tuned away: it is the policy that buys
+ * six houses at the rim of one district and then nothing but shops, so its whole
+ * ledger rests on exactly the plots this term marks down and it is the most
+ * exposed reading the model can produce. Its 24-hour city is identical at every
+ * spread — 97R / 91C / 65I / 50 civic, 9 districts — so what moved is how long
+ * the discount-chaser spends in the hole it dug, which is the term working.
+ *
+ * One consequence is worth stating because it is visible. The normaliser is the
+ * mean over the land the city *owns*, so annexing moves it: a district built out
+ * on its own reads exactly 1, and once the city is four districts wide the same
+ * housing reads 0.975. The middle of the city moved, and the old middle is no
+ * longer it. Normalising against a constant measured over every seed would avoid
+ * that and would cost the exactness at build-out, which is the more valuable of
+ * the two.
+ */
+export const LAND_VALUE_SPREAD = 0.4;
+
+/**
  * Each shop adds this share of base income.
  *
  * Retuned with the commercial price curve below, not after it — the two are one
@@ -605,19 +711,23 @@ export const ANNEX_GROWTH = 3.4;
  * Left at 0.7 through the change that made annexation automatic, and measured
  * rather than assumed. Demand-neutral build-out, holding every home at one
  * level — a player who never buys into a surcharge. Re-measured through the
- * land-denominated coverage, the fifth level and the wider district:
+ * land-denominated coverage, the fifth level, the wider district and the grid:
  *
- *                    span 13   span 15
- *   detached housing   69.6%     64.2%
- *   apartments         68.6%     67.4%
- *   towers             67.1%     69.3%
- *   arcologies         65.7%     69.7%
- *   megastructures        —      69.1%
+ *                    span 13   span 15   with power
+ *   detached housing   69.6%     64.2%       69.7%
+ *   apartments         68.6%     67.4%       69.7%
+ *   towers             67.1%     69.3%       69.1%
+ *   arcologies         65.7%     69.7%       68.5%
+ *   megastructures        —      69.1%       69.1%
  *
  * Every rung sat under the gate before and every rung still does, so this is the
  * shape rather than a regression: a demand-neutral player does not annex. The
- * top three rungs sit closer to it than they did, which is the wider district's
- * extra commercial land counting on both sides of the ratio.
+ * last column is tighter than the one before it — 68.5% to 69.7% against 64.2%
+ * to 69.7% — and part of that is a correction to the probe rather than to the
+ * game: it now keeps the district lit, and a browned-out one is not
+ * demand-neutral. The power cap drags commercial and industrial occupancy down,
+ * their targets follow, and the old run bought 176 shops for a district of
+ * towers against the 109 it actually wants.
  *
  * Annexation in an actual run got slower, and it is worth stating plainly rather
  * than tuned away: a district is 44% bigger, so filling one to the gate takes
@@ -1083,6 +1193,389 @@ export const HAPPINESS_FLOOR = 0.55;
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
 
+// ------------------------------------------------------------------ upkeep
+
+/**
+ * Cash a civic building costs to run each second, per unit of what it cost to
+ * open and per unit of what a plot of the city is worth.
+ *
+ * Civic buildings used to cost capital once and nothing afterwards, which made
+ * "buy every service the land allows" strictly correct and left the Treasury tab
+ * with nothing to say. This is the running cost that turns coverage into a
+ * budget: `upkeep` is charged against the treasury every tick, `netIncome` is
+ * what the dock reports, and what a city cannot pay comes out of its staffing.
+ *
+ * Priced off `Service.base` rather than as a column of its own, so a university
+ * costs more to run than a police station without a second table to keep in step
+ * with the first — and see `serviceUpkeep` for what that costs, because it is
+ * lopsided. Multiplied by `ledgerScale`, which is the term that keeps the bill
+ * from falling away as the city climbs, and which carries the two weaker scale
+ * terms that were measured and rejected first.
+ *
+ * With `ledgerScale` at 1 for a fresh city, the constant is a payback period:
+ * 1/UPKEEP_RATE seconds, or 111 minutes, for a building to have spent its own
+ * opening price on wages at the opening's premises.
+ *
+ * Measured (tools/upkeep.calibrate.mjs), as a share of gross income on cities
+ * built out to their own frontage with every service the land allows. The rows
+ * are identical to three significant figures at apartments, towers and
+ * megastructures, which is the scale term doing its job, so one table covers the
+ * whole ladder:
+ *
+ *   rate       1 district   12 districts   49 districts
+ *   5.0e-5           3.7%           4.1%           6.1%
+ *   1.5e-4          11.0%          12.3%          18.3%
+ *   5.0e-4          36.5%          40.9%          60.9%
+ *   1.5e-3         109.5%         122.7%         182.8%
+ *
+ * 5.0e-5 is too quiet to be a decision — a fully served city hands back 96% of
+ * its ledger and the tab may as well not exist. 1.5e-3 is the other failure:
+ * more than the city earns, so the correct play is to run with no hospital in it
+ * and the whole coverage model inverts. 5.0e-4 is playable and takes over half
+ * the ledger at scale, which makes coverage the only decision in the game rather
+ * than one of them. 1.5e-4 leaves services worth buying and worth counting.
+ *
+ * Closed-loop over 24 hours, the wage bill ends at 16.6% of gross under
+ * auto-develop, 16.2% under the discount-chaser and 16.8% under the disciplined
+ * policy, and no policy spends a second unable to make its wages. Power plants
+ * joined the payroll after that measurement and take the same run to 20.6%,
+ * which is the number to judge a further addition against. What it costs
+ * the pacing is small and worth stating: auto-develop's first annex moves 1.63h
+ * -> 1.64h and its 24-hour treasury 5.4e10 -> 2.6e10, with the same 28 homes and
+ * one shop fewer. See tools/economy.calibrate.mjs for the rest of that diff.
+ */
+export const UPKEEP_RATE = 1.5e-4;
+
+/**
+ * How a type's upkeep compounds over the buildings it already has.
+ *
+ * Gentler than CIVIC_GROWTH (1.35) and that is a hard constraint rather than a
+ * preference: at 1.35 the n-th hospital's wage bill would climb exactly as fast
+ * as its price, so a city that could afford to open its second could never
+ * afford to run it.
+ *
+ * How much gentler is the thing that was measured, and the answer is: barely.
+ * The city's income grows quadratically in the district count while a compounded
+ * payroll grows exponentially in it, so anything with real curvature in it stops
+ * being a share of the ledger and becomes the whole of it. At the configured
+ * rate, as a share of gross income:
+ *
+ *   growth     1 district   12 districts   49 districts
+ *   1.00            10.9%          11.0%          10.9%
+ *   1.01            10.9%          11.6%          14.0%
+ *   1.02            11.0%          12.3%          18.3%
+ *   1.04            11.0%          13.8%          32.7%
+ *   1.08            11.0%          17.4%         120.6%
+ *
+ * 1.08 was the first guess and is not survivable — a full map pays more in wages
+ * than it earns before it has done anything wrong. 1.00 is flat, and flat is the
+ * safe answer, but it says nothing: the twentieth hospital costs the same to run
+ * as the first, which is the "buy everything" problem again one level down.
+ *
+ * 1.02 is the value that keeps both. A district's six 2x2 sites cost 6.31x one
+ * building's wages against the 14.4x they cost to open, so hoarding is dearer
+ * than it looks and never dear enough to close; and across the whole map the
+ * share drifts 11.0% -> 18.3%, which is a legible brake on sprawl rather than a
+ * wall. It sits beside ANNEX_GROWTH as the second thing expansion costs.
+ */
+export const UPKEEP_GROWTH = 1.02;
+
+/**
+ * Seconds for unpaid wages to empty a civic building's payroll.
+ *
+ * The bankruptcy rule, and it is a decay rather than a demolition on purpose.
+ * Cash cannot go below zero, so something has to give when net income does —
+ * and staffing is the one quantity that can give reversibly: it is already an
+ * integrated scalar with a ramp (CIVIC_RAMP_SECONDS), so the same machinery that
+ * opens a hospital closes it, and the same machinery reopens it. Destroying
+ * buildings instead would be permanent loss, which is the fastest way to make
+ * someone close an idle game.
+ *
+ * It is also what makes the rule self-limiting. Upkeep is charged against
+ * *staffed* buildings, so a city that cannot pay stops paying: staffing falls,
+ * the wage bill falls with it, and the city settles at the coverage it can
+ * afford rather than at zero. Income then recovers, staffing ramps back at
+ * CIVIC_RAMP_SECONDS, and the equilibrium moves up. A city that cannot afford
+ * its only hospital keeps a fraction of a hospital.
+ *
+ * Self-limiting is not the same as escapable, and the difference cost this
+ * feature a constant: the fixed point this settles at still owes more than the
+ * city earns, so the treasury sits at nothing forever unless something else
+ * guarantees a surplus. UPKEEP_KEEP_SHARE is that something, and it carries the
+ * measurement.
+ *
+ * 180 against the 90 of the ramp: twice as slow to lose a payroll as to fill
+ * one, for the same reason RECOVER_SPREAD_SECONDS is four times faster than
+ * ABANDON_SPREAD_SECONDS — coming back has to be quicker than falling over, or
+ * one bad minute costs ten good ones. Scaled by the *share* of the bill that
+ * went unpaid, so a city a penny short loses almost nothing and one paying
+ * nothing at all loses the payroll on this constant.
+ */
+export const UPKEEP_ARREARS_TAU = 180;
+
+/**
+ * Seconds of shortfall the automatic passes hold back before they spend.
+ *
+ * `autoDevelop` and `willAutoAnnex` both reserve against *net* income rather
+ * than gross, or a city left to run itself would spend into a brownout: every
+ * service it opened would raise the wage bill it was already failing to pay,
+ * and the player would come back to a city with full coverage on paper and no
+ * staff in any of it.
+ *
+ * A minute of the shortfall, which is also the hysteresis that keeps the pair
+ * from oscillating. Without it a city sitting at exactly zero net would buy,
+ * fall into arrears, decay staffing until it was solvent again, and buy again —
+ * a limit cycle nobody watching could read. AUTO_ANNEX_RESERVE already does the
+ * same job for the treasury; this is the rate's half of it.
+ */
+export const UPKEEP_RESERVE_SECONDS = 60;
+
+/**
+ * The share of what the city takes in that its wage bill may never touch.
+ *
+ * The floor that stops the bankruptcy rule from being a deadlock, and it is the
+ * same shape as OCCUPANCY_FLOOR and HAPPINESS_FLOOR for the same reason: a
+ * neglected city should feel like one that has stopped growing, not one that has
+ * been switched off.
+ *
+ * What it says is that wages are budgeted out of *revenue*, never out of
+ * reserves. That is a stronger rule than "cash cannot go negative" and both of
+ * the weaker readings were built and measured first:
+ *
+ *   - paying wages out of the treasury and flooring cash at zero settles at a
+ *     fixed point that still owes more than the city earns. Staffing falls until
+ *     the ramp back up balances the arrears decay, and that balance sits at a
+ *     *positive* shortfall — so every penny of income goes on wages forever.
+ *     Measured on a city holding a hospital and a university it could not pay
+ *     for: staffing settled at 84%, net at -0.35/s, and the treasury at 0.00 for
+ *     six simulated hours with no way out of it;
+ *   - keeping a tenth of each *tick's* income is no better, because the next
+ *     tick's bill eats it. The same city holds a flat 0.02 in the bank forever.
+ *
+ * Against revenue it accumulates: the treasury grows at UPKEEP_KEEP_SHARE times
+ * gross income however deep the arrears are, so the way back is slow and visible
+ * rather than closed. The same city banks 92 an hour and can buy its way out.
+ *
+ * The consequence worth stating, because it is a design decision and not a side
+ * effect: a *rich* city that has over-bought coverage browns out too. It cannot
+ * spend its treasury on wages it does not earn, so hoarding cash is no defence
+ * against having bought more services than the city can carry — which is the
+ * whole decision this feature exists to create.
+ *
+ * The two readouts disagree while it bites: the dock shows a negative net and
+ * the treasury creeps up anyway, because part of the bill is going unpaid. What
+ * is being paid instead is staffing, and the services panel is where that shows.
+ */
+export const UPKEEP_KEEP_SHARE = 0.1;
+
+// ------------------------------------------------------------------- power
+
+/**
+ * What one plot draws, per zone, at the bottom of the level ladder.
+ *
+ * The city's second resource, and the first thing in the game that can be
+ * *short*. Power is not a demand signal like R/C/I — it is a ratio of supply to
+ * draw, derived rather than integrated, because occupancy already lags on a
+ * 120-second constant and a second lag stacked on top of it would make the whole
+ * system sluggish and unreadable. See `powerCap`, which is where the ratio lands.
+ *
+ * Industry draws three times what housing does and commerce half again, which is
+ * the one part of this that is a judgement rather than a measurement: a works is
+ * the heaviest thing on the grid, a shop lit and refrigerated all day is next,
+ * and a house is the unit. What the ratios have to be is *different enough to
+ * matter* — a city that zoned nothing but industry should feel the difference —
+ * and small enough that the mix does not swamp the level ladder, which is the
+ * term that actually decides how much power a city needs.
+ *
+ * A district at level 0 therefore draws 24 x 1 + 45 x 1.5 + 13 x 3 = 130.5,
+ * which is the number POWER_BASE and POWER_PER_PLANT are both set against.
+ *
+ * Per *plot*, and per plot of what is standing rather than of what is occupied.
+ * A boarded-up house draws nothing because it holds no level and so is in no
+ * cohort; an empty one draws its full share, because the grid is sized to the
+ * building and not to the tenant. That is what keeps a shortfall a shortfall:
+ * if draw fell with occupancy the brownout would cure itself and there would be
+ * no decision in it.
+ */
+export const POWER_PER_PLOT = {
+  residential: 1,
+  commercial: 1.5,
+  industrial: 3,
+} as const;
+
+/**
+ * How much faster than the level ladder a plot's draw climbs.
+ *
+ * Above 1 by design — "a megastructure is not four arcologies' worth of anything
+ * else" — and the interesting part is that the *land* sets the ceiling. A
+ * district holds exactly one 2x2 square for a power plant (see
+ * FRONTAGE_TARGET.powerSites), so the exponent is only viable if one plant can
+ * still carry a district built out at the top of the ladder.
+ *
+ * Measured, in plants a district needs at POWER_PER_PLANT, against the 1.00 its
+ * square holds:
+ *
+ *   exponent     L0     L1     L2     L3     L4
+ *   1.00       0.19   0.19   0.19   0.19   0.19
+ *   1.10       0.19   0.21   0.25   0.29   0.33
+ *   1.20       0.19   0.25   0.33   0.44   0.58
+ *   1.25       0.19   0.26   0.38   0.55   0.78
+ *   1.30       0.19   0.28   0.44   0.68   1.03   <- does not fit
+ *   1.40       0.19   0.32   0.59   1.05   1.83   <- does not fit
+ *
+ * So 1.25 is not a taste, it is the last rung that fits: at 1.30 a fully built
+ * megastructure district needs more plant than its land can hold and the city
+ * browns out permanently at the top of a ladder it was allowed to climb. At 1.00
+ * the term does nothing at all — a district needs the same fifth of a plant
+ * whatever is standing on it, so the resource would never once be short.
+ *
+ * What 1.25 buys is a four-fold climb in what a district needs across the
+ * ladder, with 22% headroom left at the end of it. The pressure arrives with
+ * every promotion wave rather than with expansion, which is the right way round:
+ * annexing land brings its own square with it.
+ */
+export const POWER_EXPONENT = 1.25;
+
+/**
+ * What one plant makes, per unit of the standard the city is built to.
+ *
+ * Scaled by `cityScale` rather than flat, and it is the same argument
+ * ESTATE_YIELD's `industryScale` makes: a plant has no level of its own to climb
+ * — no education gate, no merge, no cohort in the save — so it is built to
+ * whatever standard the city around it is built to. A flat figure would make one
+ * plant the whole grid at the bottom of the ladder and a rounding error at the
+ * top, which is the shape every constant in this file that ignores the ladder
+ * ends up with.
+ *
+ * 700 is set against the land: a district holds one square, and a district built
+ * out at megastructures has to fit inside it with room to spare. At 700 it needs
+ * 0.78 of a plant, so a fully built city of forty-nine districts runs at a
+ * supply ratio of about 1.29 with every square used. Raising it would leave the
+ * land gate never binding at all; lowering it puts the top of the ladder out of
+ * reach of the ground it stands on.
+ */
+export const POWER_PER_PLANT = 700;
+
+/**
+ * The grid the city is on before it builds one of its own.
+ *
+ * Exactly the job EXPORT_BASE does for industrial demand, and there for the same
+ * reason: without it a fresh save is short of a resource it has no way to make
+ * yet, occupancy is capped at POWER_FLOOR from the first tick, and the opening
+ * is a brownout nobody caused. The city starts connected to somebody else's
+ * grid and grows out of it.
+ *
+ * Flat, and deliberately not per-district. A baseline that grew with the map
+ * would never be outgrown and the resource would never be short. 400 covers a
+ * district at level 0 (130.5) three times over and one at apartments (739) not
+ * at all — so the first plant is what the first promotion wave asks for, which
+ * is about an hour in. That is the same beat the happiness gate teaches at
+ * eleven homes: something the city can suddenly not do, with the reason on
+ * screen and the fix one purchase away.
+ */
+export const POWER_BASE = 400;
+
+/**
+ * What share of its occupancy a city with no power at all keeps.
+ *
+ * The floor under the cap, and the guard on the death spiral the brief names:
+ * less power means less occupancy means fewer residents means less income means
+ * no plant. Without a floor that loop has a fixed point at zero.
+ *
+ * 0.35 rather than something smaller, and the number is derived rather than
+ * chosen. A blacked-out city that is otherwise perfectly happy sits at
+ * OCCUPANCY_FULL x this — 0.92 x 0.35 = 0.322 — and OCCUPANCY_EMPTY is 0.25, so
+ * it stays *above* the line where the vacancy clock starts. A brownout therefore
+ * costs a city its residents and its income and never its buildings. That is the
+ * distinction the whole feature rests on: the resource caps occupancy rather
+ * than zeroing income, and a city that empties can be refilled where one that
+ * rotted has to be rebuilt.
+ *
+ * An unhappy browned-out city does still rot, and that is left as it is: what is
+ * killing it is the unhappiness, and the power term is not there to insure
+ * against every other failure at once.
+ */
+export const POWER_FLOOR = 0.35;
+
+/**
+ * What a plant costs, and how hard it compounds.
+ *
+ * Steeper than the civic curve rather than gentler, which looks wrong for a
+ * building the city *must* have and is not: a plant is bounded by land at one a
+ * district, so the count can never run away, and the city's income grows
+ * quadratically in the district count while this grows exponentially in it. What
+ * a steep curve buys is that the last plants are a real decision at a point in
+ * the game where 130 for a hospital is not.
+ *
+ * Measured (tools/power.calibrate.mjs): a city left to develop itself is first
+ * short of power at 83.3 minutes, buys its first plant in the same tick, and
+ * never drops below a supply ratio of 0.99 for the rest of a 24-hour run. It
+ * ends on four plants of the five squares it owns, with the next one at 3,980
+ * against a ledger of 2.39e7 a second — so the price never once decides whether
+ * the lights stay on, which for mandatory infrastructure is the property that
+ * matters. On the biggest city the map allows the last plant is 5.01e10 against
+ * a ledger of 9.04e9 a second: five seconds of income, and still the dearest
+ * thing on the panel.
+ *
+ * What the plants cost to *run* is the larger number: they take the civic wage
+ * bill from 16.6% of gross income to 20.6% over the same run.
+ */
+export const POWER_PLANT_BASE = 900;
+export const POWER_PLANT_GROWTH = 1.45;
+
+// -------------------------------------------------------------- city hall
+
+/**
+ * What the city hall costs, once, for the only one there will ever be.
+ *
+ * Flat rather than compounding, because there is nothing to compound over: the
+ * save holds a boolean. Every other civic curve in this file exists to price the
+ * *n*-th of something, and this has no n.
+ *
+ * Priced as a milestone rather than against a return. What it buys is the Taxes
+ * tab and the auto-develop switch, and neither has a rate you can divide into a
+ * price — the tax control is worth anywhere from -8% to +60% of the ledger
+ * depending on how well covered the city is, and auto-development is worth
+ * whatever the player would otherwise have clicked. So it is set where it sits
+ * in the order of things a player buys, which is the ordering this file already
+ * states: a home at 8, a shop at 11, a park at 45, a works at 120, a hospital at
+ * 130, a school at 180, a police station at 210, a depot at 260, a fire station
+ * at 320 — and then this, an order of magnitude past the last of the services
+ * and an order short of the first landmark at 4,000.
+ *
+ * Measured (tools/economy.calibrate.mjs), and the measurement says something
+ * the price cannot fix. The hall lands at 1.34 hours under auto-development and
+ * 1.36 under the disciplined policy, against a first service at 10.3 and 27.0
+ * minutes and a first annexation at 1.73 and 1.65 hours — so it sits where it
+ * should, between the tutorial the happiness gate teaches and the first
+ * expansion. But it lands there almost regardless of what it costs:
+ *
+ *   price    hall opens (auto-develop)
+ *     400        1.21h
+ *     800        1.28h
+ *   1,500        1.34h
+ *   3,000        1.42h
+ *
+ * A seven-fold price change moves the unlock by thirteen minutes, because what
+ * gates it is the opening's ramp rather than the number: a city that will annex
+ * at 1.73 hours has a treasury measured in tens of thousands by then, and
+ * anything in this range is a speed bump on the way. So the price is set by
+ * where it belongs in the order rather than by a pacing target it cannot hit,
+ * and it is worth being explicit that pulling this lever to move the unlock
+ * would not work.
+ *
+ * The discount-chasing policy takes 4.79 hours, which is the same policy that
+ * takes 3.72 hours to afford a hospital — the ordering holds for the player who
+ * ignores services too.
+ *
+ * It carries upkeep like every other civic building and no happiness weight at
+ * all: the four happiness weights sum to exactly 1 and re-opening that
+ * calibration to buy a UI gate would be a bad trade. See `civicPayroll` for what
+ * the wage bill costs, which is 2.0% of a one-district city's gross income and
+ * 0.0% of a full map's.
+ */
+export const CITY_HALL_BASE = 1_500;
+
 // -------------------------------------------------------------- landmarks
 
 export interface Landmark {
@@ -1517,6 +2010,104 @@ export const ESTATE_GROWTH = 1.35;
  * at fourteen districts is eleven times the price of the fourteenth.
  */
 export const HIGHWAY_COST = ANNEX_BASE * ANNEX_GROWTH ** (HIGHWAY_MIN_DISTRICTS - 1);
+
+// ------------------------------------------------------------------ airport
+
+/**
+ * What the airport costs to build.
+ *
+ * Derived against the annexation curve rather than against the port, and the
+ * derivation is what makes it a late commitment rather than another button:
+ * it is exactly what the *next* district would cost at the moment the highway
+ * opens. So a player standing at the end of the road is choosing between one
+ * more district of their own land and the thing at the end of it, which is the
+ * same decision HIGHWAY_COST is priced against one step earlier — and the
+ * airport is 3.4x the road, because it is what the road was for.
+ *
+ * Pricing it against TERMINALS instead was the obvious alternative and is
+ * wrong. A cruise berth opens at 20,000 and there are six of them on a full
+ * waterfront; the airport is one building bought once, at a point in the game
+ * where 20,000 is a rounding error. What it has to cost is a decision, and the
+ * only curve that is still steep where the airport unlocks is the land's.
+ */
+export const AIRPORT_BASE = ANNEX_BASE * ANNEX_GROWTH ** HIGHWAY_MIN_DISTRICTS;
+
+/**
+ * What the airport is worth, in cruise berths.
+ *
+ * Stated in the unit that already exists rather than in a new one, because the
+ * thing it does already exists: `visitors` is residents x
+ * VISITORS_PER_RESIDENT x happiness per berth, and the airport is more berths.
+ * That keeps the happiness scaling, which is the interesting part — a miserable
+ * city gets a runway and no tourists, exactly as it gets a quay and no ships.
+ *
+ * Three, against the six a full waterfront holds. So an airport is half a coast:
+ * enough that an inland city has a tourism line at all, and not so much that a
+ * coastal city would rather have had the airport.
+ *
+ * Measured (tools/water.calibrate.mjs) on an inland city with no berths of any
+ * kind, which is the city this exists for: it adds 0.91% of the ledger at the
+ * fourteen districts where it unlocks and 0.27% at forty-nine, identically at
+ * every rung of the level ladder because both sides scale with residents. That
+ * is the same order as the whole fare line and the whole waterfront, which is
+ * the family trade income belongs to — see VISITOR_SPEND, which says so of the
+ * berths and is right about this too.
+ */
+export const AIRPORT_VISITORS = 3;
+
+/**
+ * What the airport adds to the export tap, as a fraction of it.
+ *
+ * Air freight, and it lifts EXPORT_BASE the same way CARGO_EXPORT_LIFT does —
+ * inside the same bracket, so there is still exactly one number the outside
+ * world's appetite is made of and one place to look when industrial demand is
+ * wrong.
+ *
+ * Inside the bracket *additively* is what stops it double-counting against a
+ * cargo terminal. The two lifts add rather than multiply, so a city with both
+ * gets one tap raised twice rather than two taps for the same goods; and a
+ * multiplicative form was the obvious alternative and would have made the
+ * airport worth more to a city that already had a waterfront than to the inland
+ * city it exists for, which is exactly backwards.
+ *
+ * 0.25 against a cargo berth's 0.4: less than a berth, because a berth is what
+ * bulk goes on and a plane is not. Measured, it multiplies the tap by 1.25 for
+ * an inland city at any size — the whole of that city's freight — and by 1.14 at
+ * fourteen districts or 1.07 at forty-nine for a city that already owns every
+ * quay it can. Worth most to the city that has least, which is the shape the
+ * additive form buys and the multiplicative one would have inverted.
+ */
+export const AIRPORT_EXPORT_LIFT = 0.25;
+
+/**
+ * What the airport costs to run, in the units `Service.base` is priced in.
+ *
+ * The one building whose wage bill is *not* its opening price, and it has to be
+ * one or the other. Every civic building is priced off `Service.base` on a
+ * curve that opens at 130, so UPKEEP_RATE reads as a payback period; the
+ * airport's price comes off ANNEX_GROWTH instead and is 1.7e12 by the time it
+ * unlocks, so the same rule would charge more per second than the city earns in
+ * a minute.
+ *
+ * Exactly one university, which is the biggest single entry on the payroll —
+ * so an airport is the dearest single thing a city runs and is not in a
+ * different category from the rest of it.
+ *
+ * The number is set against what it *earns* rather than against what it cost,
+ * and 24,000 was tried first and is wrong: measured, it charges 2.23% of a
+ * fourteen-district city's gross income against the 0.91% the tourism brings in,
+ * so the one building that gives an inland city tourism at all would be a
+ * building that lost money the day it opened. The export lift would still have
+ * justified it, but only through industrial demand, which is not a line the
+ * player can read.
+ *
+ * At 7,200 it is 0.67% of that same ledger against 0.91% of tourism, so it pays
+ * its own wages from the first second and the freight lift is upside rather than
+ * the whole argument. By a full map it is 0.19% against 0.27%, which is the same
+ * arc every trade constant in this file has: a real line when it is new and a
+ * rounding error once the city has grown into it.
+ */
+export const AIRPORT_PAYROLL = 7_200;
 
 // -------------------------------------------------------------------- policy
 

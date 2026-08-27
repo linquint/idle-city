@@ -231,6 +231,29 @@ export interface DistrictPlan {
   readonly landmarksSmall: readonly CivicSite[];
   readonly sites: readonly CivicSite[];
   /**
+   * 2x2 city hall sites, sliced *after* the civic six.
+   *
+   * After, and that is the whole of house rule four made concrete: `siteCapacity`
+   * assigns the 2x2 civic types by a fixed interleave over `CIVIC_SERVICES`, so a
+   * sixth entry in that table would change the divisor and move every hospital,
+   * police station, fire station, school and depot in the city onto a different
+   * site. Slicing a list of its own after them, exactly as `landmarksSmall` is
+   * sliced before them, leaves the interleave untouched.
+   *
+   * One a district for a building the city only ever has one of — see
+   * FRONTAGE_TARGET.cityHallSites for why the reservation has to be uniform.
+   */
+  readonly cityHalls: readonly CivicSite[];
+  /**
+   * 2x2 power plant sites, sliced after the city hall — the last of the nine.
+   *
+   * One a district and every one of them buildable, unlike the hall's: a city
+   * needs about 0.78 plants a district at the top of the level ladder, so this
+   * list is the one reservation the game expects to fill. See POWER_EXPONENT,
+   * which is bounded above by exactly this.
+   */
+  readonly powerPlants: readonly CivicSite[];
+  /**
    * 2x2 squares the district claimed and reserved but nothing stands on.
    *
    * Deliberately empty land, and the reason it is *reserved* rather than left
@@ -287,9 +310,11 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
     FRONTAGE_TARGET.landmarkSmallSites,
     FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites,
   );
-  const spareSquares = squares.slice(
-    FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites,
-  );
+  const afterCivic = FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites;
+  const cityHalls = squares.slice(afterCivic, afterCivic + FRONTAGE_TARGET.cityHallSites);
+  const afterHall = afterCivic + FRONTAGE_TARGET.cityHallSites;
+  const powerPlants = squares.slice(afterHall, afterHall + FRONTAGE_TARGET.powerSites);
+  const spareSquares = squares.slice(afterHall + FRONTAGE_TARGET.powerSites);
 
   const keep = (cells: readonly number[]): number[] => cells.filter((c) => !reserved.has(c));
   // Paired after the sites are reserved, never before: a plot a hospital is
@@ -310,6 +335,8 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
     landmarksLarge,
     landmarksSmall,
     sites,
+    cityHalls,
+    powerPlants,
     spareSquares,
     residential: residential.cells,
     commercial: commercial.cells,
@@ -336,8 +363,14 @@ function onTarget(plan: DistrictPlan): boolean {
     plan.industrial.length === FRONTAGE_TARGET.industrial &&
     plan.sites.length === FRONTAGE_TARGET.civicSites &&
     plan.landmarksSmall.length === FRONTAGE_TARGET.landmarkSmallSites &&
+    plan.cityHalls.length === FRONTAGE_TARGET.cityHallSites &&
+    plan.powerPlants.length === FRONTAGE_TARGET.powerSites &&
     plan.spareSquares.length ===
-      FRONTAGE_TARGET.squares - FRONTAGE_TARGET.civicSites - FRONTAGE_TARGET.landmarkSmallSites &&
+      FRONTAGE_TARGET.squares -
+        FRONTAGE_TARGET.civicSites -
+        FRONTAGE_TARGET.landmarkSmallSites -
+        FRONTAGE_TARGET.cityHallSites -
+        FRONTAGE_TARGET.powerSites &&
     plan.universities.length === FRONTAGE_TARGET.universitySites &&
     plan.landmarksLarge.length === FRONTAGE_TARGET.landmarkLargeSites
   );
@@ -471,7 +504,12 @@ export const SPARE_PLOTS_PER_DISTRICT =
   FRONTAGE_TARGET.squares * 4 -
   (FRONTAGE_TARGET.universitySites + FRONTAGE_TARGET.landmarkLargeSites) * 9 -
   BUILDABLE_PARKS_PER_DISTRICT +
-  (FRONTAGE_TARGET.squares - FRONTAGE_TARGET.civicSites - FRONTAGE_TARGET.landmarkSmallSites) * 4;
+  (FRONTAGE_TARGET.squares -
+    FRONTAGE_TARGET.civicSites -
+    FRONTAGE_TARGET.landmarkSmallSites -
+    FRONTAGE_TARGET.cityHallSites -
+    FRONTAGE_TARGET.powerSites) *
+    4;
 
 export const BUILDABLE_RESIDENTIAL_PER_DISTRICT = FRONTAGE_TARGET.residential;
 export const BUILDABLE_COMMERCIAL_PER_DISTRICT = FRONTAGE_TARGET.commercial;
@@ -480,6 +518,8 @@ export const CIVIC_SITES_PER_DISTRICT = FRONTAGE_TARGET.civicSites;
 export const UNIVERSITY_SITES_PER_DISTRICT = FRONTAGE_TARGET.universitySites;
 export const LANDMARK_LARGE_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkLargeSites;
 export const LANDMARK_SMALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkSmallSites;
+export const CITY_HALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.cityHallSites;
+export const POWER_SITES_PER_DISTRICT = FRONTAGE_TARGET.powerSites;
 
 /**
  * The order in which a ring of districts gets annexed.
@@ -952,6 +992,118 @@ export function landmarkPlotsCovered(
   return cityReach.covered(museums, stadiums, plots, districts);
 }
 
+/**
+ * The centrality of every housing plot the city sells, in build order.
+ *
+ * `citygen` already scores each block 1 at the district's middle and 0 at its
+ * furthest corner, and a plot inherits its block's score. Rent was flat over
+ * that; `landValue` in economy.ts makes it vary. What this class is for is
+ * making the variation cost nothing to read.
+ *
+ * Two reads, and both are O(1) because of the prefix table. `at` is one plot's
+ * score, which is what the inspector needs; `mean` is the average over the
+ * first n plots, which is what `income` needs and which runs ten times a second.
+ * A prefix sum rather than a memo against counts — `landmarkCoverage` memoises
+ * because its query is a walk over a thousand plots and this one is a
+ * subtraction, so there is nothing left to cache.
+ *
+ * Append-only, exactly like the plot lists it indexes. Annexing a district adds
+ * scores to the end and moves nothing already in it, which is what keeps a
+ * building's rent a pure function of its ordinal and the seed.
+ *
+ * The build list is the *plot* list, and that is worth stating because it is an
+ * approximation once a city starts merging. Buildings fill the list from the
+ * front, so the plots a city of `homes + mergedR` occupies are the first
+ * `homes + mergedR` of it — exactly, inside one district, because `parcelOrder`
+ * emits every pair before any single. Across a district boundary a heavily
+ * merged city can hold a plot or two out of order: its unpairable singles sit
+ * unbuilt while merging has moved on to the next district's pairs. That is at
+ * most the two singles a district has (see `parcelOrder`), it washes out of a
+ * mean over hundreds of plots, and it is exactly zero at build-out — which is
+ * the reading the normalisation has to be exact at.
+ */
+class LandValue {
+  private materialised = 0;
+  /** Centrality per housing plot, in the order `CityLayout` hands them out. */
+  private readonly score: number[] = [];
+  /** `sum[i]` is the total score of the first i plots. One longer than `score`. */
+  private readonly sum: number[] = [0];
+
+  private ensure(districts: number): void {
+    for (let i = this.materialised; i < districts; i++) {
+      const c = districtCoord(i);
+      const plan = districtPlanAt(c.x, c.z);
+      const { blocks, block } = plan.layout;
+      for (const cell of plan.residential) {
+        const id = block[cell] as number;
+        // A road cell has no block and cannot be in a build list, but the list
+        // is data and the lookup is cheap: a missing block reads as the
+        // district's edge rather than as a crash.
+        const score = (blocks[id]?.centrality ?? 0);
+        this.score.push(score);
+        this.sum.push((this.sum[this.sum.length - 1] as number) + score);
+      }
+    }
+    this.materialised = Math.max(this.materialised, districts);
+  }
+
+  /** Centrality of one housing plot, clamped to the land the city owns. */
+  at(plot: number, districts: number): number {
+    this.ensure(districts);
+    const i = Math.max(0, Math.min(Math.floor(plot), this.score.length - 1));
+    return this.score[i] ?? 0;
+  }
+
+  /** Mean centrality over the first `plots` housing plots the city sells. */
+  mean(plots: number, districts: number): number {
+    this.ensure(districts);
+    const n = Math.max(0, Math.min(Math.floor(plots), this.score.length));
+    if (n <= 0) return 0;
+    return (this.sum[n] as number) / n;
+  }
+}
+
+const cityLand = new LandValue();
+
+/**
+ * Centrality of the i-th housing plot the city sells, in [0, 1].
+ *
+ * What the inspector reads, and the reason `buildingIncome` can now differ
+ * between two identical houses: it is the first spatially varying input in the
+ * game. See the `LevelCohort` comment in state.ts for what that does and does
+ * not justify.
+ */
+export function housingCentrality(plot: number, districts: number): number {
+  return cityLand.at(plot, districts);
+}
+
+/**
+ * Mean centrality over the first `plots` housing plots. What `income` reads.
+ */
+export function housingCentralityMean(plots: number, districts: number): number {
+  return cityLand.mean(plots, districts);
+}
+
+/**
+ * Mean centrality over every housing plot the city owns.
+ *
+ * The normaliser, and the whole of why land value redistributes rent rather
+ * than adding or removing it: the multiplier is `1 + spread x (c - this)`, so
+ * its mean over a fully built city is exactly 1 and RENT, HOME_BASE and the
+ * first tier's capacity all still mean what they meant.
+ *
+ * Against the land the city *owns* rather than a constant measured over every
+ * seed, because that is the only reading that makes build-out exact rather than
+ * approximate. It moves when a district is annexed, which is a real consequence
+ * worth stating: taking land shifts what the existing housing is worth, because
+ * the middle of the city has moved. Measured, the shift is a fraction of a
+ * percent — districts are generated by one process and their means agree
+ * closely — see tools/landvalue.calibrate.mjs.
+ */
+export function housingCentralityBase(districts: number): number {
+  return cityLand.mean(districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT, districts);
+}
+
 interface DistrictPlots {
   readonly residential: Coord[];
   readonly commercial: Coord[];
@@ -964,6 +1116,10 @@ interface DistrictPlots {
   readonly landmarksLarge: Coord[];
   /** Lower-left plot of each 2x2 landmark site, in site order. */
   readonly landmarksSmall: Coord[];
+  /** Lower-left plot of each 2x2 city hall site, in site order. */
+  readonly cityHalls: Coord[];
+  /** Lower-left plot of each 2x2 power plant site, in site order. */
+  readonly powerPlants: Coord[];
   /** Lower-left plot of each 2x2 square nothing stands on. */
   readonly spareSquares: Coord[];
   readonly courtyards: Coord[];
@@ -1004,6 +1160,8 @@ function placeDistrict(index: number): DistrictPlots {
     universities: plan.universities.map((site) => toGlobal(site.cell)),
     landmarksLarge: plan.landmarksLarge.map((site) => toGlobal(site.cell)),
     landmarksSmall: plan.landmarksSmall.map((site) => toGlobal(site.cell)),
+    cityHalls: plan.cityHalls.map((site) => toGlobal(site.cell)),
+    powerPlants: plan.powerPlants.map((site) => toGlobal(site.cell)),
     spareSquares: plan.spareSquares.map((site) => toGlobal(site.cell)),
     courtyards: plan.courtyards.map(toGlobal),
     roads,
@@ -1067,6 +1225,17 @@ export class CityLayout {
    */
   private readonly _landmarksLarge: Coord[] = [];
   private readonly _landmarksSmall: Coord[] = [];
+  /**
+   * City hall sites, one per district and only ever one of them built on.
+   *
+   * A list rather than a single coordinate for the same reason every other site
+   * list is one: `ensure` appends district by district and nothing already in it
+   * moves. The city's one hall stands on entry 0 — district 0's square — and the
+   * rest are reserved land the renderer draws as empty.
+   */
+  private readonly _cityHalls: Coord[] = [];
+  /** Power plant sites, one per district and the i-th plant on the i-th. */
+  private readonly _powerPlants: Coord[] = [];
   /** Lower-left plot of every 2x2 square held back with nothing on it. */
   private readonly _spareSquares: Coord[] = [];
   /**
@@ -1098,6 +1267,8 @@ export class CityLayout {
         universities,
         landmarksLarge,
         landmarksSmall,
+        cityHalls,
+        powerPlants,
         spareSquares,
         courtyards,
         roads,
@@ -1109,6 +1280,8 @@ export class CityLayout {
       this._universities.push(...universities);
       this._landmarksLarge.push(...landmarksLarge);
       this._landmarksSmall.push(...landmarksSmall);
+      this._cityHalls.push(...cityHalls);
+      this._powerPlants.push(...powerPlants);
       this._spareSquares.push(...spareSquares);
       this._parks.push(...courtyards.slice(0, BUILDABLE_PARKS_PER_DISTRICT));
       this._spare.push(...courtyards.slice(BUILDABLE_PARKS_PER_DISTRICT));
@@ -1296,6 +1469,34 @@ export class CityLayout {
 
   get landmarkSmallSites(): number {
     return this._landmarksSmall.length;
+  }
+
+  /**
+   * Lower-left plot of the i-th city hall site. The building spans this plot and
+   * the three at +x, +z and +x+z.
+   *
+   * Only site 0 is ever built on — there is one city hall — and the rest are
+   * reserved squares the renderer draws as empty ground. See
+   * FRONTAGE_TARGET.cityHallSites for why they are reserved at all.
+   */
+  cityHallSiteCell(i: number): Coord {
+    return this._cityHalls[i] as Coord;
+  }
+
+  get cityHallSites(): number {
+    return this._cityHalls.length;
+  }
+
+  /**
+   * Lower-left plot of the i-th power plant site. One a district, and the i-th
+   * plant stands on the i-th — no interleave, exactly like a landmark.
+   */
+  powerPlantCell(i: number): Coord {
+    return this._powerPlants[i] as Coord;
+  }
+
+  get powerPlantSites(): number {
+    return this._powerPlants.length;
   }
 
   /** Every plot of one zone, in build order. Used by the zone overlay. */

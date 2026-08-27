@@ -194,7 +194,7 @@ describe('offline progress', () => {
   });
 
   it('builds while you are away once auto-development is on', () => {
-    const game = at({ ...built(20, 2), cash: 1e6, autoDevelop: true });
+    const game = at({ ...built(20, 2), cash: 1e6, autoDevelop: true, cityHall: true });
     const report = game.catchUp(3600);
     expect(report.homes + report.shops).toBeGreaterThan(0);
     // Per zone, which is the bound that actually exists. A single city-wide
@@ -205,7 +205,7 @@ describe('offline progress', () => {
   });
 
   it('never spends past the land it owns', () => {
-    const game = at({ cash: 1e12, autoDevelop: true });
+    const game = at({ cash: 1e12, autoDevelop: true, cityHall: true });
     const report = game.catchUp(OFFLINE_CAP_SECONDS);
     expect(game.state.homes).toBeLessThanOrEqual(homeCapacity(game.state));
     expect(game.state.shops).toBeLessThanOrEqual(shopCapacity(game.state));
@@ -234,6 +234,7 @@ describe('offline progress', () => {
       districts: MAX_DISTRICTS,
       cash: 3_000,
       autoDevelop: true,
+      cityHall: true,
     });
     const whole = at(patch());
     whole.catchUp(60 * CATCHUP_STEP_SECONDS);
@@ -249,7 +250,7 @@ describe('offline progress', () => {
   });
 
   it('credits the whole cap without running away with the iteration count', () => {
-    const game = at({ ...housed(30), cash: 1e6, autoDevelop: true });
+    const game = at({ ...housed(30), cash: 1e6, autoDevelop: true, cityHall: true });
     const report = game.catchUp(OFFLINE_CAP_SECONDS);
     expect(report.seconds).toBe(OFFLINE_CAP_SECONDS);
     expect(game.state.elapsed).toBeCloseTo(OFFLINE_CAP_SECONDS, 6);
@@ -264,15 +265,20 @@ describe('offline progress', () => {
    * the spend accounting at all.
    */
   it('reports spend that matches what was actually deducted', () => {
-    const game = at({ ...built(24, 4), cash: 4_000, autoDevelop: true });
+    const game = at({ ...built(24, 4), cash: 4_000, autoDevelop: true, cityHall: true });
     const cashBefore = game.state.cash;
     const earnedBefore = game.state.earned;
 
     const report = game.catchUp(6 * 3600);
     expect(report.spent).toBeGreaterThan(0);
 
+    // Three outgoings now, not two: what auto-development bought, and what the
+    // city paid its civic buildings in wages. `earned` is the gross line, so the
+    // ledger only closes when both come off it — a check with either one missing
+    // would pass on a build that silently double-charged the other.
+    expect(report.wages).toBeGreaterThan(0);
     const trueEarned = game.state.earned - earnedBefore;
-    const trueSpent = trueEarned - (game.state.cash - cashBefore);
+    const trueSpent = trueEarned - (game.state.cash - cashBefore) - report.wages;
     // Relative rather than absolute: six hours of a levelling city runs the
     // ledger into the billions, where a double has about a millionth to give
     // and an absolute tolerance of 5e-7 is asking for more precision than the
@@ -294,7 +300,7 @@ describe('offline progress', () => {
     // judged: auto-development reads demand *after* the integrators have run,
     // so a coarse step can legitimately start oversupplied and buy by the end
     // of it. Only ticks that are surcharged at both ends are held to the rule.
-    const game = at({ ...built(4, 25), cash: 1e9, autoDevelop: true });
+    const game = at({ ...built(4, 25), cash: 1e9, autoDevelop: true, cityHall: true });
     let surcharged = 0;
     for (let i = 0; i < 6_000; i++) {
       const shops = game.state.shops;

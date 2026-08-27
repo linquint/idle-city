@@ -435,7 +435,12 @@ check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TAR
       plan.residential.length +
       plan.commercial.length +
       plan.industrial.length +
-      (plan.sites.length + plan.landmarksSmall.length + plan.spareSquares.length) * 4 +
+      (plan.sites.length +
+        plan.landmarksSmall.length +
+        plan.cityHalls.length +
+        plan.powerPlants.length +
+        plan.spareSquares.length) *
+        4 +
       (plan.universities.length + plan.landmarksLarge.length) * 9 +
       plan.courtyards.length;
     assert(accounted === TARGET_PLOTS, `seed ${i}: ${accounted} plots accounted for, not ${TARGET_PLOTS}`);

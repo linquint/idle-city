@@ -17,7 +17,9 @@ import {
   industryCapacity,
   mergeCapacity,
   mergedCohort,
+  airportAllowed,
   parkCapacity,
+  plantCapacity,
   landmarkSiteCapacity,
   estateCapacity,
   serviceAllowed,
@@ -34,16 +36,17 @@ import {
   type LevelCohort,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v8';
+export const SAVE_KEY = 'idle-city/save/v9';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v8 miss falls back through
+ * new build has not agreed to lose their city — so a v9 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v8',
   'idle-city/save/v7',
   'idle-city/save/v6',
   'idle-city/save/v5',
@@ -196,7 +199,12 @@ function fitZone(
   // cohort is built, since the cohort is reconciled to the standing stock and a
   // stock of a billion would build one that agreed with nothing afterwards.
   const held = Math.min(count, capacity);
-  const lost = Math.min(abandoned, held);
+  // Never every building of a zone, for the reason `isAbandoning` carries: a
+  // zone written off to the last plot houses nobody, earns exactly zero and can
+  // never recover, and a save carrying that state is a save with nothing left to
+  // press. The current build cannot produce one; a v8 or older save can, and
+  // this is the repair — the last ruin comes back standing.
+  const lost = Math.min(abandoned, Math.max(0, held - 1));
   const levels = migrateCohort(raw, held - lost, tier);
   const zone: ZoneFit = { count: held, abandoned: lost, levels, merged: 0 };
 
@@ -322,7 +330,34 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     stadiums: count(r['stadiums']),
     cruiseTerminals: count(r['cruiseTerminals']),
     cargoTerminals: count(r['cargoTerminals']),
+    /**
+     * Granted to every save written before there was one to build.
+     *
+     * The opposite default from every other new field in this file, and it is a
+     * deliberate exception rather than an oversight. A city hall *gates* the tax
+     * rate, free transport and auto-development, and a v8 city may well have a
+     * punitive rate set, fares waived and the away switch on. Defaulting the
+     * hall to false would silently revert all three — the player would come back
+     * to a city earning a different amount, with settings they chose still shown
+     * as chosen and no longer doing anything.
+     *
+     * They earned those settings under the old rules. So a returning city is
+     * handed the building its policies imply, and only a save written by this
+     * version or later has to have bought one.
+     */
+    cityHall: version >= 9 ? r['cityHall'] === true : true,
+    // Power arrived with v9, so an older save has none — which is the state a
+    // city that has never built one is in, and the grid connection POWER_BASE
+    // gives every city is what keeps that from reading as a blackout on load.
+    // Clamped to the land below, like every other count.
+    plants: count(r['plants']),
+    plantStaff: share(r['plantStaff'], 0),
     highway: r['highway'] === true,
+    // Off for every older save, which is the state a city that never built one
+    // is in — and unlike the city hall it gates nothing an older save was
+    // already using, so there is nothing to grant. Clamped below against the
+    // road and the ground, exactly as the estates are.
+    airport: r['airport'] === true,
     estates: count(r['estates']),
     // v2 called them clinics, schools and stations and stood them on single
     // residential plots. They are the same slot — the building the city buys to
@@ -403,6 +438,13 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // is a fixed strip with the water already taken out of it, so this clamp can
   // bite on a save the current build's seed left less room for.
   state.estates = Math.min(state.estates, estateCapacity(state));
+  // One square a district, so a save carried over from a larger city sheds the
+  // plants whose ground it no longer owns.
+  state.plants = Math.min(state.plants, plantCapacity(state));
+  // A runway with no road to it is not an airport, and a seed whose water took
+  // every candidate site has nowhere to put one. Same shape as the estates'
+  // clamp and for the same two reasons.
+  if (!airportAllowed(state)) state.airport = false;
 
   const fitted = [
     fitZone(state.homes, state.abandonedR, r['homeLevels'], tier, state.mergedR, homeCapacity(state), mergeCapacity(state, 'home')),

@@ -24,6 +24,9 @@ compiles to about 10 kB gzipped on top of three.
 | `npm run test:citygen` | District generation acceptance tests (plain Node) |
 | `npm run citygen:calibrate` | Plot-count distribution over 1000 seeds |
 | `npm run economy:calibrate` | 24h demand/pricing sweep under four policies |
+| `npm run upkeep:calibrate` | What the civic wage bill is worth, swept over rate and growth |
+| `npm run landvalue:calibrate` | What centrality does to rent, swept over spread |
+| `npm run power:calibrate` | What the grid can carry, swept over the demand exponent |
 
 ## How it is put together
 
@@ -36,6 +39,11 @@ src/
   ui/      read-only subscriber. Owns zero game state.
   core/    rng, formatting, events. Imports nothing.
 ```
+
+Nothing in `sim/` or `core/` may use a TypeScript feature that *emits* rather
+than annotates — a constructor parameter property is the one that catches people
+out. The calibrators run these modules straight through Node's type-stripping
+loader, so anything it refuses stops `npm run economy:calibrate` at the import.
 
 `src/sim` is a plain object and some functions over it. It has no DOM, no
 timers, no renderer — which is why the whole simulation is unit-testable in
@@ -60,9 +68,12 @@ prints the distribution the target came from.
 Only the 108 of those 144 plots that front a street could ever be for sale, and
 not all of them are: two 3x3 squares go to the university and a landmark, and
 `civicSites` then claims every 2x2 it can find — six for civic buildings, one
-for a smaller landmark, and two left deliberately empty. That leaves 24 housing,
-45 commercial and 13 industrial plots a district, plus eight interior courtyard
-plots of which four carry parks. Because the road-adjacent R/I split is *not*
+for a smaller landmark, one for the city hall and one for a power plant. That
+leaves 24 housing, 45 commercial and 13 industrial plots a district, plus eight
+interior courtyard plots of which four carry parks. There is no 2x2 slack left:
+the district reserved two spare squares when the span widened and this cycle
+spent both, so the next feature that wants one has to say where it is coming
+from. Because the road-adjacent R/I split is *not*
 seed-invariant, `districtPlanAt` rejection-samples the district seed a second
 time until it is. Same trick, one level up.
 
@@ -93,6 +104,72 @@ implementation, a modifier per building, would mean per-instance state and a
 save that grows with the city; the covered share is a pure function of four
 counts and the seed. It is memoised against those counts, because
 `happinessTarget` runs ten times a second.
+
+**Tourism does not need a coast.** A cruise terminal needs a coastal district
+and a seed can leave a city inland for its whole life, so the **airport** is the
+other way in. It stands on open ground past the far side of the industrial band,
+at the end of the same highway spur the estates line, and it is gated on that
+road rather than on a district count of its own — it is the same road, and two
+numbers for one gate would be one too many. Where it stands is a pure function
+of the seed: on the spur's axis if the ground allows, shifted a runway at a time
+along the shore if the water took that site.
+
+What it buys is arrivals on the path that already exists — it is worth
+`AIRPORT_VISITORS` cruise berths, happiness scaling and all, so a miserable city
+gets a runway and no tourists — plus a lift on the export tap that *adds* inside
+the same bracket a cargo terminal's does. Additive is what stops it
+double-counting: a city with both has one tap raised twice rather than two taps
+for the same goods, and a multiplicative form would have made the airport worth
+most to the city that least needs it. Measured, it multiplies an inland city's
+tap by 1.25 and a fully-quayed one's by 1.07.
+
+**Land value is a prefix mean, not a per-building field.** `citygen` has always
+scored every block 1 at its district's middle and 0 at its furthest corner, and
+rent has always ignored it. It does not now: a plot's rent is multiplied by
+`1 + LAND_VALUE_SPREAD × (its centrality − the city's mean centrality)`, so a
+house on the best plot in the city earns a quarter more than an identical one at
+the rim. Centring it on the city's own mean is the load-bearing part — the mean
+multiplier over a fully built city is exactly 1, so `RENT`, `HOME_BASE` and the
+first tier's capacity all still mean what they meant, and the factor
+redistributes rent across the build order rather than adding any.
+
+This is the game's first spatially varying input, and it deliberately stops
+short of per-building state. The k-th home's plot is a pure function of its
+ordinal and the seed, so the mean over the first n of them is still a pure
+function of counts — a prefix sum, read in O(1) because `income` runs ten times
+a second. The `LevelCohort` comment in `state.ts` named exactly this as the
+condition under which per-instance state would earn its cost; it does not, yet,
+and the comment now says why the door is ajar rather than open.
+
+**The ticker is a byproduct, not a record.** Fires, stalled housing, level-up
+waves and services slipping below full coverage all used to happen silently
+unless you were looking at the right part of the screen. `core/events.ts` is a
+typed union and a bounded ring; `Game` pushes into it at the same places the
+away-report counters are already bumped; the HUD drains it each paint into a
+polite live region. None of it reaches `GameState`, nothing is saved, and no
+simulation read consults it — a city with the log thrown away is the same city,
+and `test/events.test.ts` asserts exactly that by stepping two games identically
+and comparing their states.
+
+Two things make it readable rather than a firehose. Runs **coalesce** — one line
+saying "12 homes became apartments" rather than twelve saying one did — and the
+merge happens on *both* sides of the handover, because the HUD drains every
+frame and by the second building of a wave the first has already been taken.
+And **catch-up is silent**: a twelve-hour absence emits thousands of events, and
+the "while you were away" sheet is modal, has the player's attention, and
+already lists every one of these categories with an exact count. A ticker
+replaying it underneath would say the same facts twice and push the live ones
+out of a sixteen-entry buffer first.
+
+Silence alone is not enough, though, and the case that proves it is a *reload*.
+The edge-triggered lines — housing stalled, the grid gone short, a coverage
+slipping — fire on a transition, so a catch-up that crosses one absorbs it
+permanently: a one-second absence was enough to leave a city capped at 37%
+occupancy with an empty ticker and nothing on the default tab to say why. So
+`Game.rearm` re-arms those watchers when the catch-up ends, and the rule the
+ticker follows across an absence is **it reports the state you came back to, not
+the history you missed**. Anything that went wrong and righted itself while you
+were away says nothing; anything still wrong when you look says so once.
 
 **Style is a hash, not a field.** Each zone has three styles at every level — 45
 looks in all — and a style is a parameter set rather than a mesh: proportions, a
@@ -172,6 +249,46 @@ so the order you build in decides which button is cheap next. A positive signal
 discounts that type's price and a negative one surcharges it, which is what
 stops "press whichever button is cheapest" from being the dominant strategy.
 
+### Power is a ratio, not a fourth signal
+
+The city's second resource, and the first thing in it that can be *short*.
+Every standing plot draws — 1 for housing, 1.5 for commerce, 3 for industry —
+and the draw climbs the level ladder **faster than the ladder does**, at
+`capacity ** POWER_EXPONENT`. Supply is `POWER_BASE`, the grid the city starts
+connected to and grows out of, plus one plant per district's reserved 2x2
+square, each built to the standard of the city around it the way an estate is
+built to the standard of its works.
+
+The exponent is not a taste — it is the last one the land can hold. A district
+reserves exactly one plant square, so the question is whether one plant still
+carries a district built out at the top of the ladder:
+
+| exponent | detached | apartments | towers | arcologies | megastructures |
+| --- | --- | --- | --- | --- | --- |
+| 1.00 | 0.19 | 0.19 | 0.19 | 0.19 | 0.19 |
+| 1.25 | 0.19 | 0.26 | 0.38 | 0.55 | **0.78** |
+| 1.30 | 0.19 | 0.28 | 0.44 | 0.68 | **1.03** — does not fit |
+
+At 1.00 the term does nothing; at 1.30 a fully built megastructure district
+needs more plant than its ground can hold and browns out permanently at the top
+of a ladder it was allowed to climb. 1.25 leaves 22% of headroom.
+
+Supply over draw is **derived, never integrated** — occupancy already lags on a
+120-second constant and demand on 25, and a third lagged signal feeding the
+first would make the whole loop unreadable. What the ratio does is *cap
+occupancy*, proportionally, with a floor: a browned-out city empties gradually
+and visibly rather than flipping to zero income. `POWER_FLOOR` is 0.35 and the
+number is derived rather than chosen — a blacked-out but otherwise happy city
+settles at `OCCUPANCY_FULL × 0.35 = 0.322` against an `OCCUPANCY_EMPTY` of 0.25,
+so a brownout costs a city its residents and never its buildings.
+
+Draw is charged on what is *standing*, not on who is in: if it fell with
+occupancy the brownout would cure itself and there would be no decision in it.
+A ruin draws nothing, because it holds no level. Auto-development buys a plant
+whenever the grid is short, for the reason everything else that compounds while
+away is guarded. Measured, a city left to run itself is first short at 83
+minutes and never drops below a supply ratio of 0.99.
+
 The guardrail is that the modifier is bounded by a *constant*. The discounted
 price floor is still `base × growth ** n × (1 - PRICE_DISCOUNT_MAX)` —
 exponential in n — so no amount of demand can make the next building cheaper
@@ -203,6 +320,16 @@ Plots are also merge-invariant (a pair of houses that becomes one tower still
 holds two plots) and occupancy-invariant (a boarded-up house still holds its
 land), so coverage answers "how much of the city is served" and nothing else.
 
+A zone also never writes off its *last* standing building. That is the same rule
+`OCCUPANCY_FLOOR` is — a neglected city should read as one that has stopped
+growing, not one that has been switched off — and the floor stopped short of it,
+because occupancy is a share of a stock and a stock of nothing has no share. A
+zone written off to the last plot houses nobody and earns exactly zero, and with
+residents at zero the occupancy target sits under `OCCUPANCY_EMPTY` forever and
+nothing ever recovers. One home standing is a third of a resident and a hospital
+in about ninety minutes: slow enough to read as the consequence it is, and not a
+save you have to throw away.
+
 Three rules keep it from being either free or punishing. A new building ramps
 its staffing in over ninety seconds rather than covering anything the moment its
 roof goes on. A build gate of `floor(housingPlots / plots) + 1` means you may
@@ -213,11 +340,70 @@ nothing when nothing is built, which is what stops the housing gate deadlocking
 the opening.
 
 Each stands on a 2x2 site reserved before the housing list is drawn, and the
-three types draw from one city-wide list by a fixed interleave — hospitals take
-site 3k, police 3k+1, fire 3k+2. Assigning them to whichever district was worst
+five 2x2 types draw from one city-wide list by a fixed interleave — hospitals
+take site 5k, police 5k+1, fire 5k+2, schools 5k+3, depots 5k+4. Assigning them to whichever district was worst
 covered would make a building's position depend on the state when it was built,
 which a save of counts cannot reproduce; the city would rearrange itself on the
 next refresh.
+
+That divisor is `CIVIC_SERVICES.length`, and it is the number that must never
+move for convenience: a sixth entry in that table would put every hospital,
+police station, fire station, school and depot in the city on a different square,
+and a returning player would watch their city rearrange itself around a save that
+had not changed. Anything new that wants a 2x2 gets a list of its own, sliced
+after these — which is what the **city hall** does.
+
+There is one city hall in a city, on district 0's reserved square, and what it
+buys is the right to have policies: the tax rate, free transport and
+auto-develop are all gated on it, and until it is built the city runs at
+`TAX_NEUTRAL` with fares on. That is exactly what a fresh city already got, so
+nothing about the opening minutes changes. A returning save from before it
+existed is *granted* one, because those cities set their rates under the old
+rules and reverting them silently would change what they earn for reasons the
+player never chose. Its square is reserved in every district and built on in
+one — the reservation has to be uniform or `homeCapacity` stops being a
+multiplication.
+
+Worth stating because it is a lever that does not work: the hall lands at about
+1.3 hours whatever it costs. A seven-fold price change moves the unlock by
+thirteen minutes, because what gates it is the opening's ramp and not the number.
+
+### Coverage costs something to keep
+
+Civic buildings also carry an **operating upkeep**, which is what stops "buy
+every service the land allows" from being strictly correct. The bill is priced
+off what each type cost to open, compounded gently over how many of them there
+are, and scaled by `ledgerScale` — what a plot of the city is worth against a
+plot of a fresh one. That last term is the one that took measuring. Income
+climbs the level ladder *twice*, once through the people paying rent and once
+through the shop multiplier that rent is multiplied by, so a bill scaled by
+anything linear in the ladder falls away to nothing: a flat rate times
+`cityScale` reads 4.6% of the ledger at one district of apartments and 0.0% at
+forty-nine of megastructures. Against `ledgerScale` the share is flat to three
+significant figures at every rung, and runs 11% to 18% from one district to
+forty-nine. `npm run upkeep:calibrate` prints the sweep the constants came from.
+
+`income` stays gross — it is what the buildings *earn*, which is what the
+inspector and the estates panel mean when they read it — and `netIncome` is what
+the treasury actually gains. The dock shows net; the Treasury tab shows all
+three.
+
+The bankruptcy rule is that **unpaid wages decay staffing, not buildings.**
+Permanent loss is the fastest way to make someone close an idle game, and
+staffing is already an integrated scalar with a ramp, so the same machinery that
+opens a hospital closes it and reopens it. Because upkeep is charged against
+*staffed* buildings, a city that cannot pay stops paying: coverage falls to what
+it can afford, income recovers against a smaller bill, and the payroll ramps back.
+
+Two rules keep that from being a deadlock rather than a brownout. Wages are
+budgeted out of revenue and never out of reserves, so the treasury grows by at
+least a tenth of gross income however deep the arrears run — without it the
+decay settles at a fixed point that still owes more than the city earns, and a
+city that cannot afford its only hospital sits at 0.00 forever. And a rich city
+that has over-bought coverage browns out too, because it cannot spend savings on
+wages it does not earn. Auto-development answers to the same arithmetic: while
+the ledger is negative it will not buy anything that adds to the payroll, and it
+holds a minute of the shortfall back from everything else.
 
 ## Balance
 
@@ -234,6 +420,33 @@ simulates 24 hours under four policies and reports demand pinning, cost-curve
 monotonicity, time to first rezone/annex/service, and happiness at 1h/6h/24h.
 The numbers in the config comments came from it.
 
+`UPKEEP_RATE` (1.5e-4) and `UPKEEP_GROWTH` (1.02) came from
+`npm run upkeep:calibrate` the same way. The rate is a payback period —
+1/`UPKEEP_RATE` seconds for a building to spend its own opening price on wages
+at a fresh city's premises — and the growth is deliberately almost flat, because
+income grows quadratically in the district count while a compounded payroll
+grows exponentially in it: at 1.08 a full map owes more in wages than it earns.
+`UPKEEP_ARREARS_TAU` (180s) is twice the staffing ramp, for the same reason
+recovery outpaces decay everywhere else in this game, and `UPKEEP_KEEP_SHARE`
+(0.1) is the floor that makes the way back slow rather than shut.
+
+The airport's constants come from `npm run water:calibrate`, beside the berths
+they are priced in. `AIRPORT_BASE` is what the *next* district would cost at the
+moment the highway opens — the only curve still steep where the airport unlocks
+is the land's — and `AIRPORT_PAYROLL` is set against what it earns rather than
+against what it cost: at 24,000 it charged 2.23% of a fourteen-district ledger
+against 0.91% of tourism, so the one building that gives an inland city tourism
+at all would have lost money the day it opened. At one university's worth
+(7,200) it is 0.67% against 0.91%, and the freight lift is upside.
+
+`POWER_EXPONENT` (1.25) came from `npm run power:calibrate`, and it is the one
+constant in this game set by the *land* rather than by the economy — see the
+table above. `POWER_PER_PLANT` (700) is sized so a full map runs at a supply
+ratio of 1.29 with every square built on, and `POWER_BASE` (400) covers a
+district at level 0 three times over and one of apartments not at all, so the
+first plant is what the first promotion wave asks for. Plants are on the wage
+bill and take it from 16.6% of gross income to 20.6%.
+
 ## Saving
 
 Saved to `localStorage` every ten seconds, on tab hide, and on unload. Time away
@@ -248,4 +461,7 @@ Everything degrades rather than breaks: a corrupted save, a browser with storage
 switched off, or a save from an older balance pass all open — clamped into
 something legal instead of rejected. A v1 save is read out of the key it was
 written under and brought forward; a save claiming `demandR: 50` is clamped back
-into the band rather than handed free buildings.
+into the band rather than handed free buildings; and a save whose whole housing
+stock was written off — a state older builds could reach and this one cannot —
+gets its last building back, because a city with no standing housing earns
+exactly zero and can never recover from it.
