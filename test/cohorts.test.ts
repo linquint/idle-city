@@ -16,6 +16,8 @@ import {
   OCCUPANCY_EMPTY,
   OCCUPANCY_FLOOR,
   OCCUPANCY_TAU,
+  SERVICES,
+  type Service,
   ZONE_LEVEL_NAMES,
 } from '../src/sim/config';
 import {
@@ -310,6 +312,24 @@ describe('occupancy', () => {
     }
   });
 
+  it('holds the floor against demand pushing down on it', () => {
+    // OCCUPANCY_FLOOR is what a zone keeps *however bad things get*, and the
+    // demand term is a modifier on the range above it rather than a way through
+    // it. It used to be added outside the floor, so a zone that was miserable
+    // and oversupplied at once sank to 0.047 — and the trickle of income the
+    // floor exists to leave behind came out 40% short of what it promises.
+    const s = state(housed(24));
+    for (const demandR of [-1, -0.5, -0.25, 0]) {
+      expect(occupancyTarget({ ...s, happiness: 0, demandR }, 'home')).toBe(OCCUPANCY_FLOOR);
+    }
+    // Above the floor the modifier still does its job in both directions —
+    // flooring it must not flatten the term everywhere else.
+    const happy = { ...s, happiness: 1 };
+    expect(occupancyTarget({ ...happy, demandR: -1 }, 'home')).toBeLessThan(
+      occupancyTarget({ ...happy, demandR: 1 }, 'home'),
+    );
+  });
+
   it('costs an unhappy city residents without costing it buildings', () => {
     // The mechanic, stated as the test: the houses stay, the people leave.
     const game = at({ ...housed(24), ...served(), happiness: 1 });
@@ -426,6 +446,19 @@ describe('abandonment', () => {
     const before = game.state.cash;
     run(game, 3_600);
     expect(game.state.cash).toBeGreaterThan(before);
+    // The rate, not just the sign. `income > 0` passes at any trickle, which is
+    // how the occupancy floor came to leak 40% of this without a test noticing:
+    // the last home sat at 0.047 occupancy rather than the floor's 0.08, and the
+    // hour and a half above was two and a half hours. One home at the floor is
+    // `LEVEL_HOUSING[0]` x OCCUPANCY_FLOOR residents, and the hospital it is
+    // saving for is the cheapest service in the game.
+    expect(residents(game.state)).toBeCloseTo(
+      (LEVEL_HOUSING[0] as number) * OCCUPANCY_FLOOR,
+      6,
+    );
+    const hospital = SERVICES.find((service) => service.key === 'hospital') as Service;
+    const hours = hospital.base / (game.state.cash - before);
+    expect(hours).toBeLessThan(2);
   });
 });
 

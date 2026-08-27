@@ -351,6 +351,15 @@ export const cityScale = (s: GameState): number => {
  * fast enough to start boarding plots up. The zone's own demand is the smaller
  * modifier, so a zone in surcharge keeps most of its tenants rather than
  * emptying.
+ *
+ * The demand term modifies the range *above* the floor rather than the floor
+ * itself, and the clamp below is what says so. Added outside it, a zone that
+ * was miserable and oversupplied at once read 0.047 against a floor of 0.08 —
+ * so OCCUPANCY_FLOOR, whose whole job is the trickle of income a written-off
+ * city climbs back on, was quietly paying out 40% less than it promises. A city
+ * that had spent itself down to one standing home earned 0.014 a second where
+ * the floor is set for 0.024: two and a half hours to the cheapest service in
+ * the game rather than the forty-eight minutes it is priced at.
  */
 export const occupancyTarget = (s: GameState, kind: ZoneKind): number => {
   const mood = Math.max(0, Math.min(1, s.happiness));
@@ -364,7 +373,13 @@ export const occupancyTarget = (s: GameState, kind: ZoneKind): number => {
   // from the surplus. Applied to all three zones — a shop with no power does not
   // trade either — and floored by POWER_FLOOR, which is what keeps the loop from
   // having a fixed point at nothing.
-  return Math.max(0, Math.min(1, wanted)) * powerCap(s);
+  //
+  // Outside the floor rather than inside it, and the two are not interchangeable:
+  // a cap that could not reach under OCCUPANCY_FLOOR would make a blackout
+  // invisible in a city that is also unhappy, which is the one case POWER_FLOOR's
+  // own comment says is left to rot on purpose. What is killing that city is the
+  // unhappiness, and the power term is not there to insure against it.
+  return Math.max(OCCUPANCY_FLOOR, Math.min(1, wanted)) * powerCap(s);
 };
 
 /** Fraction of the gap occupancy closes over `dt`. Same form as `demandStep`. */
