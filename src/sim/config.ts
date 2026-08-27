@@ -1571,46 +1571,56 @@ export const HAPPINESS_FLOOR = 0.55;
  * it names next is 45 rather than 210 and gets there on its own too (0.34 +
  * 0.18 x 5/12 = 0.42). Both routes are cheaper than the single hospital was.
  *
- * An empty city is at 1, not 0 — coverage is the share of residents a service
- * reaches, and with no residents there is nobody it fails. Happiness then lags
- * down from there as the first houses fill (HAPPINESS_TAU), which is what buys
- * the opening enough room to earn the hospital that lifts the gate. That lag on
- * its own was not enough room: it ran out at 47 seconds against a hospital no
- * city could open before 94, so the gate shut a minute before the fix for it
- * existed. HAPPINESS_GRACE_SECONDS is what closed that minute, and the numbers
- * below are measured with it. Against a player who buys the moment they can:
- * the gate first bites at 2.1 minutes and 16 homes, and the first hospital
- * opens at 2.5 minutes. The stall is not dead time — shops and industry are
- * both still buildable through it.
+ * Every number in that paragraph is quoted at twelve homes, and that is not a
+ * coincidence — twelve is the smallest city this gate has ever been measured
+ * against. COVERAGE_GRACE_PLOTS is what happens below it: a city smaller than
+ * the one the gate was calibrated for is charged for its shortfall in
+ * proportion, so the gate cannot shut in front of a village that has no way to
+ * earn the building it is being asked for.
+ *
+ * Measured against a player who buys the moment they can: the gate first bites
+ * at 1.8 minutes and 11 homes, on a city earning 4.1/s — so the hospital the
+ * panel names is 32 seconds of income away, and opens at 2.2 minutes. The stall
+ * is not dead time: shops and industry are both still buildable through it.
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
 
 /**
- * Seconds a new city is held at HAPPINESS_MIN_BUILD before the gate may bite.
+ * Housing plots a city has to hold before a coverage shortfall counts in full.
  *
- * The opening had a hole in it that no amount of starting cash could fill, and
- * the shape of the hole is why: happiness decays on a *clock* rather than a
- * budget. It leaves an empty city's 1 on HAPPINESS_TAU as the first houses
- * fill, crosses this gate at 47 seconds, and does so at every START_CASH from
- * 40 to 2,000 — more money only buys more houses to board up. Measured at
- * 2,000, a city ended two hours with 25 homes and 24 of them abandoned.
+ * `coverage` has always had a special case at the bottom: a city with no
+ * housing reads as fully covered, because coverage is the share of the housing
+ * a service *fails* and it fails nothing when nothing has been built. That rule
+ * is right and it was a step function — one plot of housing took every service
+ * from "fails nobody" to "fails everybody", and the city was handed a 130
+ * hospital to fix it. This is the same rule made continuous: the shortfall
+ * fades in as the city grows, and reaches its full weight here.
  *
- * Against that, the earliest a city can *afford* the purchase that lifts the
- * gate: 94 seconds to a hospital buying homes as fast as it can, 107 holding
- * cash back for one, 56 seconds to the park that goes with it. So the gate shut
- * a full minute before the fix for it existed, and the minute was spent losing
- * the residents that would have paid for it.
+ * The step was a soft-lock rather than a stall, and the shape of it is why.
+ * Income is quadratic in happiness — it is scaled once by HAPPINESS_FLOOR and
+ * again through occupancy — so a collapsed city earns 0.55 x 0.08 / 0.92, or
+ * 4.8% of what the same buildings earn happy. Measured on the reported save,
+ * one home and one park and one shop: happiness 18%, income 0.08/s, the housing
+ * gate shut, and 28 minutes of doing nothing to afford the hospital the panel
+ * was naming. Everything the city could still buy — shops, industry — multiplies
+ * an income proportional to residents it was no longer allowed to house.
  *
- * 120 covers the slowest of those with margin to spare, and it is 2.7 x
- * HAPPINESS_TAU — long enough that happiness has fully lagged down onto the
- * floor and is sitting on it when the grace lifts, so the transition is the
- * gate starting to bite rather than a number jumping. What it does *not* do is
- * make the opening free: the city still loses residents and income the whole
- * way down, the panel still names what is short, and a player who spends the
- * window on shops still arrives at 120 seconds with nothing to open. It buys
- * the chance to act, not the outcome.
+ * The clock this replaces (a flat 120 seconds at HAPPINESS_MIN_BUILD) missed it
+ * because a clock measures the player, not the city. It was set from a player
+ * who buys housing the instant they can afford it, and that player never needed
+ * it; a player who spends the first two minutes reading the panel arrives at
+ * second 121 with one house, no income and the gate already shut. Size is the
+ * axis the failure was actually on, so size is what the grace is on now.
+ *
+ * 12 rather than 24, which would have been a whole district's housing: this has
+ * to be small enough that every calibration in this file still lands exactly
+ * where it was measured. At twelve plots the share is 1 and nothing above it
+ * moves at all — the tutorial above still costs two purchases, a hospital at
+ * twenty plots still reads 100%, and the whole endgame is untouched. What moves
+ * is the first eleven plots, which is the stretch no number here was ever
+ * quoted against.
  */
-export const HAPPINESS_GRACE_SECONDS = 120;
+export const COVERAGE_GRACE_PLOTS = 12;
 
 // ------------------------------------------------------------------ upkeep
 

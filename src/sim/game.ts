@@ -5,7 +5,6 @@ import {
   CATCHUP_MAX_ABANDONED,
   CATCHUP_MAX_ANNEXES,
   CATCHUP_MAX_SURVEYS,
-  HAPPINESS_GRACE_SECONDS,
   SURVEY_SECONDS,
   CATCHUP_MAX_LOSSES,
   CATCHUP_MAX_STEPS,
@@ -57,8 +56,8 @@ import {
   demandTargets,
   educationCoverage,
   estateCost,
-  happinessAim,
   happinessStep,
+  happinessTarget,
   hasPolicy,
   highwayCost,
   homeBlocker,
@@ -753,43 +752,26 @@ export class Game {
   /**
    * Eases happiness toward the coverage the city currently has.
    *
-   * The one aim in this loop that is not continuous in the state: the opening
-   * grace holds it at HAPPINESS_MIN_BUILD and then lets go, all at once, at
-   * HAPPINESS_GRACE_SECONDS. Every other integrator here can read its target
-   * once at the top of a step because the target moves smoothly under it; this
-   * one cannot, and a step straddling the window would otherwise take the whole
-   * step at whichever side of the cliff it happened to land on. Measured before
-   * the split: an hour of a new city taken as one catch-up step rezoned four
-   * parcels away from the same hour watched, against a tolerance of one.
+   * Read once at the top of the step, like every other integrator in this loop,
+   * and that is worth a note because it used not to be. The opening grace was a
+   * clock — a flat floor under the aim that let go all at once at 120 seconds —
+   * so the aim was the one target here that was discontinuous in *time*, and a
+   * step straddling that instant had to be integrated in two halves or it took
+   * the whole step on whichever side of the cliff it landed. Measured back then:
+   * an hour of a new city taken as one catch-up step rezoned four parcels away
+   * from the same hour watched, against a tolerance of one.
    *
-   * So a straddling step is integrated in two — the part inside the window
-   * against the held aim, the part after it against the earned one — and the
-   * pair land exactly where the ticks would. Both halves read the aim at the
-   * instant that half begins, which is why `happinessAim` takes a time at all.
-   */
-  private integrateHappiness(dt: number): void {
-    // `step` has already advanced `elapsed`, so the interval this call covers
-    // ends there and began `dt` before it.
-    const end = this.inner.elapsed;
-    const start = end - dt;
-    if (start < HAPPINESS_GRACE_SECONDS && end > HAPPINESS_GRACE_SECONDS) {
-      this.easeHappiness(start, HAPPINESS_GRACE_SECONDS - start);
-      this.easeHappiness(HAPPINESS_GRACE_SECONDS, end - HAPPINESS_GRACE_SECONDS);
-      return;
-    }
-    this.easeHappiness(start, dt);
-  }
-
-  /**
-   * One happiness step against the aim as it stood at `at`.
+   * COVERAGE_GRACE_PLOTS moved the grace onto the city's size, which only moves
+   * when a building lands, so the aim is continuous in time again and the split
+   * went with it.
    *
    * Clamped as well as stepped, for the same reason the demand signals are: the
    * step preserves [0, 1] only if the state arrived inside it, and a doctored
    * save is exactly where it would not have.
    */
-  private easeHappiness(at: number, dt: number): void {
+  private integrateHappiness(dt: number): void {
     const s = this.inner;
-    const target = happinessAim(s, at);
+    const target = happinessTarget(s);
     const moved = s.happiness + (target - s.happiness) * happinessStep(dt);
     s.happiness = Math.max(0, Math.min(1, moved));
   }

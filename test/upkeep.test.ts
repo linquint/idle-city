@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AUTO_ANNEX_RESERVE,
   CIVIC_GROWTH,
+  COVERAGE_GRACE_PLOTS,
   SERVICES,
   UPKEEP_ARREARS_TAU,
   UPKEEP_GROWTH,
@@ -218,14 +219,18 @@ describe('the bankruptcy rule', () => {
    * A city holding a university it could never have bought, with nothing in the
    * bank. The pathological case the keep-share was found on: without it the
    * treasury sits at exactly 0.00 forever and the player has no move.
+   *
+   * Housed at COVERAGE_GRACE_PLOTS and served by nothing, which is what a city
+   * that spent everything on one building looks like. Both halves of that are
+   * load-bearing: below COVERAGE_GRACE_PLOTS a coverage shortfall is discounted
+   * for size, so a four-home version of this fixture is a comfortable city and
+   * measures the opening ramp instead of the arrears rule this block is about.
    */
   const broke = (): Game =>
     at({
       cash: 0,
-      ...housed(4),
+      ...housed(COVERAGE_GRACE_PLOTS),
       occupancyR: 0.5,
-      hospitals: 1,
-      hospitalStaff: 1,
       universities: 1,
       universityStaff: 1,
     });
@@ -274,10 +279,13 @@ describe('the bankruptcy rule', () => {
     expect(browned).toBeLessThan(1);
 
     // The income returns — the housing the city was short of, at the same level,
-    // so what changed is the rent and not the wage bill. Commerce would have
-    // moved both: `ledgerScale` reads the shop multiplier, so a city that
-    // answered its arrears with shops would find the bill had grown with them.
-    const rich = new Game({ ...game.state, ...housed(24), happiness: 1 });
+    // and the parks that make collecting rent on it worth anything — so what
+    // changed is the rent and not the wage bill. Neither half moves the bill:
+    // `ledgerScale` reads commerce, industry and districts, and recreation
+    // carries no payroll at all. Commerce would have moved both, which is the
+    // distinction here — a city that answered its arrears with shops would find
+    // the bill had grown with them.
+    const rich = new Game({ ...game.state, ...housed(24), parks: 4, happiness: 1 });
     play(rich, 900);
     expect(rich.state.universityStaff).toBeGreaterThan(browned);
     expect(netIncome(rich.state)).toBeGreaterThan(0);

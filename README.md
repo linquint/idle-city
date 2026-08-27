@@ -380,6 +380,17 @@ Plots are also merge-invariant (a pair of houses that becomes one tower still
 holds two plots) and occupancy-invariant (a boarded-up house still holds its
 land), so coverage answers "how much of the city is served" and nothing else.
 
+A shortfall is charged **in proportion to how much city there is to fail**, up to
+`COVERAGE_GRACE_PLOTS`. A service fails nobody when nothing has been built — that
+rule was already there at zero plots, and it used to be a step: the first house
+took every service from failing nobody to failing everybody, and handed a
+one-house village a 130 hospital to fix it. Since income is quadratic in
+happiness (once through `HAPPINESS_FLOOR`, again through occupancy) the village
+earned 4.8% of its rate with the housing gate shut in front of the only building
+that could reopen it. The ramp is that rule made continuous, and it is spent by
+twelve housing plots — the smallest city the gate has ever been calibrated
+against — so nothing above it moves at all.
+
 A zone also never writes off its *last* standing building. That is the same rule
 `OCCUPANCY_FLOOR` is — a neglected city should read as one that has stopped
 growing, not one that has been switched off — and the floor stopped short of it,
