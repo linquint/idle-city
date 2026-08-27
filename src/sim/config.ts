@@ -499,6 +499,75 @@ export const LEVEL_EDUCATION = [0, 0.35, 0.6, 0.85, 1] as const;
 export const RENT = 0.14;
 
 /**
+ * How far a plot's centrality may move its rent, either way.
+ *
+ * `citygen` has always scored every block 1 at its district's middle and 0 at
+ * its furthest corner, and rent has always ignored it. This is the coefficient
+ * that stops it doing so: a housing plot's rent is multiplied by
+ * `1 + LAND_VALUE_SPREAD x (centrality - the city's mean centrality)`, so the
+ * mean multiplier over a fully built city is exactly 1.
+ *
+ * That normalisation is the load-bearing part rather than a tidiness. RENT,
+ * HOME_BASE and the first tier's capacity together set how long the first house
+ * takes to pay for itself, which is the number the opening minute lives or dies
+ * on; if the centrality factor changed what a built-out city earns, all three
+ * would be re-opened. It redistributes rent across the build order and does not
+ * add or remove any.
+ *
+ * Measured over the plot lists themselves (tools/landvalue.calibrate.mjs). A
+ * housing plot's centrality runs 0.14 to 1.00 with a city-wide mean of 0.36 and
+ * a standard deviation of 0.14 to 0.17, so what a spread is worth on a plot is:
+ *
+ *   spread   worst plot   best plot    typical
+ *   0.2           -4.4%      +12.8%     +-2.8%
+ *   0.4           -8.9%      +25.5%     +-5.6%
+ *   0.8          -17.8%      +51.0%    +-11.3%
+ *   1.6          -35.6%     +102.1%    +-22.5%
+ *
+ * The bound on the other side is lumpiness, and it is what keeps this small.
+ * The build order is shuffled inside a district but the plots offered *first*
+ * are systematically off-centre — district 0's opening four sit at 0.178
+ * against its own mean of 0.300 — so the running mean starts below the
+ * normaliser and climbs to it. That is a swing in the *whole city's* income,
+ * arriving against a demand loop calibrated on flat rent and shown on no bar in
+ * the HUD. Past the first half-district, where there is an economy for it to be
+ * a swing in, the worst it ever reads:
+ *
+ *   spread    1 district   12 districts   49 districts
+ *   0.2            +0.4%          -1.5%          -1.4%
+ *   0.4            +0.8%          -2.9%          -2.8%
+ *   0.8            +1.7%          -5.8%          -5.7%
+ *   1.6            +3.4%         -11.7%         -11.3%
+ *
+ * 0.4 is the value that leaves the inspector something to say — a quarter more
+ * rent on the best plot in the city than on an identical house at the rim, and
+ * the difference between two neighbours worth about 6% — while the ledger swing
+ * stays under 3%. At 0.8 the swing is 6%, which is an eighth of
+ * PRICE_DISCOUNT_MAX arriving for reasons the player cannot see; at 0.2 the
+ * inspector's number rounds to nothing on most plots.
+ *
+ * Closed-loop over 24 hours (tools/economy.calibrate.mjs), against the same
+ * build with the spread at zero: auto-develop's first annex moves 1.64h ->
+ * 1.67h and its first service 25.6m -> 27.0m, and the disciplined policy the
+ * same, both inside 2%. The discount-chaser moves 3.87h -> 4.98h, or +29%, and
+ * that number is reported rather than tuned away: it is the policy that buys
+ * six houses at the rim of one district and then nothing but shops, so its whole
+ * ledger rests on exactly the plots this term marks down and it is the most
+ * exposed reading the model can produce. Its 24-hour city is identical at every
+ * spread — 97R / 91C / 65I / 50 civic, 9 districts — so what moved is how long
+ * the discount-chaser spends in the hole it dug, which is the term working.
+ *
+ * One consequence is worth stating because it is visible. The normaliser is the
+ * mean over the land the city *owns*, so annexing moves it: a district built out
+ * on its own reads exactly 1, and once the city is four districts wide the same
+ * housing reads 0.975. The middle of the city moved, and the old middle is no
+ * longer it. Normalising against a constant measured over every seed would avoid
+ * that and would cost the exactness at build-out, which is the more valuable of
+ * the two.
+ */
+export const LAND_VALUE_SPREAD = 0.4;
+
+/**
  * Each shop adds this share of base income.
  *
  * Retuned with the commercial price curve below, not after it — the two are one

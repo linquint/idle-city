@@ -952,6 +952,118 @@ export function landmarkPlotsCovered(
   return cityReach.covered(museums, stadiums, plots, districts);
 }
 
+/**
+ * The centrality of every housing plot the city sells, in build order.
+ *
+ * `citygen` already scores each block 1 at the district's middle and 0 at its
+ * furthest corner, and a plot inherits its block's score. Rent was flat over
+ * that; `landValue` in economy.ts makes it vary. What this class is for is
+ * making the variation cost nothing to read.
+ *
+ * Two reads, and both are O(1) because of the prefix table. `at` is one plot's
+ * score, which is what the inspector needs; `mean` is the average over the
+ * first n plots, which is what `income` needs and which runs ten times a second.
+ * A prefix sum rather than a memo against counts — `landmarkCoverage` memoises
+ * because its query is a walk over a thousand plots and this one is a
+ * subtraction, so there is nothing left to cache.
+ *
+ * Append-only, exactly like the plot lists it indexes. Annexing a district adds
+ * scores to the end and moves nothing already in it, which is what keeps a
+ * building's rent a pure function of its ordinal and the seed.
+ *
+ * The build list is the *plot* list, and that is worth stating because it is an
+ * approximation once a city starts merging. Buildings fill the list from the
+ * front, so the plots a city of `homes + mergedR` occupies are the first
+ * `homes + mergedR` of it — exactly, inside one district, because `parcelOrder`
+ * emits every pair before any single. Across a district boundary a heavily
+ * merged city can hold a plot or two out of order: its unpairable singles sit
+ * unbuilt while merging has moved on to the next district's pairs. That is at
+ * most the two singles a district has (see `parcelOrder`), it washes out of a
+ * mean over hundreds of plots, and it is exactly zero at build-out — which is
+ * the reading the normalisation has to be exact at.
+ */
+class LandValue {
+  private materialised = 0;
+  /** Centrality per housing plot, in the order `CityLayout` hands them out. */
+  private readonly score: number[] = [];
+  /** `sum[i]` is the total score of the first i plots. One longer than `score`. */
+  private readonly sum: number[] = [0];
+
+  private ensure(districts: number): void {
+    for (let i = this.materialised; i < districts; i++) {
+      const c = districtCoord(i);
+      const plan = districtPlanAt(c.x, c.z);
+      const { blocks, block } = plan.layout;
+      for (const cell of plan.residential) {
+        const id = block[cell] as number;
+        // A road cell has no block and cannot be in a build list, but the list
+        // is data and the lookup is cheap: a missing block reads as the
+        // district's edge rather than as a crash.
+        const score = (blocks[id]?.centrality ?? 0);
+        this.score.push(score);
+        this.sum.push((this.sum[this.sum.length - 1] as number) + score);
+      }
+    }
+    this.materialised = Math.max(this.materialised, districts);
+  }
+
+  /** Centrality of one housing plot, clamped to the land the city owns. */
+  at(plot: number, districts: number): number {
+    this.ensure(districts);
+    const i = Math.max(0, Math.min(Math.floor(plot), this.score.length - 1));
+    return this.score[i] ?? 0;
+  }
+
+  /** Mean centrality over the first `plots` housing plots the city sells. */
+  mean(plots: number, districts: number): number {
+    this.ensure(districts);
+    const n = Math.max(0, Math.min(Math.floor(plots), this.score.length));
+    if (n <= 0) return 0;
+    return (this.sum[n] as number) / n;
+  }
+}
+
+const cityLand = new LandValue();
+
+/**
+ * Centrality of the i-th housing plot the city sells, in [0, 1].
+ *
+ * What the inspector reads, and the reason `buildingIncome` can now differ
+ * between two identical houses: it is the first spatially varying input in the
+ * game. See the `LevelCohort` comment in state.ts for what that does and does
+ * not justify.
+ */
+export function housingCentrality(plot: number, districts: number): number {
+  return cityLand.at(plot, districts);
+}
+
+/**
+ * Mean centrality over the first `plots` housing plots. What `income` reads.
+ */
+export function housingCentralityMean(plots: number, districts: number): number {
+  return cityLand.mean(plots, districts);
+}
+
+/**
+ * Mean centrality over every housing plot the city owns.
+ *
+ * The normaliser, and the whole of why land value redistributes rent rather
+ * than adding or removing it: the multiplier is `1 + spread x (c - this)`, so
+ * its mean over a fully built city is exactly 1 and RENT, HOME_BASE and the
+ * first tier's capacity all still mean what they meant.
+ *
+ * Against the land the city *owns* rather than a constant measured over every
+ * seed, because that is the only reading that makes build-out exact rather than
+ * approximate. It moves when a district is annexed, which is a real consequence
+ * worth stating: taking land shifts what the existing housing is worth, because
+ * the middle of the city has moved. Measured, the shift is a fraction of a
+ * percent — districts are generated by one process and their means agree
+ * closely — see tools/landvalue.calibrate.mjs.
+ */
+export function housingCentralityBase(districts: number): number {
+  return cityLand.mean(districts * BUILDABLE_RESIDENTIAL_PER_DISTRICT, districts);
+}
+
 interface DistrictPlots {
   readonly residential: Coord[];
   readonly commercial: Coord[];

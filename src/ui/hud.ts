@@ -65,6 +65,7 @@ import {
   landmarkReadings,
   industryCost,
   netIncome,
+  parcelLandValue,
   parkBlocker,
   parkCapacity,
   levelAt,
@@ -98,6 +99,7 @@ import {
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
   BUILDABLE_RESIDENTIAL_PER_DISTRICT,
   createPlacement,
+  housingCentrality,
   portDistrict,
   type CityLayout,
 } from '../sim/layout';
@@ -963,9 +965,25 @@ export class Hud {
       rows.push(['Employs', level < 0 ? '0' : fmtInt(INDUSTRY_JOBS[level] ?? 0)]);
       rows.push(['Makes', level < 0 ? '0' : fmtInt(INDUSTRY_OUTPUT[level] ?? 0)]);
     }
+    // The first line in this card that is about *where* rather than about what.
+    // Two identical houses are worth different rents now — see `landValue` —
+    // and a card that showed the income without the reason would read as a bug.
+    if (ref.kind === 'home') {
+      const land = parcelLandValue(s, at.plot, at.plots);
+      rows.push([
+        'Land value',
+        `${land >= 1 ? '+' : '−'}${Math.abs(Math.round((land - 1) * 100))}% · ${
+          Math.round(housingCentrality(at.plot, s.districts) * 100)
+        }% central`,
+      ]);
+    }
     // Marginal, and labelled: what the ledger loses if this one goes. Every
-    // other term in it belongs to the whole city.
-    rows.push(['Adds to income', `${fmt(buildingIncome(s, ref.kind, level))}/s`]);
+    // other term in it belongs to the whole city — except the land, which is
+    // this building's alone and is why the parcel is handed in.
+    rows.push([
+      'Adds to income',
+      `${fmt(buildingIncome(s, ref.kind, level, { plot: at.plot, plots: at.plots }))}/s`,
+    ]);
     rows.push(['Expansion', promotionBlocker(s, ref.kind, level, at.parcelPlots) ?? 'Ready to climb']);
     rows.push(['Parcel', `#${at.plot + 1} · slot ${ref.slot + 1}`]);
 

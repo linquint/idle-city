@@ -40,6 +40,7 @@ import {
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
   JOBS_PER_ESTATE_PLOT,
+  LAND_VALUE_SPREAD,
   LANDMARKS,
   LANDMARK_MOOD,
   LEVEL_EDUCATION,
@@ -101,6 +102,9 @@ import {
   LANDMARK_LARGE_SITES_PER_DISTRICT,
   LANDMARK_SMALL_SITES_PER_DISTRICT,
   coastalDistricts,
+  housingCentrality,
+  housingCentralityBase,
+  housingCentralityMean,
   landmarkPlotsCovered,
   parcelBook,
   UNIVERSITY_SITES_PER_DISTRICT,
@@ -1361,6 +1365,69 @@ export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** 
 
 // -------------------------------------------------------------------- income
 
+// -------------------------------------------------------------- land value
+
+/**
+ * What one housing plot's centrality does to its rent.
+ *
+ * The game's first spatially varying input, and the shape of it is the whole
+ * design. `citygen` scores each block 1 at its district's middle and 0 at its
+ * furthest corner; a plot inherits its block's score; and rent is multiplied by
+ * `1 + LAND_VALUE_SPREAD x (score - the city's mean score)`. Centred on the
+ * mean rather than on a constant, so the factor redistributes rent across the
+ * build order and adds none — see LAND_VALUE_SPREAD for why that matters more
+ * than the spread itself does.
+ *
+ * Floored at zero. The spread is a constant rather than save data so it cannot
+ * arrive out of range, but a multiplier that could go negative is a rent that
+ * could go negative, and that is worth one comparison to rule out for good.
+ */
+const valueOf = (score: number, base: number): number =>
+  Math.max(0, 1 + LAND_VALUE_SPREAD * (score - base));
+
+/**
+ * The city's rent multiplier: the mean land value over the housing it has built.
+ *
+ * A cohort-level mean, not a per-building modifier, and that is the line this
+ * feature deliberately does not cross. `LevelCohort` in state.ts says
+ * per-instance state earns its cost the moment a spatially varying input
+ * arrives; this is that input, and it still does not, because the k-th home's
+ * plot is a pure function of its ordinal and the seed and so the mean over the
+ * first n of them is a pure function of counts. The door is ajar rather than
+ * open: what would push it the rest of the way is an input that varies per
+ * building *and* cannot be summarised — a per-building age, a per-building
+ * tenant, anything the city cannot recompute from `{ homes, mergedR }`.
+ *
+ * One for a city with no housing, so the opening is unaffected by a term about
+ * where housing is.
+ *
+ * O(1). `income` runs ten times a second and this is two prefix-table reads —
+ * see `LandValue` in layout.ts, which is why it is not a memo.
+ */
+export const landValue = (s: GameState): number => {
+  const plots = plotsOf(s, 'home');
+  if (plots <= 0) return 1;
+  return valueOf(
+    housingCentralityMean(plots, s.districts),
+    housingCentralityBase(s.districts),
+  );
+};
+
+/**
+ * What one parcel's land is worth, for the inspector.
+ *
+ * The number that genuinely differs between two identical houses now, which is
+ * why `buildingIncome` takes a plot at all. Averaged over the parcel rather than
+ * read off its first plot: a merged tower stands on two, and they can sit in
+ * different blocks.
+ */
+export const parcelLandValue = (s: GameState, plot: number, plots = 1): number => {
+  const span = Math.max(1, Math.floor(plots));
+  let score = 0;
+  for (let i = 0; i < span; i++) score += housingCentrality(plot + i, s.districts);
+  return valueOf(score / span, housingCentralityBase(s.districts));
+};
+
 /**
  * What the city's premises add to every plot of housing it owns.
  *
@@ -1391,6 +1458,12 @@ export const income = (s: GameState): number => {
   return (
     (people *
       RENT *
+      // Where the housing is, not just how much of it there is. A mean over the
+      // plots the city has built, normalised so a built-out city earns exactly
+      // what flat rent earned — see `landValue`. Inside the rent bracket and
+      // nowhere else: fares are paid by riders and tourism by visitors, and
+      // neither of them cares which street the payer lives on.
+      landValue(s) *
       bonuses(shops, industry, s.districts) *
       incomeMultiplier(s) +
       // Fares. Outside the bracket above rather than inside it, because they
@@ -1648,7 +1721,18 @@ export function homeBlocker(s: GameState): string | null {
  *
  * Every term but the level is city-wide, which is why the inspector says so.
  */
-export const buildingIncome = (s: GameState, kind: ZoneKind, level: number): number => {
+export const buildingIncome = (
+  s: GameState,
+  kind: ZoneKind,
+  level: number,
+  /**
+   * The parcel this building stands on, as a flat housing-plot index and a
+   * plot count. Optional, and only read for housing: it is what makes two
+   * identical houses worth different amounts. Omitted, a home is quoted at the
+   * city's mean land value, which is what it was worth before this existed.
+   */
+  parcel?: { readonly plot: number; readonly plots: number },
+): number => {
   if (level < 0) return 0;
   const mood = incomeMultiplier(s);
   if (kind === 'home') {
@@ -1657,7 +1741,11 @@ export const buildingIncome = (s: GameState, kind: ZoneKind, level: number): num
       SHOP_BONUS * effectiveOf(s, 'shop') +
       INDUSTRY_BONUS * effectiveOf(s, 'industry') +
       DISTRICT_BONUS * (s.districts - 1);
-    return (LEVEL_HOUSING[level] ?? 0) * s.occupancyR * RENT * bonuses * mood;
+    const land =
+      parcel === undefined
+        ? landValue(s)
+        : parcelLandValue(s, parcel.plot, parcel.plots);
+    return (LEVEL_HOUSING[level] ?? 0) * s.occupancyR * RENT * land * bonuses * mood;
   }
   const share = kind === 'shop' ? SHOP_BONUS : INDUSTRY_BONUS;
   return (

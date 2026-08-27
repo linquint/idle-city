@@ -35,9 +35,17 @@ export type FireKind = ZoneKind;
  * and stays a pure function of counts. The save stays a handful of numbers and
  * positions stay derived.
  *
- * If a spatially varying input ever arrives — a pollution radius, per-district
- * coverage, anything a building's own position changes the answer to — that is
- * the point at which per-instance state earns its cost, and not before.
+ * One has arrived and it still does not. Land value (see `landValue`) reads a
+ * plot's centrality, so two houses at the same level genuinely earn different
+ * rents — the condition this comment named. What keeps the cohorts is that the
+ * k-th home's plot is a pure function of its ordinal and the seed, so the mean
+ * over the first n of them is still a pure function of counts and the ledger
+ * needs no more than that mean. The door is ajar rather than open.
+ *
+ * What would push it the rest of the way is an input that varies per building
+ * *and* cannot be summarised: a per-building age, a per-building tenant, a
+ * modifier applied to one building and not its neighbour. Anything the city can
+ * recompute from `{ homes, mergedR }` and the seed belongs here instead.
  */
 export type LevelCohort = number[];
 

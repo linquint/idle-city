@@ -25,6 +25,7 @@ compiles to about 10 kB gzipped on top of three.
 | `npm run citygen:calibrate` | Plot-count distribution over 1000 seeds |
 | `npm run economy:calibrate` | 24h demand/pricing sweep under four policies |
 | `npm run upkeep:calibrate` | What the civic wage bill is worth, swept over rate and growth |
+| `npm run landvalue:calibrate` | What centrality does to rent, swept over spread |
 
 ## How it is put together
 
@@ -94,6 +95,24 @@ implementation, a modifier per building, would mean per-instance state and a
 save that grows with the city; the covered share is a pure function of four
 counts and the seed. It is memoised against those counts, because
 `happinessTarget` runs ten times a second.
+
+**Land value is a prefix mean, not a per-building field.** `citygen` has always
+scored every block 1 at its district's middle and 0 at its furthest corner, and
+rent has always ignored it. It does not now: a plot's rent is multiplied by
+`1 + LAND_VALUE_SPREAD × (its centrality − the city's mean centrality)`, so a
+house on the best plot in the city earns a quarter more than an identical one at
+the rim. Centring it on the city's own mean is the load-bearing part — the mean
+multiplier over a fully built city is exactly 1, so `RENT`, `HOME_BASE` and the
+first tier's capacity all still mean what they meant, and the factor
+redistributes rent across the build order rather than adding any.
+
+This is the game's first spatially varying input, and it deliberately stops
+short of per-building state. The k-th home's plot is a pure function of its
+ordinal and the seed, so the mean over the first n of them is still a pure
+function of counts — a prefix sum, read in O(1) because `income` runs ten times
+a second. The `LevelCohort` comment in `state.ts` named exactly this as the
+condition under which per-instance state would earn its cost; it does not, yet,
+and the comment now says why the door is ajar rather than open.
 
 **Style is a hash, not a field.** Each zone has three styles at every level — 45
 looks in all — and a style is a parameter set rather than a mesh: proportions, a
