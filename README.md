@@ -52,6 +52,43 @@ file is ten fields instead of a scene graph.
 
 Three techniques carry the rest:
 
+**Land follows demand.** A district sells exactly 82 plots — that is geometry,
+and it does not move — but how they divide between housing, commerce and
+industry is not a compile-time constant any more. A surveyor reads the demand
+signals and rezones the *frontier* district; the moment the next one is annexed
+its split is fixed, so a city's zoning map ends up a record of what it wanted
+when each district was new.
+
+Residential takes a prefix of a district's shared parcels and commerce takes a
+suffix, which is the whole of how this stays deterministic: a zone's k-th parcel
+is a function of k alone rather than of the other zone's count, so surveying
+commerce cannot move a home that is already built. Three zones cannot share one
+pool that way — if residential can take nearly all of N, then (N−1,1,0) forces
+commerce onto the one cell it leaves, (N−1,0,1) forces industry onto that same
+cell, and (0,1,1) has them both claiming it — so industry keeps a reserve of its
+own. That makes an industry-led city impossible inside the streets, and the
+estates are the outlet.
+
+Only the frontier can be rezoned, and that is a property of lists rather than a
+rule about surveying: a zone's plots are the districts concatenated, so a list
+may only grow at its end. Rezoning district 0 under a city of twelve would
+insert plots before district 1's and shift every home past them onto different
+ground.
+
+The pool goes to whichever of the two zones wants it more, by a margin, provided
+the one gaining is built out past `SURVEY_FILL` and the one losing has an empty
+parcel at the end of its run. That last condition is what keeps a rezone from
+taking the ground out from under a building. Floors stop a type being zoned out
+of a district entirely.
+
+Prices follow the allotment, per district: each district contributes the share
+of its *own* land that is built on, so filling any district costs one district's
+multiple whether that district holds eight commercial plots or fifty-five — and
+annexation is price-neutral by construction, because a new district appends a
+term whose numerator is zero. At the split every district sold before this
+existed the curve is `BASE × 1.14 ** n` to fifteen digits, so a v9 save reopens
+on exactly the land and exactly the prices it was left on.
+
 **Generated districts.** Streets are not a grid. Each axis of a district is a
 seeded walk in steps of 3-7, so blocks come out anywhere from 2x2 to 6x6, and
 every non-road cell is labelled into a block with a frontage and a centrality
