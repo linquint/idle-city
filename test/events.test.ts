@@ -286,7 +286,7 @@ describe('catch-up', () => {
    * the job.
    */
   it('says nothing at all about an absence', () => {
-    const game = at({ ...built(24, 45, 13), ...served(), cash: 1e6, autoDevelop: true });
+    const game = at({ ...built(24, 45, 13), ...served(), cash: 1e6, autoDevelop: true, cityHall: true });
     const report = game.catchUp(12 * 3_600);
     // The absence was eventful, and none of it reached the ticker.
     expect(report.homes + report.firesStarted + report.merges).toBeGreaterThan(0);
@@ -328,7 +328,7 @@ describe('a full district, played out', () => {
    * coalescing rule are for.
    */
   it('is a handful of lines an hour rather than hundreds', () => {
-    const game = at({ cash: 1e4, autoDevelop: true, homeLevels: cohort(0) });
+    const game = at({ cash: 1e4, autoDevelop: true, cityHall: true, homeLevels: cohort(0) });
     const seen = collect(game, 3_600);
     expect(seen.length).toBeGreaterThan(0);
     const log = display(seen);

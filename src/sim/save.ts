@@ -328,6 +328,22 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     stadiums: count(r['stadiums']),
     cruiseTerminals: count(r['cruiseTerminals']),
     cargoTerminals: count(r['cargoTerminals']),
+    /**
+     * Granted to every save written before there was one to build.
+     *
+     * The opposite default from every other new field in this file, and it is a
+     * deliberate exception rather than an oversight. A city hall *gates* the tax
+     * rate, free transport and auto-development, and a v8 city may well have a
+     * punitive rate set, fares waived and the away switch on. Defaulting the
+     * hall to false would silently revert all three — the player would come back
+     * to a city earning a different amount, with settings they chose still shown
+     * as chosen and no longer doing anything.
+     *
+     * They earned those settings under the old rules. So a returning city is
+     * handed the building its policies imply, and only a save written by this
+     * version or later has to have bought one.
+     */
+    cityHall: version >= 9 ? r['cityHall'] === true : true,
     highway: r['highway'] === true,
     estates: count(r['estates']),
     // v2 called them clinics, schools and stations and stood them on single

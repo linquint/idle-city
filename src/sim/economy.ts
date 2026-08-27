@@ -6,6 +6,7 @@ import {
   BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
   CARGO_EXPORT_LIFT,
+  CITY_HALL_BASE,
   CIVIC_RAMP_SECONDS,
   CIVIC_SERVICES,
   ABANDON_SECONDS,
@@ -76,6 +77,7 @@ import {
   SHOP_SUPPLY,
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
+  TAX_NEUTRAL,
   TAX_STEPS,
   TERMINALS,
   TRANSIT_LABOUR_DRAW,
@@ -531,6 +533,10 @@ export const plotCapacity = (s: GameState): number =>
  * existing city's build-out by about 2% and move the annexation gate under
  * players who have never opened the tab. They are an amenity that happens to be
  * expensive, not land the city is selling.
+ *
+ * The city hall is out on the same rule, and it is the clearest case of all:
+ * there is one of them in a whole city, so counting it would move the gate by a
+ * different amount at every district count.
  */
 export const plotsUsed = (s: GameState): number =>
   plotsOf(s, 'home') + plotsOf(s, 'shop') + plotsOf(s, 'industry') + civicBuildings(s);
@@ -649,11 +655,19 @@ export const staffing = (s: GameState, key: ServiceKey): number =>
 /**
  * Sites of one type the city has land for.
  *
- * Two answers, because there are two kinds of site. The four 2x2 types share one
- * city-wide list by a fixed interleave — hospitals take 4k, police 4k+1, fire
- * 4k+2, schools 4k+3 — so with 6 sites a district the first district gets
- * 2/2/1/1 and they even out from there. A university stands on its own 3x3 list,
- * one to a district, and does not touch the interleave at all.
+ * Two answers, because there are two kinds of site. The *five* 2x2 types share
+ * one city-wide list by a fixed interleave — hospitals take 5k, police 5k+1,
+ * fire 5k+2, schools 5k+3 and depots 5k+4 — so with 6 sites a district the first
+ * district gets 2/1/1/1/1 and they even out from there. A university stands on
+ * its own 3x3 list, one to a district, and does not touch the interleave at all.
+ *
+ * The divisor is `CIVIC_SERVICES.length` and it is the one number in this file
+ * that must never move for convenience. Adding a sixth 2x2 type would change it
+ * and move every hospital, police station, fire station, school and depot in the
+ * city onto a different square — a returning player would watch their city
+ * rearrange itself around a save that had not changed. Anything new that wants a
+ * 2x2 square gets a list of its own sliced after these, the way the city hall
+ * does and the way `landmarksSmall` is sliced before them.
  */
 export const siteCapacity = (s: GameState, key: ServiceKey): number => {
   if (key === 'university') return universitySiteCapacity(s);
@@ -701,7 +715,7 @@ export const serviceNeeded = (s: GameState, service: Service): number =>
  */
 export const covered = (s: GameState, service: Service): number => {
   const reach = serviceCount(s, service.key) * staffing(s, service.key) * service.plots;
-  return service.key === 'transit' && s.freeTransport ? reach * (1 + FREE_TRANSPORT_REACH) : reach;
+  return service.key === 'transit' && faresWaived(s) ? reach * (1 + FREE_TRANSPORT_REACH) : reach;
 };
 
 /** The transit service, or undefined if the table is ever built without one. */
@@ -735,7 +749,7 @@ export const riders = (s: GameState): number =>
  * which is the whole of what the policy costs.
  */
 export const fareIncome = (s: GameState): number =>
-  s.freeTransport ? 0 : riders(s) * FARE_PER_RIDER;
+  faresWaived(s) ? 0 : riders(s) * FARE_PER_RIDER;
 
 /**
  * Share of the city's housing land a service reaches, capped at all of it.
@@ -1037,7 +1051,7 @@ export const happinessTarget = (s: GameState): number => {
   // that has held for three cycles. See LANDMARK_MOOD.
   const policy =
     taxStep(s).mood +
-    (s.freeTransport ? FREE_TRANSPORT_MOOD : 0) +
+    (faresWaived(s) ? FREE_TRANSPORT_MOOD : 0) +
     LANDMARK_MOOD * landmarkCoverage(s);
   return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
@@ -1063,9 +1077,19 @@ export const bindingTerm = (s: GameState): HappinessTerm => {
   return worst;
 };
 
-/** The tax setting the city is on. Clamped, so a doctored save picks a real one. */
+/**
+ * The tax setting the city is *on*, which is not always the one it has stored.
+ *
+ * Neutral until there is a city hall, because a rate is policy and policy needs
+ * somebody to set it. The stored field is left exactly as the player left it —
+ * overwriting it would lose a choice they made and could not see being lost —
+ * so a hall bought later puts the city straight back on its own rate.
+ *
+ * Clamped as well, so a doctored save picks a real step.
+ */
 export const taxStep = (s: GameState): (typeof TAX_STEPS)[number] => {
-  const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(s.taxRate)));
+  const wanted = hasPolicy(s) ? s.taxRate : TAX_NEUTRAL;
+  const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(wanted)));
   return TAX_STEPS[at] as (typeof TAX_STEPS)[number];
 };
 
@@ -1483,6 +1507,50 @@ export const income = (s: GameState): number => {
   );
 };
 
+// ---------------------------------------------------------------- city hall
+
+/**
+ * Whether the city has anybody to set policy.
+ *
+ * The one gate the city hall is, named once so that the three things it gates
+ * read alike. `taxStep` falls back to TAX_NEUTRAL without it, `freeTransport`
+ * to fares-on, and `Game.step` runs no auto-development — every one of which is
+ * exactly what a fresh city already gets, so the opening is unchanged.
+ */
+export const hasPolicy = (s: GameState): boolean => s.cityHall;
+
+/**
+ * Whether free transport is actually in force.
+ *
+ * Read instead of `s.freeTransport` everywhere it matters — the depot's reach,
+ * the fares, the mood — because the stored flag is the player's *choice* and
+ * this is whether the city can act on it. Keeping the two apart is what lets a
+ * v8 city's setting survive intact rather than being overwritten on load.
+ */
+export const faresWaived = (s: GameState): boolean => s.cityHall && s.freeTransport;
+
+/** Flat: there is one city hall, so there is no n to compound over. */
+export const cityHallCost = (): number => CITY_HALL_BASE;
+
+export const canBuildCityHall = (s: GameState): boolean =>
+  !s.cityHall && s.cash >= cityHallCost();
+
+/** Why the city hall button is off. Built, or a matter of money. */
+export function cityHallBlocker(s: GameState): string | null {
+  return s.cityHall ? 'Built' : null;
+}
+
+/**
+ * Why a policy control is off, phrased for the HUD.
+ *
+ * The same blocker-reason idiom every other disabled control in this HUD
+ * follows: a string when the control is dead for a reason worth saying, null
+ * when it is live.
+ */
+export function policyBlocker(s: GameState): string | null {
+  return hasPolicy(s) ? null : 'Needs a city hall';
+}
+
 // ------------------------------------------------------------------ upkeep
 
 /**
@@ -1560,6 +1628,16 @@ export const civicPayroll = (s: GameState, growth = UPKEEP_GROWTH): number => {
       compounded(growth, serviceCount(s, service.key)) *
       staffing(s, service.key);
   }
+  // The city hall is on the payroll and is the one entry with no staffing term,
+  // because it has no staffing scalar to have: it is a boolean, and there is
+  // nothing to average a second one into. What that costs is that arrears cannot
+  // make the hall cheaper the way they make a hospital cheaper — measured, it is
+  // 15.1% of a one-district city's bill and 2.0% of its gross income, falling to
+  // 0.2% and 0.0% at forty-nine — and UPKEEP_KEEP_SHARE is what guarantees the
+  // treasury grows underneath it either way. A flat cost against a payroll that
+  // grows with the city, so it is a real line early and a rounding error late,
+  // which is the right way round for the building that unlocks the away switch.
+  if (s.cityHall) payroll += CITY_HALL_BASE;
   return payroll;
 };
 

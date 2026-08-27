@@ -20,6 +20,7 @@ import {
   LEVELS,
   MAX_DISTRICTS,
   SERVICES,
+  TAX_NEUTRAL,
   CARGO_EXPORT_LIFT,
   HIGHWAY_MIN_DISTRICTS,
   TERMINALS,
@@ -39,7 +40,10 @@ import {
   canBuildEstate,
   canBuildHighway,
   canBuildShop,
+  canBuildCityHall,
   canBuildTerminal,
+  cityHallBlocker,
+  cityHallCost,
   cruiseIncome,
   demandTargets,
   educationCoverage,
@@ -67,8 +71,10 @@ import {
   industryCost,
   netIncome,
   parcelLandValue,
+  faresWaived,
   parkBlocker,
   parkCapacity,
+  policyBlocker,
   levelAt,
   mergedOf,
   parkCost,
@@ -272,6 +278,10 @@ export class Hud {
     taxSteps: el('tax-steps'),
     taxIncome: el('tax-income'),
     taxMood: el('tax-mood'),
+    cityHall: el<HTMLButtonElement>('build-cityhall'),
+    cityHallLabel: el('build-cityhall-label'),
+    cityHallCost: el('build-cityhall-cost'),
+    cityHallNote: el('cityhall-note'),
     freeTransport: el<HTMLButtonElement>('free-transport'),
     freeFares: el('free-fares'),
     freeEffect: el('free-effect'),
@@ -431,6 +441,8 @@ export class Hud {
     for (const { service, button } of this.serviceNodes) {
       button.addEventListener('click', () => this.act(() => this.game.buildService(service)));
     }
+
+    n.cityHall.addEventListener('click', () => this.act(() => this.game.buildCityHall()));
 
     n.freeTransport.addEventListener('click', () => {
       this.game.setFreeTransport(!this.game.state.freeTransport);
@@ -831,13 +843,33 @@ export class Hud {
    */
   private paintTaxes(s: Readonly<GameState>): void {
     const n = this.nodes;
-    const at = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(s.taxRate)));
+    const why = policyBlocker(s);
+    n.cityHall.disabled = !canBuildCityHall(s);
+    n.cityHall.hidden = s.cityHall;
+    n.cityHallLabel.textContent = cityHallBlocker(s) ?? 'Build the city hall';
+    n.cityHallCost.textContent = fmt(cityHallCost());
+    n.cityHall.title = cityHallBlocker(s) ?? 'Build the city hall';
+    // The blocker-reason idiom, given a line of its own because it answers for
+    // the whole panel rather than for one control. Empty once the hall is up,
+    // and `.note:empty` takes the space back with it.
+    n.cityHallNote.textContent = why === null
+      ? ''
+      : `${why} — until then the city runs at ${
+          (TAX_STEPS[TAX_NEUTRAL] as (typeof TAX_STEPS)[number]).label
+        } with fares on.`;
+
+    // The rate the city is *on*, which is neutral while there is nobody to set
+    // one. `taxStep` says so, and the radio group has to agree with it or the
+    // panel shows a rate the ledger is not using.
+    const on = taxStep(s);
+    const at = TAX_STEPS.indexOf(on);
     for (let i = 0; i < this.taxButtons.length; i++) {
       const button = this.taxButtons[i];
       if (!button) continue;
       const step = TAX_STEPS[i] as (typeof TAX_STEPS)[number];
       button.setAttribute('aria-checked', String(i === at));
-      button.title = `${step.label}: income x${step.income.toFixed(2)}`;
+      button.disabled = why !== null;
+      button.title = why ?? `${step.label}: income x${step.income.toFixed(2)}`;
     }
     const step = taxStep(s);
     n.taxIncome.textContent = `x${step.income.toFixed(2)}`;
@@ -848,9 +880,15 @@ export class Hud {
 
     // A trade rather than an upgrade, so the panel states both sides of it: what
     // the fares are worth is what turning them off costs.
-    n.freeTransport.textContent = `Free transport · ${s.freeTransport ? 'on' : 'off'}`;
-    n.freeTransport.setAttribute('aria-pressed', String(s.freeTransport));
-    n.freeFares.textContent = s.freeTransport
+    // `faresWaived` rather than the stored flag: a save carried over from a
+    // build with no city hall keeps its setting, and the panel has to say
+    // whether the city is acting on it rather than what it once chose.
+    const waived = faresWaived(s);
+    n.freeTransport.textContent = `Free transport · ${waived ? 'on' : 'off'}`;
+    n.freeTransport.setAttribute('aria-pressed', String(waived));
+    n.freeTransport.disabled = why !== null;
+    n.freeTransport.title = why ?? 'Waive the fares';
+    n.freeFares.textContent = waived
       ? 'fares waived'
       : `${fmt(fareIncome(s))}/s in fares`;
     n.freeEffect.textContent = `reach +${Math.round(FREE_TRANSPORT_REACH * 100)}%, mood +${Math.round(
@@ -1040,8 +1078,14 @@ export class Hud {
     n.annex.disabled = !canAnnex(s);
     n.annex.title = annexWhy ?? 'Take the next district without waiting for a surplus';
 
-    n.auto.textContent = `Auto-develop · ${s.autoDevelop ? 'on' : 'off'}`;
-    n.auto.setAttribute('aria-pressed', String(s.autoDevelop));
+    // Auto-development is policy too, so it answers to the same gate the Taxes
+    // tab does — and says so on the label rather than only going grey.
+    const govern = policyBlocker(s);
+    const developing = s.autoDevelop && govern === null;
+    n.auto.textContent = govern ?? `Auto-develop · ${developing ? 'on' : 'off'}`;
+    n.auto.setAttribute('aria-pressed', String(developing));
+    n.auto.disabled = govern !== null;
+    n.auto.title = govern ?? 'Spend surplus cash while you are away';
   }
 
   /**

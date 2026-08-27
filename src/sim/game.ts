@@ -26,6 +26,7 @@ import {
   burnableBuildings,
   burnableOf,
   canAnnex,
+  canBuildCityHall,
   canBuildHome,
   canBuildIndustry,
   canBuildPark,
@@ -35,6 +36,7 @@ import {
   canBuildShop,
   canBuildTerminal,
   canMergeParcel,
+  cityHallCost,
   civicBuildings,
   coverage,
   clampDemand,
@@ -44,6 +46,7 @@ import {
   estateCost,
   happinessStep,
   happinessTarget,
+  hasPolicy,
   highwayCost,
   homeBlocker,
   homeCost,
@@ -410,7 +413,10 @@ export class Game {
     // is land the same tick can start building on rather than land that waits a
     // tenth of a second — the same reasoning fires already follow.
     this.autoAnnex();
-    if (s.autoDevelop) this.autoDevelop(8);
+    // Policy, and policy needs a city hall. Gated on the effect rather than on
+    // the stored flag, so a save that arrives with the switch on keeps it on and
+    // starts developing the moment the hall is built — see `hasPolicy`.
+    if (s.autoDevelop && hasPolicy(s)) this.autoDevelop(8);
     // Last, and after auto-development, so what the ticker reports is the tick's
     // settled state rather than a state the same tick went on to change.
     this.watchTransitions();
@@ -1030,6 +1036,22 @@ export class Game {
   }
 
   /**
+   * The city hall: one 2x2 square in district 0, and the right to have policies.
+   *
+   * It earns nothing, covers nothing and carries no happiness weight — the four
+   * happiness weights sum to exactly 1 and re-opening that calibration to buy a
+   * UI gate would be a bad trade. What it buys is the Taxes tab and the
+   * auto-develop switch. See `hasPolicy`.
+   */
+  buildCityHall(): boolean {
+    const s = this.inner;
+    if (!canBuildCityHall(s)) return false;
+    s.cash -= cityHallCost();
+    s.cityHall = true;
+    return true;
+  }
+
+  /**
    * The road out of town. Bought once, and what it buys is the right to build
    * on land the city does not own — see HIGHWAY_MIN_DISTRICTS.
    */
@@ -1137,7 +1159,17 @@ export class Game {
     this.inner.savedAt = at;
   }
 
+  /**
+   * The three policy setters, and all three refuse without a city hall.
+   *
+   * Refusing here as well as gating the effect is the same belt-and-braces
+   * `setTaxRate`'s clamp already is: the HUD disables these controls, and the
+   * simulation is what decides whether it is allowed to. A refusal leaves the
+   * stored value alone rather than resetting it, so nothing a player chose under
+   * an older build is lost by loading a newer one.
+   */
   setAutoDevelop(on: boolean): void {
+    if (!hasPolicy(this.inner)) return;
     this.inner.autoDevelop = on;
   }
 
@@ -1146,11 +1178,13 @@ export class Game {
    * bug cannot put the simulation on a rate that does not exist.
    */
   setTaxRate(step: number): void {
+    if (!hasPolicy(this.inner)) return;
     this.inner.taxRate = Math.max(0, Math.min(TAX_STEPS.length - 1, Math.floor(step)));
   }
 
   /** Fares off, reach up, mood up. A trade, not an upgrade — see the constants. */
   setFreeTransport(on: boolean): void {
+    if (!hasPolicy(this.inner)) return;
     this.inner.freeTransport = on;
   }
 

@@ -33,6 +33,8 @@ import {
 } from '../src/sim/config.ts';
 import {
   canAnnex,
+  canBuildCityHall,
+  cityHallCost,
   canBuildHome,
   canBuildIndustry,
   canBuildPark,
@@ -223,13 +225,77 @@ console.log('');
     );
   }
   console.log('');
+
+  // The city hall is on the payroll and is the one entry with no staffing term,
+  // so what it is worth is a share of the bill at each size rather than a row in
+  // the table above. It is a flat cost against a payroll that grows with the
+  // city, so it matters most to the smallest one.
+  console.log('the city hall\'s share of the wage bill');
+  for (const districts of SIZES) {
+    const bare = builtOut(districts, 2);
+    const held = { ...bare, cityHall: true };
+    console.log(
+      `  ${String(districts).padStart(2)} districts   ` +
+        `${pct(1 - upkeep(bare) / upkeep(held)).padStart(7)} of the bill, ` +
+        `${pct(upkeep(held) / income(held) - upkeep(bare) / income(bare))} of gross income`,
+    );
+  }
+  console.log('');
 }
 
 // -------------------------------------------------------------- closed loop
 
 const idle = () => {};
+/**
+ * Auto-develop, exactly as the game plays it while you are away — once it can.
+ *
+ * The switch is policy and policy needs a city hall, so this policy plays the
+ * opening by hand and then stops playing. Until the hall is up it buys housing,
+ * which is what auto-development itself would buy at that point and what a
+ * player saving for anything does; from the hall onward it touches nothing.
+ *
+ * Bootstrapping it is not a convenience. A policy that only flipped the switch
+ * would sit at START_CASH forever now, since the switch does nothing without
+ * the hall and nothing else in the policy buys anything — measured, 24 hours
+ * and zero buildings. That would be a broken probe rather than a finding.
+ */
 const auto = (game) => {
-  if (!game.state.autoDevelop) game.setAutoDevelop(true);
+  const s = game.state;
+  if (!s.cityHall) {
+    if (canBuildCityHall(s)) game.buildCityHall();
+    else bootstrap(game);
+    return;
+  }
+  if (!s.autoDevelop) game.setAutoDevelop(true);
+};
+
+/**
+ * The opening, played by hand: whatever the city is short of, then housing.
+ *
+ * Deliberately the same priority `Game.autoDevelop` uses, because that is what
+ * it is standing in for. Buying only housing was measured first and stalls at
+ * four homes — the happiness gate closes with no hospital behind it, income
+ * falls to the floor, and the treasury reaches 835 in twenty-four hours against
+ * a hall that costs 1,500. That is the tutorial working rather than a price
+ * being wrong, but it makes the probe a measurement of the tutorial instead of
+ * of the hall.
+ */
+const bootstrap = (game) => {
+  const s = game.state;
+  for (let guard = 0; guard < 16; guard++) {
+    let bought = false;
+    for (const service of SERVICES) {
+      if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
+        bought = game.buildService(service);
+        break;
+      }
+    }
+    if (!bought && s.homes > 0 && recreationCoverage(s) < 1 && canBuildPark(s)) {
+      bought = game.buildPark();
+    }
+    if (!bought && s.demandR >= 0 && canBuildHome(s)) bought = game.buildHome();
+    if (!bought) return;
+  }
 };
 
 const disciplined = (game) => {
@@ -237,6 +303,10 @@ const disciplined = (game) => {
   for (let guard = 0; guard < 64; guard++) {
     if (canAnnex(s) && game.annex()) continue;
     const options = [];
+    // The hall is a purchase like any other and sits in the same pool, so what
+    // the sweep measures is a player choosing it against a hospital rather than
+    // one handed it for free.
+    if (canBuildCityHall(s)) options.push([cityHallCost(), () => game.buildCityHall()]);
     for (const service of SERVICES) {
       if (residents(s) > 0 && coverage(s, service) < 1 && canBuildService(s, service)) {
         options.push([serviceCost(s, service), () => game.buildService(service)]);
@@ -273,6 +343,7 @@ const greedy = (game) => {
     if (s.homes > 0 && recreationCoverage(s) < 1 && canBuildPark(s)) {
       options.push([0, () => game.buildPark()]);
     }
+    if (canBuildCityHall(s)) options.push([0, () => game.buildCityHall()]);
     if (canAnnex(s)) options.push([-1, () => game.annex()]);
     if (options.length === 0) return;
     options.sort((a, b) => a[0] - b[0]);

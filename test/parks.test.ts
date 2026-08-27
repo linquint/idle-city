@@ -289,14 +289,14 @@ describe('auto-development', () => {
    * 0.82 by the one amenity auto-development cannot see.
    */
   it('lays out parks while you are away', () => {
-    const game = at({ ...housed(19), cash: 1e6, autoDevelop: true });
+    const game = at({ ...housed(19), cash: 1e6, autoDevelop: true, cityHall: true });
     const report = game.catchUp(3600);
     expect(report.parks).toBeGreaterThan(0);
     expect(game.state.parks).toBeLessThanOrEqual(parkCapacity(game.state));
   });
 
   it('never buys more parks than there is courtyard for', () => {
-    const game = at({ cash: 1e12, autoDevelop: true });
+    const game = at({ cash: 1e12, autoDevelop: true, cityHall: true });
     game.catchUp(12 * 3600);
     expect(game.state.parks).toBeLessThanOrEqual(parkCapacity(game.state));
   });

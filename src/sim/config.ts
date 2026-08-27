@@ -81,15 +81,17 @@ export const TARGET_PLOTS = 144;
  * exactly:
  *
  *   24 + 45 + 13 for sale
- *    + 9 x 4  2x2 squares   (6 civic, 1 small landmark, 2 spare)
+ *    + 9 x 4  2x2 squares   (6 civic, 1 small landmark, 1 city hall, 1 spare)
  *    + 2 x 9  3x3 squares   (1 university, 1 large landmark)
  *    + 4      courtyard parks
  *    + 4      courtyard spare
  *   = 144
  *
- * so a district carries twelve deliberately empty plots — two 2x2 squares and
- * four courtyard plots — which is the land the next few features get to use
- * without this budget being re-cut under them again.
+ * so a district carries eight deliberately empty plots — one 2x2 square and four
+ * courtyard plots — which is the land the next few features get to use without
+ * this budget being re-cut under them again. It carried twelve until the city
+ * hall took one of the two spare squares, which is exactly what they were held
+ * back for.
  *
  * Measured over 20,000 street plans under exactly this reservation order, and
  * the tuple is the one the numbers picked rather than one they were fitted to:
@@ -129,15 +131,34 @@ export const FRONTAGE_TARGET = {
   industrial: 13,
   /**
    * 2x2 quads a district claims, all of them reserved before the build lists
-   * are drawn. Six go to civic, one to a small landmark, and the rest are spare
-   * — reserving the whole claim rather than only the squares something stands
-   * on is what keeps `homeCapacity` independent of build order.
+   * are drawn. Six go to civic, one to a small landmark, one to the city hall,
+   * and the rest are spare — reserving the whole claim rather than only the
+   * squares something stands on is what keeps `homeCapacity` independent of
+   * build order.
    */
   squares: 9,
   /** 2x2 civic sites per district. 6 x 4 = 24 plots, mostly dead interior. */
   civicSites: 6,
   /** 2x2 landmark sites per district, taken from the same claim. */
   landmarkSmallSites: 1,
+  /**
+   * 2x2 city hall sites per district, sliced after the civic six.
+   *
+   * One per *district* for a building there is only ever one of in the whole
+   * city, and that is not waste — it is what keeps the plot budget uniform. The
+   * build lists are what is left after the reservations, `districtPlan` has no
+   * idea which district it is planning, and `onTarget` pins the same tuple for
+   * every one of them. Reserving the square only in district 0 would give that
+   * district one fewer housing plot than the rest and `homeCapacity` would stop
+   * being a multiplication.
+   *
+   * It comes out of the two squares a district already holds empty rather than
+   * out of CIVIC_SERVICES, which is the rule: adding a sixth entry to that table
+   * changes the divisor in `siteCapacity` and moves every hospital, police
+   * station, fire station, school and depot in the city onto a different site.
+   * A returning player would watch their city rearrange itself.
+   */
+  cityHallSites: 1,
   /** 3x3 university quads per district. Exactly one, reserved before the rest. */
   universitySites: 1,
   /** 3x3 landmark quads per district. Reserved alongside the university. */
@@ -1324,6 +1345,59 @@ export const UPKEEP_RESERVE_SECONDS = 60;
  * is being paid instead is staffing, and the services panel is where that shows.
  */
 export const UPKEEP_KEEP_SHARE = 0.1;
+
+// -------------------------------------------------------------- city hall
+
+/**
+ * What the city hall costs, once, for the only one there will ever be.
+ *
+ * Flat rather than compounding, because there is nothing to compound over: the
+ * save holds a boolean. Every other civic curve in this file exists to price the
+ * *n*-th of something, and this has no n.
+ *
+ * Priced as a milestone rather than against a return. What it buys is the Taxes
+ * tab and the auto-develop switch, and neither has a rate you can divide into a
+ * price — the tax control is worth anywhere from -8% to +60% of the ledger
+ * depending on how well covered the city is, and auto-development is worth
+ * whatever the player would otherwise have clicked. So it is set where it sits
+ * in the order of things a player buys, which is the ordering this file already
+ * states: a home at 8, a shop at 11, a park at 45, a works at 120, a hospital at
+ * 130, a school at 180, a police station at 210, a depot at 260, a fire station
+ * at 320 — and then this, an order of magnitude past the last of the services
+ * and an order short of the first landmark at 4,000.
+ *
+ * Measured (tools/economy.calibrate.mjs), and the measurement says something
+ * the price cannot fix. The hall lands at 1.34 hours under auto-development and
+ * 1.36 under the disciplined policy, against a first service at 10.3 and 27.0
+ * minutes and a first annexation at 1.73 and 1.65 hours — so it sits where it
+ * should, between the tutorial the happiness gate teaches and the first
+ * expansion. But it lands there almost regardless of what it costs:
+ *
+ *   price    hall opens (auto-develop)
+ *     400        1.21h
+ *     800        1.28h
+ *   1,500        1.34h
+ *   3,000        1.42h
+ *
+ * A seven-fold price change moves the unlock by thirteen minutes, because what
+ * gates it is the opening's ramp rather than the number: a city that will annex
+ * at 1.73 hours has a treasury measured in tens of thousands by then, and
+ * anything in this range is a speed bump on the way. So the price is set by
+ * where it belongs in the order rather than by a pacing target it cannot hit,
+ * and it is worth being explicit that pulling this lever to move the unlock
+ * would not work.
+ *
+ * The discount-chasing policy takes 4.79 hours, which is the same policy that
+ * takes 3.72 hours to afford a hospital — the ordering holds for the player who
+ * ignores services too.
+ *
+ * It carries upkeep like every other civic building and no happiness weight at
+ * all: the four happiness weights sum to exactly 1 and re-opening that
+ * calibration to buy a UI gate would be a bad trade. See `civicPayroll` for what
+ * the wage bill costs, which is 2.0% of a one-district city's gross income and
+ * 0.0% of a full map's.
+ */
+export const CITY_HALL_BASE = 1_500;
 
 // -------------------------------------------------------------- landmarks
 

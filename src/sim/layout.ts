@@ -231,6 +231,20 @@ export interface DistrictPlan {
   readonly landmarksSmall: readonly CivicSite[];
   readonly sites: readonly CivicSite[];
   /**
+   * 2x2 city hall sites, sliced *after* the civic six.
+   *
+   * After, and that is the whole of house rule four made concrete: `siteCapacity`
+   * assigns the 2x2 civic types by a fixed interleave over `CIVIC_SERVICES`, so a
+   * sixth entry in that table would change the divisor and move every hospital,
+   * police station, fire station, school and depot in the city onto a different
+   * site. Slicing a list of its own after them, exactly as `landmarksSmall` is
+   * sliced before them, leaves the interleave untouched.
+   *
+   * One a district for a building the city only ever has one of — see
+   * FRONTAGE_TARGET.cityHallSites for why the reservation has to be uniform.
+   */
+  readonly cityHalls: readonly CivicSite[];
+  /**
    * 2x2 squares the district claimed and reserved but nothing stands on.
    *
    * Deliberately empty land, and the reason it is *reserved* rather than left
@@ -287,9 +301,9 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
     FRONTAGE_TARGET.landmarkSmallSites,
     FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites,
   );
-  const spareSquares = squares.slice(
-    FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites,
-  );
+  const afterCivic = FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites;
+  const cityHalls = squares.slice(afterCivic, afterCivic + FRONTAGE_TARGET.cityHallSites);
+  const spareSquares = squares.slice(afterCivic + FRONTAGE_TARGET.cityHallSites);
 
   const keep = (cells: readonly number[]): number[] => cells.filter((c) => !reserved.has(c));
   // Paired after the sites are reserved, never before: a plot a hospital is
@@ -310,6 +324,7 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
     landmarksLarge,
     landmarksSmall,
     sites,
+    cityHalls,
     spareSquares,
     residential: residential.cells,
     commercial: commercial.cells,
@@ -336,8 +351,12 @@ function onTarget(plan: DistrictPlan): boolean {
     plan.industrial.length === FRONTAGE_TARGET.industrial &&
     plan.sites.length === FRONTAGE_TARGET.civicSites &&
     plan.landmarksSmall.length === FRONTAGE_TARGET.landmarkSmallSites &&
+    plan.cityHalls.length === FRONTAGE_TARGET.cityHallSites &&
     plan.spareSquares.length ===
-      FRONTAGE_TARGET.squares - FRONTAGE_TARGET.civicSites - FRONTAGE_TARGET.landmarkSmallSites &&
+      FRONTAGE_TARGET.squares -
+        FRONTAGE_TARGET.civicSites -
+        FRONTAGE_TARGET.landmarkSmallSites -
+        FRONTAGE_TARGET.cityHallSites &&
     plan.universities.length === FRONTAGE_TARGET.universitySites &&
     plan.landmarksLarge.length === FRONTAGE_TARGET.landmarkLargeSites
   );
@@ -471,7 +490,11 @@ export const SPARE_PLOTS_PER_DISTRICT =
   FRONTAGE_TARGET.squares * 4 -
   (FRONTAGE_TARGET.universitySites + FRONTAGE_TARGET.landmarkLargeSites) * 9 -
   BUILDABLE_PARKS_PER_DISTRICT +
-  (FRONTAGE_TARGET.squares - FRONTAGE_TARGET.civicSites - FRONTAGE_TARGET.landmarkSmallSites) * 4;
+  (FRONTAGE_TARGET.squares -
+    FRONTAGE_TARGET.civicSites -
+    FRONTAGE_TARGET.landmarkSmallSites -
+    FRONTAGE_TARGET.cityHallSites) *
+    4;
 
 export const BUILDABLE_RESIDENTIAL_PER_DISTRICT = FRONTAGE_TARGET.residential;
 export const BUILDABLE_COMMERCIAL_PER_DISTRICT = FRONTAGE_TARGET.commercial;
@@ -480,6 +503,7 @@ export const CIVIC_SITES_PER_DISTRICT = FRONTAGE_TARGET.civicSites;
 export const UNIVERSITY_SITES_PER_DISTRICT = FRONTAGE_TARGET.universitySites;
 export const LANDMARK_LARGE_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkLargeSites;
 export const LANDMARK_SMALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkSmallSites;
+export const CITY_HALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.cityHallSites;
 
 /**
  * The order in which a ring of districts gets annexed.
@@ -1076,6 +1100,8 @@ interface DistrictPlots {
   readonly landmarksLarge: Coord[];
   /** Lower-left plot of each 2x2 landmark site, in site order. */
   readonly landmarksSmall: Coord[];
+  /** Lower-left plot of each 2x2 city hall site, in site order. */
+  readonly cityHalls: Coord[];
   /** Lower-left plot of each 2x2 square nothing stands on. */
   readonly spareSquares: Coord[];
   readonly courtyards: Coord[];
@@ -1116,6 +1142,7 @@ function placeDistrict(index: number): DistrictPlots {
     universities: plan.universities.map((site) => toGlobal(site.cell)),
     landmarksLarge: plan.landmarksLarge.map((site) => toGlobal(site.cell)),
     landmarksSmall: plan.landmarksSmall.map((site) => toGlobal(site.cell)),
+    cityHalls: plan.cityHalls.map((site) => toGlobal(site.cell)),
     spareSquares: plan.spareSquares.map((site) => toGlobal(site.cell)),
     courtyards: plan.courtyards.map(toGlobal),
     roads,
@@ -1179,6 +1206,15 @@ export class CityLayout {
    */
   private readonly _landmarksLarge: Coord[] = [];
   private readonly _landmarksSmall: Coord[] = [];
+  /**
+   * City hall sites, one per district and only ever one of them built on.
+   *
+   * A list rather than a single coordinate for the same reason every other site
+   * list is one: `ensure` appends district by district and nothing already in it
+   * moves. The city's one hall stands on entry 0 — district 0's square — and the
+   * rest are reserved land the renderer draws as empty.
+   */
+  private readonly _cityHalls: Coord[] = [];
   /** Lower-left plot of every 2x2 square held back with nothing on it. */
   private readonly _spareSquares: Coord[] = [];
   /**
@@ -1210,6 +1246,7 @@ export class CityLayout {
         universities,
         landmarksLarge,
         landmarksSmall,
+        cityHalls,
         spareSquares,
         courtyards,
         roads,
@@ -1221,6 +1258,7 @@ export class CityLayout {
       this._universities.push(...universities);
       this._landmarksLarge.push(...landmarksLarge);
       this._landmarksSmall.push(...landmarksSmall);
+      this._cityHalls.push(...cityHalls);
       this._spareSquares.push(...spareSquares);
       this._parks.push(...courtyards.slice(0, BUILDABLE_PARKS_PER_DISTRICT));
       this._spare.push(...courtyards.slice(BUILDABLE_PARKS_PER_DISTRICT));
@@ -1408,6 +1446,22 @@ export class CityLayout {
 
   get landmarkSmallSites(): number {
     return this._landmarksSmall.length;
+  }
+
+  /**
+   * Lower-left plot of the i-th city hall site. The building spans this plot and
+   * the three at +x, +z and +x+z.
+   *
+   * Only site 0 is ever built on — there is one city hall — and the rest are
+   * reserved squares the renderer draws as empty ground. See
+   * FRONTAGE_TARGET.cityHallSites for why they are reserved at all.
+   */
+  cityHallSiteCell(i: number): Coord {
+    return this._cityHalls[i] as Coord;
+  }
+
+  get cityHallSites(): number {
+    return this._cityHalls.length;
   }
 
   /** Every plot of one zone, in build order. Used by the zone overlay. */

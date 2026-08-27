@@ -6,6 +6,7 @@ import {
   OCCUPANCY_EMPTY,
   OCCUPANCY_FULL,
   SERVICES,
+  TAX_STEPS,
 } from '../src/sim/config';
 import {
   civicBuildings,
@@ -21,6 +22,7 @@ import {
   parkCapacity,
   residents,
   serviceAllowed,
+  taxStep,
   serviceCount,
   shopCapacity,
   siteCapacity,
@@ -529,6 +531,32 @@ describe('the v6 migration', () => {
     expect(civicBuildings(back)).toBe(3);
     expect(back.fires).toEqual([{ kind: 'shop', index: 3, startedAt: 8_950 }]);
     expect(back.fireCursor).toBe(42);
+  });
+
+  it('hands a returning city the hall its policies imply', () => {
+    // The one field in this file that defaults to *true* for an older save. A
+    // v8 city may have a punitive rate set, fares waived and the away switch on,
+    // and all three are gated on a building that did not exist when it chose
+    // them. Defaulting the hall to false would revert every one of them
+    // silently: the settings would still read as chosen and would no longer do
+    // anything, and the ledger would quietly change.
+    const old = migrate({ version: 8, taxRate: 3, freeTransport: true, autoDevelop: true });
+    expect(old?.cityHall).toBe(true);
+    expect(old?.taxRate).toBe(3);
+    expect(old?.freeTransport).toBe(true);
+    expect(taxStep(old as GameState)).toBe(TAX_STEPS[3]);
+
+    // A save with no version at all is older still, and gets the same answer.
+    expect(migrate({ homes: 3 })?.cityHall).toBe(true);
+
+    // A save written by this version says for itself, either way.
+    expect(migrate({ version: SAVE_VERSION, cityHall: true })?.cityHall).toBe(true);
+    expect(migrate({ version: SAVE_VERSION })?.cityHall).toBe(false);
+    expect(migrate({ version: SAVE_VERSION, cityHall: 'yes' })?.cityHall).toBe(false);
+  });
+
+  it('leaves a fresh city to earn its own', () => {
+    expect(createState(0).cityHall).toBe(false);
   });
 
   it('brings back the last building of a zone written off to nothing', () => {

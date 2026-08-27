@@ -67,9 +67,9 @@ prints the distribution the target came from.
 Only the 108 of those 144 plots that front a street could ever be for sale, and
 not all of them are: two 3x3 squares go to the university and a landmark, and
 `civicSites` then claims every 2x2 it can find — six for civic buildings, one
-for a smaller landmark, and two left deliberately empty. That leaves 24 housing,
-45 commercial and 13 industrial plots a district, plus eight interior courtyard
-plots of which four carry parks. Because the road-adjacent R/I split is *not*
+for a smaller landmark, one for the city hall, and one left deliberately empty.
+That leaves 24 housing, 45 commercial and 13 industrial plots a district, plus
+eight interior courtyard plots of which four carry parks. Because the road-adjacent R/I split is *not*
 seed-invariant, `districtPlanAt` rejection-samples the district seed a second
 time until it is. Same trick, one level up.
 
@@ -268,11 +268,33 @@ nothing when nothing is built, which is what stops the housing gate deadlocking
 the opening.
 
 Each stands on a 2x2 site reserved before the housing list is drawn, and the
-three types draw from one city-wide list by a fixed interleave — hospitals take
-site 3k, police 3k+1, fire 3k+2. Assigning them to whichever district was worst
+five 2x2 types draw from one city-wide list by a fixed interleave — hospitals
+take site 5k, police 5k+1, fire 5k+2, schools 5k+3, depots 5k+4. Assigning them to whichever district was worst
 covered would make a building's position depend on the state when it was built,
 which a save of counts cannot reproduce; the city would rearrange itself on the
 next refresh.
+
+That divisor is `CIVIC_SERVICES.length`, and it is the number that must never
+move for convenience: a sixth entry in that table would put every hospital,
+police station, fire station, school and depot in the city on a different square,
+and a returning player would watch their city rearrange itself around a save that
+had not changed. Anything new that wants a 2x2 gets a list of its own, sliced
+after these — which is what the **city hall** does.
+
+There is one city hall in a city, on district 0's reserved square, and what it
+buys is the right to have policies: the tax rate, free transport and
+auto-develop are all gated on it, and until it is built the city runs at
+`TAX_NEUTRAL` with fares on. That is exactly what a fresh city already got, so
+nothing about the opening minutes changes. A returning save from before it
+existed is *granted* one, because those cities set their rates under the old
+rules and reverting them silently would change what they earn for reasons the
+player never chose. Its square is reserved in every district and built on in
+one — the reservation has to be uniform or `homeCapacity` stops being a
+multiplication.
+
+Worth stating because it is a lever that does not work: the hall lands at about
+1.3 hours whatever it costs. A seven-fold price change moves the unlock by
+thirteen minutes, because what gates it is the opening's ramp and not the number.
 
 ### Coverage costs something to keep
 

@@ -324,6 +324,17 @@ button.tab[aria-selected='true'] {
 .cap + .steps { margin-bottom: 14px; }
 .services:last-child { margin-bottom: 0; }
 
+/* The one line on a panel that says why the rest of it is dead. Same idiom as
+   every blocker reason in this HUD, given a place to stand rather than being
+   crammed onto a control that is already showing a price. */
+.note {
+  margin: -4px 0 14px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--dim);
+}
+.note:empty { display: none; }
+
 .rci-row {
   display: flex;
   align-items: center;

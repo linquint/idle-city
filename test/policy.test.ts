@@ -11,28 +11,49 @@ import {
   SERVICES,
   TAX_NEUTRAL,
   TAX_STEPS,
+  UPKEEP_RATE,
 } from '../src/sim/config';
 import {
+  cityHallBlocker,
+  cityHallCost,
   civicSiteCapacity,
   demandTargets,
+  developed,
   fareIncome,
+  faresWaived,
   happinessTarget,
   happinessTerms,
   homeCapacity,
   income,
   labourReach,
+  ledgerScale,
+  plotCapacity,
+  policyBlocker,
   residents,
   riders,
   siteCapacity,
   taxStep,
   transitCoverage,
+  upkeep,
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { migrate } from '../src/sim/save';
 import { createState, type GameState } from '../src/sim/state';
 import { housed, making, served, trading } from './levels';
 
-const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
+/**
+ * A city with a city hall, unless a test says otherwise.
+ *
+ * The hall is what makes a rate settable at all, and every test below is about
+ * what a rate *does* rather than about whether the city may set one. That gate
+ * has a describe block of its own at the foot of the file, which is where a
+ * default of `true` here is answered for.
+ */
+const state = (patch: Partial<GameState> = {}): GameState => ({
+  ...createState(0),
+  cityHall: true,
+  ...patch,
+});
 const at = (patch: Partial<GameState> = {}): Game => new Game(state(patch));
 
 /** A city with services, money coming in, and nothing else moving. */
@@ -362,5 +383,123 @@ describe('the bus fleet', () => {
     for (let i = 0; i < 20; i++) cars.update(0.1, new THREE.Vector3(0, 0, 0), 0);
     expect(JSON.stringify(s)).toBe(before);
     for (const key of Object.keys(s)) expect(key.toLowerCase()).not.toContain('bus');
+  });
+});
+
+describe('the city hall', () => {
+  /**
+   * The gate everything above is a test of the far side of.
+   *
+   * A rate is policy and policy needs somebody to set it, so a city with no
+   * hall runs at TAX_NEUTRAL with fares on — which is exactly what a fresh city
+   * already got, so nothing about the opening minutes changes. What makes this
+   * worth testing rather than asserting once is the *storage*: the player's
+   * choices are kept rather than overwritten, so a city that buys a hall goes
+   * straight back onto the rate it had.
+   */
+  it('is not there to begin with', () => {
+    expect(createState(0).cityHall).toBe(false);
+  });
+
+  it('runs the city at neutral with fares on until it is built', () => {
+    const ungoverned = state({
+      cityHall: false,
+      taxRate: TAX_STEPS.length - 1,
+      freeTransport: true,
+      ...housed(24),
+      depots: 2,
+      depotStaff: 1,
+    });
+    expect(taxStep(ungoverned)).toBe(TAX_STEPS[TAX_NEUTRAL]);
+    expect(faresWaived(ungoverned)).toBe(false);
+    expect(fareIncome(ungoverned)).toBeGreaterThan(0);
+    // The neutral reading is exactly what a city with no rate set at all gets,
+    // which is the whole claim that the opening is unchanged.
+    const fresh = state({ cityHall: false, ...housed(24), depots: 2, depotStaff: 1 });
+    expect(income(ungoverned)).toBeCloseTo(income(fresh), 9);
+  });
+
+  it('keeps the choices it was not allowed to act on', () => {
+    // The migration case, as a property: a stored rate is a decision the player
+    // made, and losing it silently is worse than not acting on it.
+    const stored = { taxRate: TAX_STEPS.length - 1, freeTransport: true };
+    const before = state({ ...stored, cityHall: false, ...housed(24), depots: 2, depotStaff: 1 });
+    const after = state({ ...stored, cityHall: true, ...housed(24), depots: 2, depotStaff: 1 });
+    expect(before.taxRate).toBe(after.taxRate);
+    expect(before.freeTransport).toBe(after.freeTransport);
+    // And acting on them is exactly what the hall changes.
+    expect(taxStep(after)).toBe(TAX_STEPS[TAX_STEPS.length - 1]);
+    expect(faresWaived(after)).toBe(true);
+    expect(fareIncome(after)).toBe(0);
+  });
+
+  it('refuses the controls rather than taking them silently', () => {
+    const game = at({ cityHall: false });
+    game.setTaxRate(TAX_STEPS.length - 1);
+    game.setFreeTransport(true);
+    game.setAutoDevelop(true);
+    expect(game.state.taxRate).toBe(TAX_NEUTRAL);
+    expect(game.state.freeTransport).toBe(false);
+    expect(game.state.autoDevelop).toBe(false);
+    expect(policyBlocker(game.state)).toBe('Needs a city hall');
+  });
+
+  it('takes them the moment the hall is up', () => {
+    const game = at({ cityHall: false, cash: cityHallCost() });
+    expect(game.buildCityHall()).toBe(true);
+    expect(game.state.cash).toBeCloseTo(0, 9);
+    game.setTaxRate(TAX_STEPS.length - 1);
+    game.setFreeTransport(true);
+    game.setAutoDevelop(true);
+    expect(game.state.taxRate).toBe(TAX_STEPS.length - 1);
+    expect(game.state.freeTransport).toBe(true);
+    expect(game.state.autoDevelop).toBe(true);
+    expect(policyBlocker(game.state)).toBeNull();
+  });
+
+  it('is bought once and only once', () => {
+    const game = at({ cityHall: false, cash: cityHallCost() * 4 });
+    expect(game.buildCityHall()).toBe(true);
+    expect(game.buildCityHall()).toBe(false);
+    expect(cityHallBlocker(game.state)).toBe('Built');
+    expect(game.state.cash).toBeCloseTo(cityHallCost() * 3, 9);
+  });
+
+  it('will not develop the city away without one', () => {
+    // The stored switch survives — a v8 save may arrive with it on — and the
+    // *effect* is what the gate holds back.
+    const game = at({ cityHall: false, cash: 1e6, ...housed(4) });
+    Object.assign(game.state, { autoDevelop: true });
+    const before = game.state.homes + game.state.shops + game.state.industry;
+    for (let i = 0; i < 600; i++) game.advance(0.1);
+    expect(game.state.homes + game.state.shops + game.state.industry).toBe(before);
+
+    Object.assign(game.state, { cityHall: true });
+    for (let i = 0; i < 600; i++) game.advance(0.1);
+    expect(game.state.homes + game.state.shops + game.state.industry).toBeGreaterThan(before);
+  });
+
+  it('costs nothing to happiness and nothing to the land the city sells', () => {
+    // Two things it deliberately does not do. The four happiness weights sum to
+    // exactly 1 and a UI gate is not worth re-opening that; and the square it
+    // stands on came out of land that was already spare, so the annexation gate
+    // does not move under a player who has never opened the tab.
+    // Explicitly ungoverned: the helper at the top of this file hands every
+    // other test a hall, and this pair is the one comparison that needs both.
+    const bare = state({ cityHall: false, ...housed(24), ...trading(45), ...making(13) });
+    const governed = { ...bare, cityHall: true };
+    expect(happinessTarget(governed)).toBe(happinessTarget(bare));
+    expect(developed(governed)).toBe(developed(bare));
+    expect(plotCapacity(governed)).toBe(plotCapacity(bare));
+  });
+
+  it('joins the wage bill', () => {
+    const bare = state({ cityHall: false, ...housed(24), hospitals: 1, hospitalStaff: 1 });
+    const governed = { ...bare, cityHall: true };
+    expect(upkeep(governed)).toBeGreaterThan(upkeep(bare));
+    expect(upkeep(governed) - upkeep(bare)).toBeCloseTo(
+      UPKEEP_RATE * cityHallCost() * ledgerScale(bare),
+      9,
+    );
   });
 });

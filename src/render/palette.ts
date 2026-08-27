@@ -62,6 +62,13 @@ export const PALETTE = {
   // dark. The two sizes share a palette and differ in silhouette.
   landmark: 0xe4dccb,
   landmarkRoof: 0x9c6f4f,
+  // The city hall. Pale limestone like a landmark, on the one roof colour
+  // nothing else in the city wears — the map already has mint, cornflower, red,
+  // two browns and a lime on 2x2 roofs, and a seventh blue would be the police
+  // station at a glance. There is exactly one of these in a city, so it has to
+  // be findable rather than merely different.
+  hall: 0xd3cfc4,
+  hallRoof: 0x9a8fb8,
   // The waterfront. A quay is a deck the colour of the kerbs the city already
   // has, because it is the same thing: made ground with something standing on
   // it. Hulls are darker than anything on land so a ship reads against the

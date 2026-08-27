@@ -1201,6 +1201,36 @@ class CivicMeshes {
 const TOWER_H = 3.4;
 const UNIVERSITY_TOWER_H = 9.5;
 
+/** How tall the city hall's clock tower stands above its slab. */
+const HALL_TOWER_H = 8.5;
+
+/**
+ * The city hall: a low pale slab with a slim centred clock tower.
+ *
+ * Centred, and that is the whole distinction from the hospital — which carries
+ * a *tower off one corner*, deliberately, so it reads as a wing rather than as
+ * a spire. This one is the spire: narrower, taller, dead centre, with a lit band
+ * near the top. From the play camera a building with something symmetrical on
+ * top of it is the one thing on a 2x2 square that reads as a seat of government
+ * rather than as another shed.
+ *
+ * There is one of these in the whole city, so it is the one civic type whose job
+ * is to be *found* rather than merely told apart. Hence the tower rather than a
+ * parapet, and hence a roof colour nothing else wears.
+ */
+function cityHallSet(scene: THREE.Scene, capacity: number): CivicMeshes {
+  const clock = new Glow(PALETTE.sodium, 0.5);
+  return new CivicMeshes(
+    scene,
+    { body: PALETTE.hall, roof: PALETTE.hallRoof, height: 2.4 },
+    new THREE.BoxGeometry(1.5, HALL_TOWER_H, 1.5),
+    clock.material,
+    new THREE.Vector3(0, HALL_TOWER_H / 2, 0),
+    capacity,
+    clock,
+  );
+}
+
 /** One mesh set per service, in SERVICES order. */
 function civicSet(scene: THREE.Scene, service: Service, capacity: number): CivicMeshes {
   if (service.key === 'hospital') {
@@ -1346,11 +1376,12 @@ class Outline {
  * same box. Asserted in test/skyline.test.ts, so a later change cannot quietly
  * double the draw calls.
  *
- * Civic buildings and landmarks are counted separately and are not part of this:
- * they stand on 2x2 and 3x3 sites, have no level ladder, and are told apart by
- * silhouette rather than by style. Eight types at three meshes each — six
- * services and two landmark sizes — and the count grows with the *table* rather
- * than with the city. See `civicSet` and `landmarkSet`.
+ * Civic buildings, the city hall and landmarks are counted separately and are
+ * not part of this: they stand on 2x2 and 3x3 sites, have no level ladder, and
+ * are told apart by silhouette rather than by style. Nine types at three meshes
+ * each — six services, the city hall and two landmark sizes — and the count
+ * grows with the *table* rather than with the city. See `civicSet`,
+ * `cityHallSet` and `landmarkSet`.
  */
 export const BUILDING_MESH_BUDGET = 24;
 
@@ -1370,8 +1401,8 @@ export class Buildings {
    * types never move and never need rewriting as a block.
    */
   /**
-   * Every building that stands on a reserved square: the six services, and the
-   * two landmark sizes.
+   * Every building that stands on a reserved square: the six services, the city
+   * hall, and the two landmark sizes.
    *
    * One list rather than two, because from here they are the same thing — a
    * count, a site list to index into, and a mesh set. What tells them apart is
@@ -1425,6 +1456,17 @@ export class Buildings {
         count: (state: Readonly<GameState>) => Buildings.serviceCount(state, service),
         shown: 0,
       })),
+      // The city hall. One per city on a list of its own — a square reserved in
+      // every district and built on in exactly one — so it needs no interleave
+      // either, and adding it here rather than to SERVICES is what keeps every
+      // existing civic building on the site it was already standing on.
+      {
+        meshes: cityHallSet(scene, 1),
+        growth: new GrowthSchedule(duration),
+        site: (i: number) => this.layout.cityHallSiteCell(i),
+        count: (state: Readonly<GameState>) => (state.cityHall ? 1 : 0),
+        shown: 0,
+      },
       // Landmarks stand on squares of their own, one of each size a district, so
       // the i-th landmark is the i-th district's and needs no interleave.
       ...LANDMARKS.map((landmark) => ({

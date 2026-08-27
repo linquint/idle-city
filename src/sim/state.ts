@@ -195,6 +195,23 @@ export interface GameState {
   cruiseTerminals: number;
   cargoTerminals: number;
   /**
+   * The city hall. One per city, on district 0's reserved 2x2 square.
+   *
+   * A boolean and nothing else, which is the whole of what it is: it holds no
+   * level, has no coverage, carries no happiness weight and stands in exactly
+   * one place. What it does is *gate* — the tax rate, free transport and
+   * auto-development are all policy, and a city with nobody to set policy runs
+   * at TAX_NEUTRAL with fares on. That is already what a fresh city gets, so
+   * nothing about the opening minutes changes.
+   *
+   * The stored policy fields survive without it rather than being overwritten:
+   * `taxStep` reads neutral while there is no hall and the player's own choice
+   * again the moment there is one. A save that predates this gets a hall on
+   * migration — see `migrate` — because those cities set their rates under the
+   * old rules and had every right to.
+   */
+  cityHall: boolean;
+  /**
    * The road out of town, and the works standing along it.
    *
    * A boolean and a count, and the boolean is the progression gate: the highway
@@ -323,6 +340,7 @@ export function createState(now = Date.now()): GameState {
     stadiums: 0,
     cruiseTerminals: 0,
     cargoTerminals: 0,
+    cityHall: false,
     highway: false,
     estates: 0,
     hospitals: 0,

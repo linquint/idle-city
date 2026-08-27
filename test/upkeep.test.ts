@@ -365,7 +365,7 @@ describe('spending against net', () => {
     // against a full treasury — so the rule is about *what* is bought rather
     // than how much is left: nothing that adds to the payroll while the payroll
     // is already more than the city earns.
-    const game = at({ ...insolvent({ cash: 500_000 }), autoDevelop: true });
+    const game = at({ ...insolvent({ cash: 500_000 }), autoDevelop: true, cityHall: true });
     expect(netIncome(game.state)).toBeLessThan(0);
     const civic = (): number => game.state.hospitals + game.state.police + game.state.fire;
 
