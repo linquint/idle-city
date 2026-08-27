@@ -64,6 +64,7 @@ import {
   landmarkCoverage,
   landmarkReadings,
   industryCost,
+  netIncome,
   parkBlocker,
   parkCapacity,
   levelAt,
@@ -85,6 +86,7 @@ import {
   shopCost,
   terminalBlocker,
   terminalReadings,
+  upkeep,
   visitors,
   willAutoAnnex,
 } from '../sim/economy';
@@ -170,6 +172,8 @@ export class Hud {
     cash: el('cash'),
     rate: el('rate'),
     ledgerCash: el('ledger-cash'),
+    ledgerGross: el('ledger-gross'),
+    ledgerUpkeep: el('ledger-upkeep'),
     ledgerRate: el('ledger-rate'),
     earned: el('earned'),
     residents: el('residents'),
@@ -538,7 +542,11 @@ export class Hud {
     const n = this.nodes;
 
     n.cash.textContent = fmt(s.cash);
-    n.rate.textContent = `${fmt(income(s))}/s`;
+    // Net, not gross. The dock's one rate is what the treasury is actually
+    // gaining, so a city whose wage bill has passed its rent reads as falling
+    // rather than as earning — see `netIncome`. What the buildings *earn* is a
+    // separate row in the Treasury tab, where the difference is the point.
+    n.rate.textContent = `${fmt(netIncome(s))}/s`;
 
     if (this.open === 'build') this.paintBuild(s);
     else if (this.open === 'treasury') this.paintTreasury(s);
@@ -554,7 +562,14 @@ export class Hud {
   private paintTreasury(s: Readonly<GameState>): void {
     const n = this.nodes;
     n.ledgerCash.textContent = fmt(s.cash);
-    n.ledgerRate.textContent = fmt(income(s));
+    // Three rows rather than one, because with upkeep the single "per second"
+    // number could no longer answer either question a player asks of it: what
+    // the city earns and what it keeps are different amounts now, and the
+    // difference is the decision the tab exists for.
+    const due = upkeep(s);
+    n.ledgerGross.textContent = fmt(income(s));
+    n.ledgerUpkeep.textContent = due > 0 ? `−${fmt(due)}` : fmt(0);
+    n.ledgerRate.textContent = fmt(netIncome(s));
     n.earned.textContent = fmt(s.earned);
     n.residents.textContent = fmtInt(residents(s));
     // Plots taken, not buildings owned. A merged building covers two plots, so
@@ -992,6 +1007,11 @@ export class Hud {
     if (report.services > 0) rows.push(['Services opened', fmtInt(report.services)]);
     if (report.districts > 0) rows.push(['Districts annexed', fmtInt(report.districts)]);
     if (report.spent > 1) rows.push(['Reinvested', fmt(report.spent)]);
+    // Alongside the reinvestment rather than folded into the collection, because
+    // they are two different stories: one is the city spending what it earned on
+    // itself, the other is what it owed whether or not it earned anything. A
+    // player whose services came back browned out is owed the second one.
+    if (report.wages > 1) rows.push(['Wages paid', fmt(report.wages)]);
     // Fires are reported even when none started, once any did: "0 lost" is the
     // half of the story that tells the player the fire service is working.
     if (report.firesStarted > 0) {

@@ -271,8 +271,13 @@ describe('offline progress', () => {
     const report = game.catchUp(6 * 3600);
     expect(report.spent).toBeGreaterThan(0);
 
+    // Three outgoings now, not two: what auto-development bought, and what the
+    // city paid its civic buildings in wages. `earned` is the gross line, so the
+    // ledger only closes when both come off it — a check with either one missing
+    // would pass on a build that silently double-charged the other.
+    expect(report.wages).toBeGreaterThan(0);
     const trueEarned = game.state.earned - earnedBefore;
-    const trueSpent = trueEarned - (game.state.cash - cashBefore);
+    const trueSpent = trueEarned - (game.state.cash - cashBefore) - report.wages;
     // Relative rather than absolute: six hours of a levelling city runs the
     // ledger into the billions, where a double has about a millionth to give
     // and an absolute tolerance of 5e-7 is asking for more precision than the

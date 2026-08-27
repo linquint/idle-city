@@ -1083,6 +1083,179 @@ export const HAPPINESS_FLOOR = 0.55;
  */
 export const HAPPINESS_MIN_BUILD = 0.35;
 
+// ------------------------------------------------------------------ upkeep
+
+/**
+ * Cash a civic building costs to run each second, per unit of what it cost to
+ * open and per unit of what a plot of the city is worth.
+ *
+ * Civic buildings used to cost capital once and nothing afterwards, which made
+ * "buy every service the land allows" strictly correct and left the Treasury tab
+ * with nothing to say. This is the running cost that turns coverage into a
+ * budget: `upkeep` is charged against the treasury every tick, `netIncome` is
+ * what the dock reports, and what a city cannot pay comes out of its staffing.
+ *
+ * Priced off `Service.base` rather than as a column of its own, so a university
+ * costs more to run than a police station without a second table to keep in step
+ * with the first — and see `serviceUpkeep` for what that costs, because it is
+ * lopsided. Multiplied by `ledgerScale`, which is the term that keeps the bill
+ * from falling away as the city climbs, and which carries the two weaker scale
+ * terms that were measured and rejected first.
+ *
+ * With `ledgerScale` at 1 for a fresh city, the constant is a payback period:
+ * 1/UPKEEP_RATE seconds, or 111 minutes, for a building to have spent its own
+ * opening price on wages at the opening's premises.
+ *
+ * Measured (tools/upkeep.calibrate.mjs), as a share of gross income on cities
+ * built out to their own frontage with every service the land allows. The rows
+ * are identical to three significant figures at apartments, towers and
+ * megastructures, which is the scale term doing its job, so one table covers the
+ * whole ladder:
+ *
+ *   rate       1 district   12 districts   49 districts
+ *   5.0e-5           3.7%           4.1%           6.1%
+ *   1.5e-4          11.0%          12.3%          18.3%
+ *   5.0e-4          36.5%          40.9%          60.9%
+ *   1.5e-3         109.5%         122.7%         182.8%
+ *
+ * 5.0e-5 is too quiet to be a decision — a fully served city hands back 96% of
+ * its ledger and the tab may as well not exist. 1.5e-3 is the other failure:
+ * more than the city earns, so the correct play is to run with no hospital in it
+ * and the whole coverage model inverts. 5.0e-4 is playable and takes over half
+ * the ledger at scale, which makes coverage the only decision in the game rather
+ * than one of them. 1.5e-4 leaves services worth buying and worth counting.
+ *
+ * Closed-loop over 24 hours, the wage bill ends at 16.6% of gross under
+ * auto-develop, 16.2% under the discount-chaser and 16.8% under the disciplined
+ * policy, and no policy spends a second unable to make its wages. What it costs
+ * the pacing is small and worth stating: auto-develop's first annex moves 1.63h
+ * -> 1.64h and its 24-hour treasury 5.4e10 -> 2.6e10, with the same 28 homes and
+ * one shop fewer. See tools/economy.calibrate.mjs for the rest of that diff.
+ */
+export const UPKEEP_RATE = 1.5e-4;
+
+/**
+ * How a type's upkeep compounds over the buildings it already has.
+ *
+ * Gentler than CIVIC_GROWTH (1.35) and that is a hard constraint rather than a
+ * preference: at 1.35 the n-th hospital's wage bill would climb exactly as fast
+ * as its price, so a city that could afford to open its second could never
+ * afford to run it.
+ *
+ * How much gentler is the thing that was measured, and the answer is: barely.
+ * The city's income grows quadratically in the district count while a compounded
+ * payroll grows exponentially in it, so anything with real curvature in it stops
+ * being a share of the ledger and becomes the whole of it. At the configured
+ * rate, as a share of gross income:
+ *
+ *   growth     1 district   12 districts   49 districts
+ *   1.00            10.9%          11.0%          10.9%
+ *   1.01            10.9%          11.6%          14.0%
+ *   1.02            11.0%          12.3%          18.3%
+ *   1.04            11.0%          13.8%          32.7%
+ *   1.08            11.0%          17.4%         120.6%
+ *
+ * 1.08 was the first guess and is not survivable — a full map pays more in wages
+ * than it earns before it has done anything wrong. 1.00 is flat, and flat is the
+ * safe answer, but it says nothing: the twentieth hospital costs the same to run
+ * as the first, which is the "buy everything" problem again one level down.
+ *
+ * 1.02 is the value that keeps both. A district's six 2x2 sites cost 6.31x one
+ * building's wages against the 14.4x they cost to open, so hoarding is dearer
+ * than it looks and never dear enough to close; and across the whole map the
+ * share drifts 11.0% -> 18.3%, which is a legible brake on sprawl rather than a
+ * wall. It sits beside ANNEX_GROWTH as the second thing expansion costs.
+ */
+export const UPKEEP_GROWTH = 1.02;
+
+/**
+ * Seconds for unpaid wages to empty a civic building's payroll.
+ *
+ * The bankruptcy rule, and it is a decay rather than a demolition on purpose.
+ * Cash cannot go below zero, so something has to give when net income does —
+ * and staffing is the one quantity that can give reversibly: it is already an
+ * integrated scalar with a ramp (CIVIC_RAMP_SECONDS), so the same machinery that
+ * opens a hospital closes it, and the same machinery reopens it. Destroying
+ * buildings instead would be permanent loss, which is the fastest way to make
+ * someone close an idle game.
+ *
+ * It is also what makes the rule self-limiting. Upkeep is charged against
+ * *staffed* buildings, so a city that cannot pay stops paying: staffing falls,
+ * the wage bill falls with it, and the city settles at the coverage it can
+ * afford rather than at zero. Income then recovers, staffing ramps back at
+ * CIVIC_RAMP_SECONDS, and the equilibrium moves up. A city that cannot afford
+ * its only hospital keeps a fraction of a hospital.
+ *
+ * Self-limiting is not the same as escapable, and the difference cost this
+ * feature a constant: the fixed point this settles at still owes more than the
+ * city earns, so the treasury sits at nothing forever unless something else
+ * guarantees a surplus. UPKEEP_KEEP_SHARE is that something, and it carries the
+ * measurement.
+ *
+ * 180 against the 90 of the ramp: twice as slow to lose a payroll as to fill
+ * one, for the same reason RECOVER_SPREAD_SECONDS is four times faster than
+ * ABANDON_SPREAD_SECONDS — coming back has to be quicker than falling over, or
+ * one bad minute costs ten good ones. Scaled by the *share* of the bill that
+ * went unpaid, so a city a penny short loses almost nothing and one paying
+ * nothing at all loses the payroll on this constant.
+ */
+export const UPKEEP_ARREARS_TAU = 180;
+
+/**
+ * Seconds of shortfall the automatic passes hold back before they spend.
+ *
+ * `autoDevelop` and `willAutoAnnex` both reserve against *net* income rather
+ * than gross, or a city left to run itself would spend into a brownout: every
+ * service it opened would raise the wage bill it was already failing to pay,
+ * and the player would come back to a city with full coverage on paper and no
+ * staff in any of it.
+ *
+ * A minute of the shortfall, which is also the hysteresis that keeps the pair
+ * from oscillating. Without it a city sitting at exactly zero net would buy,
+ * fall into arrears, decay staffing until it was solvent again, and buy again —
+ * a limit cycle nobody watching could read. AUTO_ANNEX_RESERVE already does the
+ * same job for the treasury; this is the rate's half of it.
+ */
+export const UPKEEP_RESERVE_SECONDS = 60;
+
+/**
+ * The share of what the city takes in that its wage bill may never touch.
+ *
+ * The floor that stops the bankruptcy rule from being a deadlock, and it is the
+ * same shape as OCCUPANCY_FLOOR and HAPPINESS_FLOOR for the same reason: a
+ * neglected city should feel like one that has stopped growing, not one that has
+ * been switched off.
+ *
+ * What it says is that wages are budgeted out of *revenue*, never out of
+ * reserves. That is a stronger rule than "cash cannot go negative" and both of
+ * the weaker readings were built and measured first:
+ *
+ *   - paying wages out of the treasury and flooring cash at zero settles at a
+ *     fixed point that still owes more than the city earns. Staffing falls until
+ *     the ramp back up balances the arrears decay, and that balance sits at a
+ *     *positive* shortfall — so every penny of income goes on wages forever.
+ *     Measured on a city holding a hospital and a university it could not pay
+ *     for: staffing settled at 84%, net at -0.35/s, and the treasury at 0.00 for
+ *     six simulated hours with no way out of it;
+ *   - keeping a tenth of each *tick's* income is no better, because the next
+ *     tick's bill eats it. The same city holds a flat 0.02 in the bank forever.
+ *
+ * Against revenue it accumulates: the treasury grows at UPKEEP_KEEP_SHARE times
+ * gross income however deep the arrears are, so the way back is slow and visible
+ * rather than closed. The same city banks 92 an hour and can buy its way out.
+ *
+ * The consequence worth stating, because it is a design decision and not a side
+ * effect: a *rich* city that has over-bought coverage browns out too. It cannot
+ * spend its treasury on wages it does not earn, so hoarding cash is no defence
+ * against having bought more services than the city can carry — which is the
+ * whole decision this feature exists to create.
+ *
+ * The two readouts disagree while it bites: the dock shows a negative net and
+ * the treasury creeps up anyway, because part of the bill is going unpaid. What
+ * is being paid instead is staffing, and the services panel is where that shows.
+ */
+export const UPKEEP_KEEP_SHARE = 0.1;
+
 // -------------------------------------------------------------- landmarks
 
 export interface Landmark {

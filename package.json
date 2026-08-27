@@ -16,7 +16,8 @@
     "parcels:calibrate": "node tools/parcels.calibrate.mjs",
     "economy:calibrate": "node tools/economy.calibrate.mjs",
     "water:calibrate": "node tools/water.calibrate.mjs",
-    "estates:calibrate": "node tools/estates.calibrate.mjs"
+    "estates:calibrate": "node tools/estates.calibrate.mjs",
+    "upkeep:calibrate": "node tools/upkeep.calibrate.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

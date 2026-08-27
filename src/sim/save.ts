@@ -34,16 +34,17 @@ import {
   type LevelCohort,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v8';
+export const SAVE_KEY = 'idle-city/save/v9';
 
 /**
  * Keys this game has written in the past, newest first.
  *
  * A version bump changes where the save lives, and a player who comes back to a
- * new build has not agreed to lose their city — so a v8 miss falls back through
+ * new build has not agreed to lose their city — so a v9 miss falls back through
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v8',
   'idle-city/save/v7',
   'idle-city/save/v6',
   'idle-city/save/v5',

@@ -24,6 +24,7 @@ compiles to about 10 kB gzipped on top of three.
 | `npm run test:citygen` | District generation acceptance tests (plain Node) |
 | `npm run citygen:calibrate` | Plot-count distribution over 1000 seeds |
 | `npm run economy:calibrate` | 24h demand/pricing sweep under four policies |
+| `npm run upkeep:calibrate` | What the civic wage bill is worth, swept over rate and growth |
 
 ## How it is put together
 
@@ -219,6 +220,43 @@ covered would make a building's position depend on the state when it was built,
 which a save of counts cannot reproduce; the city would rearrange itself on the
 next refresh.
 
+### Coverage costs something to keep
+
+Civic buildings also carry an **operating upkeep**, which is what stops "buy
+every service the land allows" from being strictly correct. The bill is priced
+off what each type cost to open, compounded gently over how many of them there
+are, and scaled by `ledgerScale` — what a plot of the city is worth against a
+plot of a fresh one. That last term is the one that took measuring. Income
+climbs the level ladder *twice*, once through the people paying rent and once
+through the shop multiplier that rent is multiplied by, so a bill scaled by
+anything linear in the ladder falls away to nothing: a flat rate times
+`cityScale` reads 4.6% of the ledger at one district of apartments and 0.0% at
+forty-nine of megastructures. Against `ledgerScale` the share is flat to three
+significant figures at every rung, and runs 11% to 18% from one district to
+forty-nine. `npm run upkeep:calibrate` prints the sweep the constants came from.
+
+`income` stays gross — it is what the buildings *earn*, which is what the
+inspector and the estates panel mean when they read it — and `netIncome` is what
+the treasury actually gains. The dock shows net; the Treasury tab shows all
+three.
+
+The bankruptcy rule is that **unpaid wages decay staffing, not buildings.**
+Permanent loss is the fastest way to make someone close an idle game, and
+staffing is already an integrated scalar with a ramp, so the same machinery that
+opens a hospital closes it and reopens it. Because upkeep is charged against
+*staffed* buildings, a city that cannot pay stops paying: coverage falls to what
+it can afford, income recovers against a smaller bill, and the payroll ramps back.
+
+Two rules keep that from being a deadlock rather than a brownout. Wages are
+budgeted out of revenue and never out of reserves, so the treasury grows by at
+least a tenth of gross income however deep the arrears run — without it the
+decay settles at a fixed point that still owes more than the city earns, and a
+city that cannot afford its only hospital sits at 0.00 forever. And a rich city
+that has over-bought coverage browns out too, because it cannot spend savings on
+wages it does not earn. Auto-development answers to the same arithmetic: while
+the ledger is negative it will not buy anything that adds to the payroll, and it
+holds a minute of the shortfall back from everything else.
+
 ## Balance
 
 Every tunable is in `src/sim/config.ts`, and nothing else in that file imports
@@ -233,6 +271,16 @@ The demand constants are measured, not guessed: `npm run economy:calibrate`
 simulates 24 hours under four policies and reports demand pinning, cost-curve
 monotonicity, time to first rezone/annex/service, and happiness at 1h/6h/24h.
 The numbers in the config comments came from it.
+
+`UPKEEP_RATE` (1.5e-4) and `UPKEEP_GROWTH` (1.02) came from
+`npm run upkeep:calibrate` the same way. The rate is a payback period —
+1/`UPKEEP_RATE` seconds for a building to spend its own opening price on wages
+at a fresh city's premises — and the growth is deliberately almost flat, because
+income grows quadratically in the district count while a compounded payroll
+grows exponentially in it: at 1.08 a full map owes more in wages than it earns.
+`UPKEEP_ARREARS_TAU` (180s) is twice the staffing ramp, for the same reason
+recovery outpaces decay everywhere else in this game, and `UPKEEP_KEEP_SHARE`
+(0.1) is the floor that makes the way back slow rather than shut.
 
 ## Saving
 

@@ -79,6 +79,10 @@ import {
   TERMINALS,
   TRANSIT_LABOUR_DRAW,
   TRANSIT_WORKFORCE,
+  UPKEEP_ARREARS_TAU,
+  UPKEEP_GROWTH,
+  UPKEEP_RATE,
+  UPKEEP_RESERVE_SECONDS,
   VISITOR_SPEND,
   VISITORS_PER_RESIDENT,
   WORKING_SHARE,
@@ -1329,6 +1333,17 @@ export const annexCost = (s: GameState): number => ANNEX_BASE * ANNEX_GROWTH ** 
 // -------------------------------------------------------------------- income
 
 /**
+ * What the city's premises add to every plot of housing it owns.
+ *
+ * One expression rather than two, because `income` and `ledgerScale` both need
+ * it and a copy in each is a copy that drifts. What varies between them is the
+ * arguments: `income` passes the burning share taken off, and `ledgerScale`
+ * deliberately does not — a fire furloughs nobody.
+ */
+const bonuses = (shops: number, industry: number, districts: number): number =>
+  1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (districts - 1);
+
+/**
  * Cash per second, with everything currently on fire earning nothing.
  *
  * A burning home houses nobody who pays rent and a burning shop trades with
@@ -1347,7 +1362,7 @@ export const income = (s: GameState): number => {
   return (
     (people *
       RENT *
-      (1 + SHOP_BONUS * shops + INDUSTRY_BONUS * industry + DISTRICT_BONUS * (s.districts - 1)) *
+      bonuses(shops, industry, s.districts) *
       incomeMultiplier(s) +
       // Fares. Outside the bracket above rather than inside it, because they
       // are not rent: a fare does not scale with the shop multiplier or the
@@ -1365,6 +1380,149 @@ export const income = (s: GameState): number => {
     taxStep(s).income
   );
 };
+
+// ------------------------------------------------------------------ upkeep
+
+/**
+ * `1 + g + ... + g^(n-1)`, the compounded total of `n` buildings.
+ *
+ * The same sum every cost curve in this file implies and none of them had to
+ * state, because a purchase only ever asks what the *next* one costs. Upkeep
+ * asks what all of them cost at once, so the closed form is worth having: a
+ * 49-district city may own 59 buildings of a type and this runs ten times a
+ * second.
+ */
+const compounded = (growth: number, n: number): number =>
+  n <= 0 ? 0 : growth === 1 ? n : (growth ** n - 1) / (growth - 1);
+
+/**
+ * What a plot of this city is worth against a plot of a fresh one, in the terms
+ * the ledger is actually made of.
+ *
+ * The yardstick the wage bill is indexed to, and the measurement is the whole
+ * reason it is not simply `cityScale`. A flat rate per building was tried first
+ * and falls away to nothing, which the brief for this feature predicted; scaling
+ * by `cityScale` alone was tried second and *also* falls away, which it did not.
+ * Measured on cities built out to their own frontage with every service the land
+ * allows, a bill scaled by `cityScale` is 4.6% of the ledger at one district of
+ * apartments and 0.0% at forty-nine of megastructures — three orders of
+ * magnitude of drift, and a decision that only exists for the first hour.
+ *
+ * The reason is that the ledger climbs the level ladder *twice*. Rent is
+ * `residents x RENT x (1 + SHOP_BONUS x shops + ...)`, and both brackets grow
+ * with LEVEL_SCALE — once through the people paying and once through the
+ * premises multiplying what they pay — so income is quadratic in a term
+ * `cityScale` only covers once. This is the product of the two, so it is exactly
+ * as quadratic as the thing it is chasing: measured, the upkeep share is
+ * identical to three significant figures at apartments, towers and
+ * megastructures. See tools/upkeep.calibrate.mjs.
+ *
+ * Four terms are deliberately absent, and they are absent for one reason: a
+ * bill that fell with the things that make a city poorer would cancel exactly
+ * the pressure it exists to apply. Mood and the tax rate are policy, and a city
+ * cannot furlough its hospitals by taxing itself. A fire sends nobody home.
+ * And *occupancy* is out on the same rule, which is why this reads the cohorts
+ * rather than `effectiveOf` — a half-empty city owes the same wages on a
+ * smaller income, so the share climbs as the city struggles, which is what
+ * makes the bankruptcy rule reachable at all.
+ *
+ * One for a fresh city, since `cityScale` and `bonuses` are each one there — so
+ * UPKEEP_RATE keeps its meaning as a payback period measured at the opening.
+ */
+export const ledgerScale = (s: GameState): number =>
+  cityScale(s) *
+  bonuses(
+    cohortScale(s.shopLevels),
+    cohortScale(s.industryLevels) + estatePlots(s) * ESTATE_YIELD * industryScale(s),
+    s.districts,
+  );
+
+/**
+ * The city's whole civic payroll, in cash of opening price.
+ *
+ * Split out from `upkeep` and given the growth as an argument for one reason:
+ * tools/upkeep.calibrate.mjs sweeps UPKEEP_GROWTH, and a sweep that reimplemented
+ * this sum would be measuring a second copy of the formula rather than the one
+ * the game charges.
+ *
+ * Staffing is a factor, and it is the term that keeps the bankruptcy rule from
+ * deadlocking: an unpaid payroll is a cheaper payroll, so a city that cannot pay
+ * stops paying, its coverage falls to what it can afford, and its income
+ * recovers against a smaller bill. See UPKEEP_ARREARS_TAU.
+ */
+export const civicPayroll = (s: GameState, growth = UPKEEP_GROWTH): number => {
+  let payroll = 0;
+  for (const service of SERVICES) {
+    payroll +=
+      service.base *
+      compounded(growth, serviceCount(s, service.key)) *
+      staffing(s, service.key);
+  }
+  return payroll;
+};
+
+/**
+ * What one civic type costs to run, per second. The breakdown `upkeep` sums.
+ *
+ * Priced off `Service.base` rather than as a column of its own, so a university
+ * costs more to run than a police station without a second table to keep in step
+ * with the first. What that buys is stated plainly because it is lopsided: a
+ * university opens at 7,200 against a hospital's 130, so at the ceiling the land
+ * allows it is 85% of the whole bill. That is the intended reading rather than a
+ * defect — the university is the building that unlocks the top of the skyline,
+ * and it is now the one with a running cost worth thinking about — but it does
+ * mean the other five types are a tenth of the wage bill between them, and a
+ * later cycle that wants coverage itself to be the budget decision will need a
+ * measured `upkeep` column rather than this derivation.
+ */
+export const serviceUpkeep = (s: GameState, service: Service): number =>
+  UPKEEP_RATE *
+  service.base *
+  compounded(UPKEEP_GROWTH, serviceCount(s, service.key)) *
+  staffing(s, service.key) *
+  ledgerScale(s);
+
+/**
+ * The whole wage bill, per second.
+ *
+ * Deliberately a read of its own rather than a term inside `income`. `income`
+ * is what the city's buildings *earn* — the shop multiplier, the fares, the
+ * tourism — and the inspector, the estates panel and `buildingIncome` all mean
+ * exactly that when they read it. What the city is left with is `netIncome`,
+ * and the two must not be conflated: charging upkeep inside `income` would make
+ * every marginal-value readout in the HUD quietly wrong.
+ */
+export const upkeep = (s: GameState): number =>
+  UPKEEP_RATE * civicPayroll(s) * ledgerScale(s);
+
+/** What the treasury actually gains per second. The number the dock shows. */
+export const netIncome = (s: GameState): number => income(s) - upkeep(s);
+
+/**
+ * Fraction of a payroll lost over `dt` at a given unpaid share of the bill.
+ *
+ * The same exponential form as `demandStep` and `happinessStep`, and here for
+ * the same reason: catch-up steps whole minutes and the linear form
+ * `x -= x * dt / TAU` goes negative the moment `dt` passes TAU. This saturates
+ * at 1 for any step size, so an hour of arrears taken in one step leaves the
+ * same staffing as an hour taken in thirty-six thousand ticks.
+ *
+ * `shortfall` is the share of the bill that went unpaid, so it scales the rate
+ * rather than the target: a city a penny short of its wages barely moves, and
+ * one paying nothing at all empties its payroll on UPKEEP_ARREARS_TAU.
+ */
+export const arrearsStep = (dt: number, shortfall: number): number =>
+  1 - Math.exp((-Math.max(0, shortfall) * Math.max(0, dt)) / UPKEEP_ARREARS_TAU);
+
+/**
+ * Cash the automatic passes hold back when the ledger is running negative.
+ *
+ * Zero for a solvent city, which is every city that has not overbought — so this
+ * changes nothing about how auto-development behaves until the moment it would
+ * otherwise dig the hole deeper. See UPKEEP_RESERVE_SECONDS.
+ */
+export const upkeepReserve = (s: GameState): number =>
+  Math.max(0, -netIncome(s)) * UPKEEP_RESERVE_SECONDS;
 
 // ------------------------------------------------------------------ can-build
 
@@ -1405,12 +1563,19 @@ export const canAnnex = (s: GameState): boolean =>
 /**
  * Whether the city will take the next district on its own this tick.
  *
- * Everything the button needs plus a reserve, so the automatic pass spends a
+ * Everything the button needs plus two reserves, so the automatic pass spends a
  * surplus rather than the treasury. A player who wants the land before the
  * surplus is there presses the button; that is the override.
+ *
+ * The second reserve is `upkeepReserve`, and it is the half that answers to the
+ * wage bill rather than to the price. Annexing does not raise upkeep on its own
+ * — a district is land, not a payroll — but it stretches the services the city
+ * already runs across more of it, and a city already failing to make its wages
+ * has no business buying anything at all. Zero for a solvent city, so this is
+ * inert until it matters.
  */
 export const willAutoAnnex = (s: GameState): boolean =>
-  canAnnex(s) && s.cash >= annexCost(s) * (1 + AUTO_ANNEX_RESERVE);
+  canAnnex(s) && s.cash >= annexCost(s) * (1 + AUTO_ANNEX_RESERVE) + upkeepReserve(s);
 
 /**
  * Why the city is not expanding, phrased for the HUD.

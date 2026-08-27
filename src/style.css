@@ -242,6 +242,10 @@ button.tab[aria-selected='true'] {
 }
 .v.cash { color: var(--signal); }
 .v.rate { color: var(--sodium); }
+/* The wage bill reads as an outgoing, in the same red the price surcharge uses:
+   the Treasury tab now has three rates in it and two of them point the same way,
+   so colour is what tells the one that does not apart at a glance. */
+.v.upkeep { color: #e0574b; }
 
 /* Plots are counted per zone, so the row carries three of them. The dots are
    the same colours the Z overlay paints the map with. */

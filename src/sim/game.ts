@@ -12,6 +12,7 @@ import {
   MERGE_LEVEL,
   OFFLINE_CAP_SECONDS,
   SERVICES,
+  UPKEEP_KEEP_SHARE,
   TAX_STEPS,
   TICK_RATE,
   type Landmark,
@@ -20,6 +21,7 @@ import {
 } from './config.ts';
 import {
   annexCost,
+  arrearsStep,
   burnableBuildings,
   burnableOf,
   canAnnex,
@@ -76,6 +78,9 @@ import {
   staffAfterBuild,
   staffStep,
   terminalCost,
+  netIncome,
+  upkeep,
+  upkeepReserve,
   willAutoAnnex,
   wouldBurnOut,
   ZONE_KINDS,
@@ -183,6 +188,16 @@ export interface AwayReport {
    */
   spent: number;
   /**
+   * Wages the city paid its civic buildings while nobody was watching.
+   *
+   * The third outgoing, and it has to be here for the ledger to close: `earned`
+   * is gross, so `earned - spent - wages` is the change in the treasury and any
+   * two of the three cannot account for the fourth. It is also the one line that
+   * explains a returning player's browned-out services — a city that could not
+   * make its wages comes back with staffing it did not lose to anything visible.
+   */
+  wages: number;
+  /**
    * Net change in each zone's building count.
    *
    * Net, and signed, because a count can now fall without anything being lost:
@@ -247,6 +262,11 @@ export class Game {
    * cannot reproduce the demand each purchase was actually priced against.
    */
   private autoSpend = 0;
+  /**
+   * Lifetime wages paid. Differenced by `catchUp` exactly as `autoSpend` is, and
+   * for the same reason: `step` has no notion of who is watching.
+   */
+  private wagesPaid = 0;
   /**
    * Lifetime fire tallies. `catchUp` differences them the same way it does
    * `autoSpend`, which keeps `step` free of any notion of who is watching.
@@ -314,10 +334,14 @@ export class Game {
     s.cash += gain;
     s.earned += gain;
     s.elapsed += dt;
+    // Gross in, wages out, in that order and against the same state. `earned`
+    // is the gross line — it is what the city took, and what it then spent on
+    // wages is spending, exactly as auto-development's purchases are.
+    const arrears = this.payWages(upkeep(s) * dt, gain);
     // Staffing before happiness before demand: happiness reads coverage, and
     // the residential ceiling reads happiness. Integrating them out of order
     // would leave each one a tick behind the thing it is supposed to follow.
-    this.integrateStaffing(dt);
+    this.integrateStaffing(dt, arrears);
     this.integrateHappiness(dt);
     this.integrateDemand(dt);
     // Occupancy after both, because its target reads happiness and demand; the
@@ -477,16 +501,50 @@ export class Game {
    * leaves the four that were running exactly as they were and ramps the new
    * one in from empty.
    */
-  private integrateStaffing(dt: number): void {
+  private integrateStaffing(dt: number, arrears = 0): void {
     const s = this.inner;
     const k = staffStep(dt);
-    s.hospitalStaff = s.hospitals > 0 ? s.hospitalStaff + (1 - s.hospitalStaff) * k : 0;
-    s.policeStaff = s.police > 0 ? s.policeStaff + (1 - s.policeStaff) * k : 0;
-    s.fireStaff = s.fire > 0 ? s.fireStaff + (1 - s.fireStaff) * k : 0;
-    s.schoolStaff = s.schools > 0 ? s.schoolStaff + (1 - s.schoolStaff) * k : 0;
-    s.universityStaff =
-      s.universities > 0 ? s.universityStaff + (1 - s.universityStaff) * k : 0;
-    s.depotStaff = s.depots > 0 ? s.depotStaff + (1 - s.depotStaff) * k : 0;
+    // Two forces on one scalar: the ramp pulls it toward fully staffed, and
+    // unpaid wages pull it back toward empty. Applied in that order, so a city
+    // that pays its bill this tick sees no decay at all and a city paying none
+    // of it loses ground however hard the ramp pulls. Both are the exponential
+    // form, so the pair is safe at a 60-second catch-up step.
+    const kept = 1 - arrearsStep(dt, arrears);
+    const fill = (staff: number, built: number): number =>
+      built > 0 ? (staff + (1 - staff) * k) * kept : 0;
+    s.hospitalStaff = fill(s.hospitalStaff, s.hospitals);
+    s.policeStaff = fill(s.policeStaff, s.police);
+    s.fireStaff = fill(s.fireStaff, s.fire);
+    s.schoolStaff = fill(s.schoolStaff, s.schools);
+    s.universityStaff = fill(s.universityStaff, s.universities);
+    s.depotStaff = fill(s.depotStaff, s.depots);
+  }
+
+  /**
+   * Pays what the treasury can cover and reports the share left owing.
+   *
+   * Cash is floored rather than allowed to run a deficit, which is the whole of
+   * the bankruptcy rule: the city cannot owe money, so what it fails to pay is
+   * taken out of its staffing instead — see UPKEEP_ARREARS_TAU for why that and
+   * not a demolition. The return is a *share* rather than an amount, because the
+   * decay is a rate and a rate scaled by an absolute shortfall would mean
+   * something different at every city size.
+   *
+   * Charged against this tick's *revenue* rather than against the treasury, and
+   * capped at 1 - UPKEEP_KEEP_SHARE of it. That cap is the difference between a
+   * brownout and a deadlock — see UPKEEP_KEEP_SHARE, which carries the two
+   * weaker rules that were measured first and the fixed points they settle at.
+   * Reserves are never spent on wages, so the treasury grows by at least a tenth
+   * of gross however deep the arrears run.
+   */
+  private payWages(due: number, gross: number): number {
+    const s = this.inner;
+    if (!(due > 0)) return 0;
+    const payable = Math.max(0, gross) * (1 - UPKEEP_KEEP_SHARE);
+    const paid = Math.max(0, Math.min(due, payable, s.cash));
+    s.cash -= paid;
+    this.wagesPaid += paid;
+    return 1 - paid / due;
   }
 
   /**
@@ -968,6 +1026,7 @@ export class Game {
     this.inner = createState();
     this.accumulator = 0;
     this.autoSpend = 0;
+    this.wagesPaid = 0;
     this.firesStarted = 0;
     this.firesExtinguished = 0;
     this.firesLost = 0;
@@ -1035,7 +1094,15 @@ export class Game {
           },
         });
       }
+      // Nothing that adds to the payroll while the payroll is already more than
+      // the city earns. The cash reserve below is a buffer and this is the rule
+      // it cannot express: a city sitting on a treasury would clear the reserve
+      // and go on buying coverage it has no income to staff, which is exactly
+      // the brownout an away player comes back to. Housing, commerce and
+      // industry stay on the table — they are how it earns its way out.
+      const solvent = netIncome(s) >= 0;
       for (const service of SERVICES) {
+        if (!solvent) break;
         // Housing land rather than residents, because that is what a service is
         // now short of. The two only differ for a city that has built houses
         // nobody is in, which is exactly the city that should still be allowed
@@ -1071,6 +1138,12 @@ export class Game {
         undefined,
       );
       if (best === undefined) break;
+      // The third floor, and the one upkeep added: spend out of what is left
+      // *after* the wage bill is covered, not out of the treasury. Without it an
+      // away city buys the coverage it cannot staff, and the player comes back
+      // to full services with nobody in them. Zero for a solvent city, so this
+      // is inert until the ledger turns — see `upkeepReserve`.
+      if (best.cost > s.cash - upkeepReserve(s)) break;
       this.spend(best.cost);
       best.buy();
     }
@@ -1100,6 +1173,7 @@ export class Game {
       parks: this.inner.parks,
       services: civicBuildings(this.inner),
       spend: this.autoSpend,
+      wages: this.wagesPaid,
       districts: this.inner.districts,
       started: this.firesStarted,
       extinguished: this.firesExtinguished,
@@ -1137,8 +1211,15 @@ export class Game {
       // What auto-development spent was earned first, so from the player's side
       // it is all collections. This is the actual outgoing, not a replay of the
       // cost curve — cost now depends on the demand at the moment of purchase.
-      earned: s.cash - before.cash + (this.autoSpend - before.spend),
+      // Wages are the other outgoing and are added back for the same reason: the
+      // city took the money in before it paid it out again.
+      earned:
+        s.cash -
+        before.cash +
+        (this.autoSpend - before.spend) +
+        (this.wagesPaid - before.wages),
       spent: this.autoSpend - before.spend,
+      wages: this.wagesPaid - before.wages,
       homes: s.homes - before.homes,
       shops: s.shops - before.shops,
       industry: s.industry - before.industry,
