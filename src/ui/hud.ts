@@ -107,6 +107,7 @@ import {
   residents,
   serviceBlocker,
   serviceCost,
+  happinessFix,
   serviceReadings,
   shopCapacity,
   shopCost,
@@ -892,10 +893,21 @@ export class Hud {
     // The happiness panel. A bare percentage says nothing a player can act on,
     // so the binding term is named beside it: "Health coverage 41%" is the whole
     // reason this block exists rather than the number on its own.
+    //
+    // And the term alone turned out not to be enough either. It names what is
+    // short, which early on is always the hospital, so a city with 60 in the
+    // bank read "Health coverage 0%" about a 130 building while the 45 park that
+    // would also have lifted it went unmentioned — the panel naming a problem the
+    // player could not afford to solve. `happinessFix` names the button instead,
+    // with its price, and falls back to the cheapest one when nothing is
+    // affordable, because "save 130" is an instruction and a percentage is not.
     const worst = bindingTerm(s);
-    const why = `${worst.coverLabel} ${pct(worst.coverage)}`;
+    const term = `${worst.coverLabel} ${pct(worst.coverage)}`;
+    const fix = happinessFix(s);
+    const why = fix === null ? term : `${term} — ${fix.label.toLowerCase()}, ${fmt(fix.cost)}`;
     n.moodPct.textContent = pct(s.happiness);
     n.moodWhy.textContent = why;
+    n.moodWhy.classList.toggle('can', fix !== null && fix.affordable);
     n.moodFill.style.width = `${Math.max(0, Math.min(100, s.happiness * 100)).toFixed(1)}%`;
     n.mood.classList.toggle('short', s.happiness < HAPPINESS_MIN_BUILD);
     n.mood.setAttribute('aria-label', `Happiness ${pct(s.happiness)}. Weakest: ${why}.`);

@@ -484,6 +484,11 @@ button.tab[aria-selected='true'] {
 .mood.short .mood-head .num,
 .mood.short .mood-head .why { color: var(--sodium); }
 .mood.short .mood-fill { background: var(--sodium); }
+/* A fix the city can pay for right now reads as an instruction rather than as
+   part of the warning. After the `.short` rule on purpose and at equal
+   specificity: below the gate is exactly when this line is worth acting on, so
+   it has to win there rather than be overpainted by the warning colour. */
+.mood-head .why.can { color: var(--signal); }
 
 /* --------------------------------------------------------- build panel */
 
