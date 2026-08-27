@@ -5,6 +5,10 @@ import {
   AUTO_ANNEX_RESERVE,
   BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
+  AIRPORT_BASE,
+  AIRPORT_EXPORT_LIFT,
+  AIRPORT_PAYROLL,
+  AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   CITY_HALL_BASE,
   CIVIC_RAMP_SECONDS,
@@ -102,7 +106,7 @@ import {
   type Terminal,
 } from './config.ts';
 import { ZONE, type Zone } from './citygen.ts';
-import { ESTATE_CELLS } from './estates.ts';
+import { AIRPORT_SITED, ESTATE_CELLS } from './estates.ts';
 import {
   BUILDABLE_COMMERCIAL_PER_DISTRICT,
   BUILDABLE_INDUSTRIAL_PER_DISTRICT,
@@ -901,7 +905,20 @@ export const hasCoast = (s: GameState): boolean => terminalCapacity(s) > 0;
  * nobody at all sails to one for a holiday.
  */
 export const visitors = (s: GameState): number =>
-  s.cruiseTerminals * residents(s) * VISITORS_PER_RESIDENT * Math.max(0, Math.min(1, s.happiness));
+  berthsLanding(s) * residents(s) * VISITORS_PER_RESIDENT * Math.max(0, Math.min(1, s.happiness));
+
+/**
+ * Berths' worth of arrivals the city has, quay and runway together.
+ *
+ * The airport lands visitors on the same path a cruise terminal does rather
+ * than on a second one, which is what keeps `visitors` a single expression and
+ * keeps the happiness scaling — the term that makes tourism the one income line
+ * in the game that goes to *zero* in a miserable city rather than to
+ * HAPPINESS_FLOOR. Nobody's holiday is somewhere grim, and that is as true of a
+ * flight as of a cruise.
+ */
+export const berthsLanding = (s: GameState): number =>
+  s.cruiseTerminals + (s.airport ? AIRPORT_VISITORS : 0);
 
 /** What those visitors spend, per second, before tax. */
 export const cruiseIncome = (s: GameState): number => visitors(s) * VISITOR_SPEND;
@@ -1004,6 +1021,33 @@ export const estateJobs = (s: GameState): number => estateActive(s) * JOBS_PER_E
 export function highwayBlocker(s: GameState): string | null {
   if (s.highway) return 'Built';
   return highwayAllowed(s) ? null : `Needs ${HIGHWAY_MIN_DISTRICTS} districts`;
+}
+
+/**
+ * Whether the city could have an airport at all: the road, and the ground.
+ *
+ * The road is the progression gate, and it is the estates' gate rather than one
+ * of its own because it is the same gate — the airport stands at the end of the
+ * same spur, on land the city does not own, and a second district count for the
+ * same road would be two numbers saying one thing.
+ *
+ * The ground is the other half and is a property of the seed: the band is a
+ * fixed strip with the water already taken out of it, and a seed that drowned
+ * every candidate runway leaves the city with nowhere to put one. See
+ * `airportCell`.
+ */
+export const airportAllowed = (s: GameState): boolean => s.highway && AIRPORT_SITED;
+
+/** Flat: there is one airport, so there is no n to compound over. */
+export const airportCost = (): number => AIRPORT_BASE;
+
+export const canBuildAirport = (s: GameState): boolean =>
+  !s.airport && airportAllowed(s) && s.cash >= airportCost();
+
+export function airportBlocker(s: GameState): string | null {
+  if (s.airport) return 'Built';
+  if (!s.highway) return 'No highway yet';
+  return AIRPORT_SITED ? null : 'Nowhere to put one';
 }
 
 export function estateBlocker(s: GameState): string | null {
@@ -1236,7 +1280,13 @@ export const exportMarket = (s: GameState): number =>
   // The cargo berths lift the tap rather than opening a second one beside it,
   // so there is still one number the outside world's appetite is made of and
   // one place to look when industrial demand is wrong. See CARGO_EXPORT_LIFT.
-  (1 + CARGO_EXPORT_LIFT * s.cargoTerminals);
+  //
+  // Air freight is the second lift and it *adds* inside the same bracket rather
+  // than multiplying it. That is what keeps it from double-counting against a
+  // cargo terminal: a city with both has one tap raised twice, not two taps for
+  // the same goods — and a multiplicative form would have made the airport worth
+  // most to the city that least needs it. See AIRPORT_EXPORT_LIFT.
+  (1 + CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0));
 
 export const jobs = (s: GameState): number =>
   openOf(s, 'shop', SHOP_JOBS) +
@@ -1764,6 +1814,12 @@ export const civicPayroll = (s: GameState, growth = UPKEEP_GROWTH): number => {
   // test/power.test.ts, where the pair is run together and has to climb out.
   payroll +=
     POWER_PLANT_BASE * compounded(growth, s.plants) * s.plantStaff;
+  // The airport, at a figure of its own rather than at what it cost to open —
+  // see AIRPORT_PAYROLL, which is the one building in the game where the two
+  // are unrelated. Like the hall it has no staffing scalar and so cannot be
+  // made cheaper by arrears; unlike the hall it is the dearest single thing the
+  // city runs.
+  if (s.airport) payroll += AIRPORT_PAYROLL;
   return payroll;
 };
 

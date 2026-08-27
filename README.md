@@ -105,6 +105,24 @@ save that grows with the city; the covered share is a pure function of four
 counts and the seed. It is memoised against those counts, because
 `happinessTarget` runs ten times a second.
 
+**Tourism does not need a coast.** A cruise terminal needs a coastal district
+and a seed can leave a city inland for its whole life, so the **airport** is the
+other way in. It stands on open ground past the far side of the industrial band,
+at the end of the same highway spur the estates line, and it is gated on that
+road rather than on a district count of its own — it is the same road, and two
+numbers for one gate would be one too many. Where it stands is a pure function
+of the seed: on the spur's axis if the ground allows, shifted a runway at a time
+along the shore if the water took that site.
+
+What it buys is arrivals on the path that already exists — it is worth
+`AIRPORT_VISITORS` cruise berths, happiness scaling and all, so a miserable city
+gets a runway and no tourists — plus a lift on the export tap that *adds* inside
+the same bracket a cargo terminal's does. Additive is what stops it
+double-counting: a city with both has one tap raised twice rather than two taps
+for the same goods, and a multiplicative form would have made the airport worth
+most to the city that least needs it. Measured, it multiplies an inland city's
+tap by 1.25 and a fully-quayed one's by 1.07.
+
 **Land value is a prefix mean, not a per-building field.** `citygen` has always
 scored every block 1 at its district's middle and 0 at its furthest corner, and
 rent has always ignored it. It does not now: a plot's rent is multiplied by
@@ -401,6 +419,15 @@ grows exponentially in it: at 1.08 a full map owes more in wages than it earns.
 `UPKEEP_ARREARS_TAU` (180s) is twice the staffing ramp, for the same reason
 recovery outpaces decay everywhere else in this game, and `UPKEEP_KEEP_SHARE`
 (0.1) is the floor that makes the way back slow rather than shut.
+
+The airport's constants come from `npm run water:calibrate`, beside the berths
+they are priced in. `AIRPORT_BASE` is what the *next* district would cost at the
+moment the highway opens — the only curve still steep where the airport unlocks
+is the land's — and `AIRPORT_PAYROLL` is set against what it earns rather than
+against what it cost: at 24,000 it charged 2.23% of a fourteen-district ledger
+against 0.91% of tourism, so the one building that gives an inland city tourism
+at all would have lost money the day it opened. At one university's worth
+(7,200) it is 0.67% against 0.91%, and the freight lift is upside.
 
 `POWER_EXPONENT` (1.25) came from `npm run power:calibrate`, and it is the one
 constant in this game set by the *land* rather than by the economy — see the

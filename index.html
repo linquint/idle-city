@@ -63,8 +63,8 @@
       aria-controls="panel-taxes" aria-selected="false" tabindex="-1">Taxes</button>
     <button class="tab" type="button" role="tab" id="tab-landmarks"
       aria-controls="panel-landmarks" aria-selected="false" tabindex="-1">Landmarks</button>
-    <button class="tab" type="button" role="tab" id="tab-port"
-      aria-controls="panel-port" aria-selected="false" tabindex="-1">Port</button>
+    <button class="tab" type="button" role="tab" id="tab-trade"
+      aria-controls="panel-trade" aria-selected="false" tabindex="-1">Trade</button>
     <button class="tab" type="button" role="tab" id="tab-estates"
       aria-controls="panel-estates" aria-selected="false" tabindex="-1">Estates</button>
   </div>
@@ -280,7 +280,7 @@
     </div>
   </div>
 
-  <div class="panel" id="panel-port" role="tabpanel" aria-labelledby="tab-port" tabindex="0" hidden>
+  <div class="panel" id="panel-trade" role="tabpanel" aria-labelledby="tab-trade" tabindex="0" hidden>
     <p class="cap">Terminals</p>
     <div class="civic-row">
       <button class="civic" id="build-cruise" type="button">
@@ -293,7 +293,13 @@
       </button>
     </div>
 
-    <p class="cap">Waterfront</p>
+    <p class="cap">Airport</p>
+    <button class="ghost wide" id="build-airport" type="button">
+      <span id="build-airport-label">Build the airport</span>
+      <span class="cost" id="build-airport-cost">—</span>
+    </button>
+
+    <p class="cap">Arrivals and exports</p>
     <div class="services" id="port-trade" role="img">
       <div class="svc"><span class="k">Berths</span>
         <span class="built" id="port-berths">0</span>

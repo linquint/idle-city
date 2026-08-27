@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
+  AIRPORT_VISITORS,
   ESTATE_BASE,
   ESTATE_GROWTH,
   ESTATE_PLOTS,
@@ -14,6 +15,10 @@ import {
 } from '../src/sim/config';
 import {
   activeDeveloped,
+  airportBlocker,
+  airportCost,
+  berthsLanding,
+  canBuildAirport,
   canBuildEstate,
   canBuildHighway,
   demandTargets,
@@ -24,21 +29,37 @@ import {
   estateJobs,
   estatePlots,
   estateSupply,
+  cruiseIncome,
+  exportMarket,
   highwayBlocker,
   income,
+  upkeep,
+  visitors,
   industryCapacity,
   industryScale,
   jobs,
   plotCapacity,
   plotsOf,
 } from '../src/sim/economy';
-import { ESTATE_CELLS, ESTATE_NEAR, ESTATE_SPAN, estateCell, estateReach } from '../src/sim/estates';
+import {
+  AIRPORT_DEPTH,
+  AIRPORT_LENGTH,
+  AIRPORT_SITED,
+  airportCell,
+  ESTATE_CELLS,
+  ESTATE_FAR,
+  ESTATE_NEAR,
+  ESTATE_SPAN,
+  estateCell,
+  estateReach,
+  type EstateCell,
+} from '../src/sim/estates';
 import { Game } from '../src/sim/game';
 import { cityRadius, districtCoord, DISTRICT_WIDTH } from '../src/sim/layout';
 import { migrate } from '../src/sim/save';
-import { createState, type GameState } from '../src/sim/state';
+import { createState, SAVE_VERSION, type GameState } from '../src/sim/state';
 import { HIGHWAY_W } from '../src/render/highway';
-import { WATERS, waterAt } from '../src/sim/water';
+import { WATERS, waterAt, type Shore } from '../src/sim/water';
 import { Cars } from '../src/render/cars';
 import { Estates } from '../src/render/estates';
 import { bandLane, Highway, spurLane } from '../src/render/highway';
@@ -369,5 +390,130 @@ describe('the outskirts, drawn', () => {
     expect(band.length).toBeGreaterThan(0);
     // They cross: one runs along the coast normal and the other along the shore.
     expect(spur.alongX).not.toBe(band.alongX);
+  });
+});
+
+describe('the airport', () => {
+  /**
+   * Tourism without a coast, which is the gap it exists to close: a cruise
+   * terminal needs a coastal district, and a seed can leave a city inland for
+   * its whole life.
+   */
+  it('is sited on open ground past the far side of the band', () => {
+    const cell = airportCell();
+    expect(AIRPORT_SITED).toBe(true);
+    expect(cell).not.toBeNull();
+    // Behind the estates, not among them: `u` runs away from the sea, so a
+    // smaller number is further out.
+    expect((cell as EstateCell).u).toBeLessThan(ESTATE_FAR);
+    // And on dry ground for its whole length, which is what `dryRunway` picked
+    // it for — checked here against the water field directly.
+    const at: Shore = { x: 0, z: 0 };
+    for (let i = 0; i <= 6; i++) {
+      const along = (cell as EstateCell).v - AIRPORT_LENGTH / 2 + (i * AIRPORT_LENGTH) / 6;
+      WATERS.toWorld((cell as EstateCell).u, along, at);
+      expect(WATERS.dryAround(at.x, at.z, AIRPORT_DEPTH / 2)).toBe(true);
+    }
+  });
+
+  it('never moves, and does not depend on what the city has built', () => {
+    const first = airportCell();
+    const again = airportCell();
+    expect(again).toEqual(first);
+  });
+
+  it('needs the road, and is bought once', () => {
+    const before = city(1, { cash: 1e30 });
+    expect(canBuildAirport(before)).toBe(false);
+    expect(airportBlocker(before)).toBe('No highway yet');
+
+    const game = new Game(city(HIGHWAY_MIN_DISTRICTS, { cash: 1e30, highway: true }));
+    expect(airportBlocker(game.state)).toBeNull();
+    expect(game.buildAirport()).toBe(true);
+    expect(game.state.airport).toBe(true);
+    expect(game.buildAirport()).toBe(false);
+    expect(airportBlocker(game.state)).toBe('Built');
+  });
+
+  it('charges the advertised price', () => {
+    const game = new Game(city(HIGHWAY_MIN_DISTRICTS, { cash: airportCost(), highway: true }));
+    expect(game.buildAirport()).toBe(true);
+    expect(game.state.cash).toBeCloseTo(0, 6);
+    // A city a penny short does not get one.
+    const poor = new Game(city(HIGHWAY_MIN_DISTRICTS, { cash: airportCost() * 0.999, highway: true }));
+    expect(poor.buildAirport()).toBe(false);
+  });
+
+  it('lands visitors on a city that will never see the sea', () => {
+    const inland = city(1, { ...housedOn(24), ...trading(45), ...making(13), highway: true });
+    expect(inland.cruiseTerminals).toBe(0);
+    expect(visitors(inland)).toBe(0);
+    const flown = { ...inland, airport: true };
+    expect(visitors(flown)).toBeGreaterThan(0);
+    expect(cruiseIncome(flown)).toBeGreaterThan(0);
+    // Worth exactly the berths the config says, on the same path.
+    expect(berthsLanding(flown)).toBe(AIRPORT_VISITORS);
+    expect(visitors(flown)).toBeCloseTo(
+      visitors({ ...inland, cruiseTerminals: AIRPORT_VISITORS }),
+      9,
+    );
+  });
+
+  it('keeps the happiness scaling, so a grim city gets a runway and no tourists', () => {
+    // The interesting half of the tourism path, and the one thing the airport
+    // must not shortcut: `visitors` is the only income line in the game that
+    // goes to zero in a miserable city rather than to HAPPINESS_FLOOR.
+    const grim = city(1, { ...housedOn(24), ...trading(45), ...making(13), airport: true, highway: true, happiness: 0 });
+    expect(visitors(grim)).toBe(0);
+    expect(cruiseIncome(grim)).toBe(0);
+    const glad = { ...grim, happiness: 1 };
+    expect(visitors(glad)).toBeGreaterThan(0);
+  });
+
+  it('lifts the export tap without double-counting a cargo berth', () => {
+    const bare = city(20, { highway: true });
+    const flown = { ...bare, airport: true };
+    const shipped = { ...bare, cargoTerminals: 2 };
+    const both = { ...bare, airport: true, cargoTerminals: 2 };
+    expect(exportMarket(flown)).toBeGreaterThan(exportMarket(bare));
+    // Additive inside one bracket rather than a second tap: what the airport
+    // adds to a city that already ships is exactly what it adds to one that
+    // does not, in absolute terms — never a multiple of the berths.
+    expect(exportMarket(both) - exportMarket(shipped)).toBeCloseTo(
+      exportMarket(flown) - exportMarket(bare),
+      9,
+    );
+    expect(exportMarket(both)).toBeLessThan(exportMarket(flown) * exportMarket(shipped) / exportMarket(bare));
+  });
+
+  it('joins the wage bill, and pays for it', () => {
+    const bare = city(HIGHWAY_MIN_DISTRICTS, {
+      ...housedOn(24 * HIGHWAY_MIN_DISTRICTS),
+      ...trading(45 * HIGHWAY_MIN_DISTRICTS),
+      ...making(13 * HIGHWAY_MIN_DISTRICTS),
+      highway: true,
+    });
+    const flown = { ...bare, airport: true };
+    expect(upkeep(flown)).toBeGreaterThan(upkeep(bare));
+    // What it earns has to cover what it costs to run from the day it opens,
+    // for the one building that gives an inland city tourism at all.
+    expect(income(flown) - income(bare)).toBeGreaterThan(upkeep(flown) - upkeep(bare));
+  });
+
+  it('is not land the city owns, so it moves no plot total', () => {
+    const bare = city(1, { ...housedOn(24), ...trading(45), ...making(13), highway: true });
+    const flown = { ...bare, airport: true };
+    expect(plotCapacity(flown)).toBe(plotCapacity(bare));
+    expect(developed(flown)).toBe(developed(bare));
+  });
+
+  it('carries across a save, and is refused without the road', () => {
+    const kept = migrate({ version: SAVE_VERSION, highway: true, airport: true });
+    expect(kept?.airport).toBe(true);
+    // A runway with no road to it is not an airport.
+    expect(migrate({ version: SAVE_VERSION, airport: true })?.airport).toBe(false);
+    // And an older save has none, which is the state a city that never built
+    // one is in.
+    expect(migrate({ version: 8, highway: true })?.airport).toBe(false);
   });
 });

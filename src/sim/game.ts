@@ -26,6 +26,8 @@ import {
   burnableBuildings,
   burnableOf,
   canAnnex,
+  airportCost,
+  canBuildAirport,
   canBuildCityHall,
   canBuildHome,
   canBuildPlant,
@@ -1092,6 +1094,22 @@ export class Game {
     if (!canBuildCityHall(s)) return false;
     s.cash -= cityHallCost();
     s.cityHall = true;
+    return true;
+  }
+
+  /**
+   * The airport, at the end of the same road the estates line.
+   *
+   * The second thing the city builds on land it does not own, and the first that
+   * gives an inland city a reason to care about happiness beyond its own
+   * ledger: what it buys is arrivals on the existing tourism path, scaled by
+   * mood exactly as a cruise berth's are. See AIRPORT_VISITORS.
+   */
+  buildAirport(): boolean {
+    const s = this.inner;
+    if (!canBuildAirport(s)) return false;
+    s.cash -= airportCost();
+    s.airport = true;
     return true;
   }
 

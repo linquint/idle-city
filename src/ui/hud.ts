@@ -21,6 +21,8 @@ import {
   MAX_DISTRICTS,
   SERVICES,
   TAX_NEUTRAL,
+  AIRPORT_EXPORT_LIFT,
+  AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   HIGHWAY_MIN_DISTRICTS,
   TERMINALS,
@@ -40,6 +42,11 @@ import {
   canBuildEstate,
   canBuildHighway,
   canBuildShop,
+  airportAllowed,
+  airportBlocker,
+  airportCost,
+  berthsLanding,
+  canBuildAirport,
   canBuildCityHall,
   canBuildPlant,
   canBuildTerminal,
@@ -141,7 +148,7 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 };
 
 /** The tabs the docked control is split into, in the order they are shown. */
-const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'port', 'estates'] as const;
+const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'trade', 'estates'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /** Plots one district sells of each zone. Turns a plot index into a district. */
@@ -312,6 +319,9 @@ export class Hud {
     portSpend: el('port-spend'),
     portExports: el('port-exports'),
     portLift: el('port-lift'),
+    airport: el<HTMLButtonElement>('build-airport'),
+    airportLabel: el('build-airport-label'),
+    airportCost: el('build-airport-cost'),
     highway: el<HTMLButtonElement>('build-highway'),
     highwayLabel: el('build-highway-label'),
     highwayCost: el('build-highway-cost'),
@@ -451,6 +461,7 @@ export class Hud {
         this.act(() => this.game.buildTerminal(row.terminal)),
       );
     }
+    n.airport.addEventListener('click', () => this.act(() => this.game.buildAirport()));
     n.highway.addEventListener('click', () => this.act(() => this.game.buildHighway()));
     n.estate.addEventListener('click', () => this.act(() => this.game.buildEstate()));
     n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
@@ -633,7 +644,7 @@ export class Hud {
     else if (this.open === 'demand') this.paintDemand(s);
     else if (this.open === 'taxes') this.paintTaxes(s);
     else if (this.open === 'landmarks') this.paintLandmarks(s);
-    else if (this.open === 'port') this.paintPort(s);
+    else if (this.open === 'trade') this.paintTrade(s);
     else this.paintEstates(s);
 
     this.paintCard(s);
@@ -973,14 +984,19 @@ export class Hud {
   }
 
   /**
-   * The port panel: what a berth costs, and what the two kinds are earning.
+   * The trade panel: what a berth or a runway costs, and what they are earning.
    *
-   * Three readouts rather than two counts, because the two halves pay back in
+   * Called Trade rather than Port because an inland city has no port and does
+   * have an airport, and a player who has just built a runway should not have to
+   * look for it under the waterfront. The element ids are still `port-*`: they
+   * name the readouts the waterfront owns, which is what they are.
+   *
+   * Three readouts rather than two counts, because the halves pay back in
    * currencies a count cannot show. Visitors are people a second and tourism is
    * cash a second, so both are worth saying; exports are the tap industrial
    * demand is drawn against, and the lift is only legible next to it.
    */
-  private paintPort(s: Readonly<GameState>): void {
+  private paintTrade(s: Readonly<GameState>): void {
     const n = this.nodes;
     let berths = 0;
     for (const { terminal, built, allowed, cost } of terminalReadings(s)) {
@@ -993,23 +1009,32 @@ export class Hud {
       row.button.title = terminalBlocker(s, terminal) ?? terminal.buildLabel;
     }
 
+    const why = airportBlocker(s);
+    n.airport.disabled = !canBuildAirport(s);
+    n.airport.hidden = s.airport;
+    n.airportLabel.textContent = why ?? 'Build the airport';
+    n.airportCost.textContent = airportAllowed(s) ? fmt(airportCost()) : '—';
+    n.airport.title = why ?? `Worth ${AIRPORT_VISITORS} berths of arrivals, without a coast`;
+
     const first = portDistrict(s.districts);
-    n.portBerths.textContent = fmtInt(berths);
+    // Berths *landing* rather than berths owned, because the runway lands on the
+    // same path a quay does — see `berthsLanding`. An inland city reads three
+    // and no coast, which is the whole point of the building.
+    n.portBerths.textContent = `${fmtInt(berthsLanding(s))}/${fmtInt(berths + (s.airport ? AIRPORT_VISITORS : 0))}`;
     n.portWhere.textContent =
-      first < 0 ? 'no coast yet' : `first quay on district ${fmtInt(first + 1)}`;
+      first >= 0 ? `first quay on district ${fmtInt(first + 1)}`
+      : s.airport ? 'by air only'
+      : 'no coast yet';
 
     const heads = visitors(s);
     n.portVisitors.textContent = fmt(heads);
     n.portSpend.textContent =
-      s.cruiseTerminals <= 0
-        ? 'no cruise berths'
-        : `${fmt(cruiseIncome(s))}/s in tourism`;
+      berthsLanding(s) <= 0 ? 'nowhere to arrive' : `${fmt(cruiseIncome(s))}/s in tourism`;
 
     n.portExports.textContent = fmt(exportMarket(s));
+    const lift = CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0);
     n.portLift.textContent =
-      s.cargoTerminals <= 0
-        ? 'no cargo berths'
-        : `+${Math.round(CARGO_EXPORT_LIFT * s.cargoTerminals * 100)}% on the tap`;
+      lift <= 0 ? 'no freight yet' : `+${Math.round(lift * 100)}% on the tap`;
   }
 
   /**

@@ -226,6 +226,19 @@ export interface GameState {
    */
   cityHall: boolean;
   /**
+   * The airport: one per city, on open ground past the far side of the estates.
+   *
+   * A boolean, and the second thing the city builds on land it does not own.
+   * Where it stands is a pure function of the seed exactly as an estate's plot
+   * is — see `airportCell` — and it is counted apart from every plot total for
+   * the same reason: the city does not own the ground.
+   *
+   * What it buys is tourism without a coast. `visitors` is the existing path and
+   * the airport is worth AIRPORT_VISITORS cruise berths on it, happiness scaling
+   * and all — so a miserable city gets a runway and no tourists.
+   */
+  airport: boolean;
+  /**
    * The road out of town, and the works standing along it.
    *
    * A boolean and a count, and the boolean is the progression gate: the highway
@@ -357,6 +370,7 @@ export function createState(now = Date.now()): GameState {
     plants: 0,
     plantStaff: 0,
     cityHall: false,
+    airport: false,
     highway: false,
     estates: 0,
     hospitals: 0,

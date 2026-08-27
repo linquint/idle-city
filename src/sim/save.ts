@@ -17,6 +17,7 @@ import {
   industryCapacity,
   mergeCapacity,
   mergedCohort,
+  airportAllowed,
   parkCapacity,
   plantCapacity,
   landmarkSiteCapacity,
@@ -352,6 +353,11 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     plants: count(r['plants']),
     plantStaff: share(r['plantStaff'], 0),
     highway: r['highway'] === true,
+    // Off for every older save, which is the state a city that never built one
+    // is in — and unlike the city hall it gates nothing an older save was
+    // already using, so there is nothing to grant. Clamped below against the
+    // road and the ground, exactly as the estates are.
+    airport: r['airport'] === true,
     estates: count(r['estates']),
     // v2 called them clinics, schools and stations and stood them on single
     // residential plots. They are the same slot — the building the city buys to
@@ -435,6 +441,10 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // One square a district, so a save carried over from a larger city sheds the
   // plants whose ground it no longer owns.
   state.plants = Math.min(state.plants, plantCapacity(state));
+  // A runway with no road to it is not an airport, and a seed whose water took
+  // every candidate site has nowhere to put one. Same shape as the estates'
+  // clamp and for the same two reasons.
+  if (!airportAllowed(state)) state.airport = false;
 
   const fitted = [
     fitZone(state.homes, state.abandonedR, r['homeLevels'], tier, state.mergedR, homeCapacity(state), mergeCapacity(state, 'home')),

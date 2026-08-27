@@ -2011,6 +2011,104 @@ export const ESTATE_GROWTH = 1.35;
  */
 export const HIGHWAY_COST = ANNEX_BASE * ANNEX_GROWTH ** (HIGHWAY_MIN_DISTRICTS - 1);
 
+// ------------------------------------------------------------------ airport
+
+/**
+ * What the airport costs to build.
+ *
+ * Derived against the annexation curve rather than against the port, and the
+ * derivation is what makes it a late commitment rather than another button:
+ * it is exactly what the *next* district would cost at the moment the highway
+ * opens. So a player standing at the end of the road is choosing between one
+ * more district of their own land and the thing at the end of it, which is the
+ * same decision HIGHWAY_COST is priced against one step earlier — and the
+ * airport is 3.4x the road, because it is what the road was for.
+ *
+ * Pricing it against TERMINALS instead was the obvious alternative and is
+ * wrong. A cruise berth opens at 20,000 and there are six of them on a full
+ * waterfront; the airport is one building bought once, at a point in the game
+ * where 20,000 is a rounding error. What it has to cost is a decision, and the
+ * only curve that is still steep where the airport unlocks is the land's.
+ */
+export const AIRPORT_BASE = ANNEX_BASE * ANNEX_GROWTH ** HIGHWAY_MIN_DISTRICTS;
+
+/**
+ * What the airport is worth, in cruise berths.
+ *
+ * Stated in the unit that already exists rather than in a new one, because the
+ * thing it does already exists: `visitors` is residents x
+ * VISITORS_PER_RESIDENT x happiness per berth, and the airport is more berths.
+ * That keeps the happiness scaling, which is the interesting part — a miserable
+ * city gets a runway and no tourists, exactly as it gets a quay and no ships.
+ *
+ * Three, against the six a full waterfront holds. So an airport is half a coast:
+ * enough that an inland city has a tourism line at all, and not so much that a
+ * coastal city would rather have had the airport.
+ *
+ * Measured (tools/water.calibrate.mjs) on an inland city with no berths of any
+ * kind, which is the city this exists for: it adds 0.91% of the ledger at the
+ * fourteen districts where it unlocks and 0.27% at forty-nine, identically at
+ * every rung of the level ladder because both sides scale with residents. That
+ * is the same order as the whole fare line and the whole waterfront, which is
+ * the family trade income belongs to — see VISITOR_SPEND, which says so of the
+ * berths and is right about this too.
+ */
+export const AIRPORT_VISITORS = 3;
+
+/**
+ * What the airport adds to the export tap, as a fraction of it.
+ *
+ * Air freight, and it lifts EXPORT_BASE the same way CARGO_EXPORT_LIFT does —
+ * inside the same bracket, so there is still exactly one number the outside
+ * world's appetite is made of and one place to look when industrial demand is
+ * wrong.
+ *
+ * Inside the bracket *additively* is what stops it double-counting against a
+ * cargo terminal. The two lifts add rather than multiply, so a city with both
+ * gets one tap raised twice rather than two taps for the same goods; and a
+ * multiplicative form was the obvious alternative and would have made the
+ * airport worth more to a city that already had a waterfront than to the inland
+ * city it exists for, which is exactly backwards.
+ *
+ * 0.25 against a cargo berth's 0.4: less than a berth, because a berth is what
+ * bulk goes on and a plane is not. Measured, it multiplies the tap by 1.25 for
+ * an inland city at any size — the whole of that city's freight — and by 1.14 at
+ * fourteen districts or 1.07 at forty-nine for a city that already owns every
+ * quay it can. Worth most to the city that has least, which is the shape the
+ * additive form buys and the multiplicative one would have inverted.
+ */
+export const AIRPORT_EXPORT_LIFT = 0.25;
+
+/**
+ * What the airport costs to run, in the units `Service.base` is priced in.
+ *
+ * The one building whose wage bill is *not* its opening price, and it has to be
+ * one or the other. Every civic building is priced off `Service.base` on a
+ * curve that opens at 130, so UPKEEP_RATE reads as a payback period; the
+ * airport's price comes off ANNEX_GROWTH instead and is 1.7e12 by the time it
+ * unlocks, so the same rule would charge more per second than the city earns in
+ * a minute.
+ *
+ * Exactly one university, which is the biggest single entry on the payroll —
+ * so an airport is the dearest single thing a city runs and is not in a
+ * different category from the rest of it.
+ *
+ * The number is set against what it *earns* rather than against what it cost,
+ * and 24,000 was tried first and is wrong: measured, it charges 2.23% of a
+ * fourteen-district city's gross income against the 0.91% the tourism brings in,
+ * so the one building that gives an inland city tourism at all would be a
+ * building that lost money the day it opened. The export lift would still have
+ * justified it, but only through industrial demand, which is not a line the
+ * player can read.
+ *
+ * At 7,200 it is 0.67% of that same ledger against 0.91% of tourism, so it pays
+ * its own wages from the first second and the freight lift is upside rather than
+ * the whole argument. By a full map it is 0.19% against 0.27%, which is the same
+ * arc every trade constant in this file has: a real line when it is new and a
+ * rounding error once the city has grown into it.
+ */
+export const AIRPORT_PAYROLL = 7_200;
+
 // -------------------------------------------------------------------- policy
 
 /**

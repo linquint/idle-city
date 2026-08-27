@@ -75,6 +75,13 @@ export const PALETTE = {
   // them, not a colour nothing else has.
   plant: 0x4c5a71,
   plantRoof: 0x38455a,
+  // The airport. An apron is made ground like an estate's yard and a runway is
+  // road, so both borrow what the city already uses for those — what makes the
+  // shape legible from the play camera is the *markings*, which are the one
+  // white surface anywhere on the map.
+  apron: 0x6f7683,
+  runway: 0x2a3140,
+  marking: 0xe8ecf2,
   // The waterfront. A quay is a deck the colour of the kerbs the city already
   // has, because it is the same thing: made ground with something standing on
   // it. Hulls are darker than anything on land so a ship reads against the
