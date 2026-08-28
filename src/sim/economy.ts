@@ -11,6 +11,13 @@ import {
   AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   CITY_HALL_BASE,
+  CONGESTION_DENSITY_EXPONENT,
+  CONGESTION_MOOD,
+  CONGESTION_SCALE,
+  FREE_TRANSPORT_RIDERSHIP,
+  ROAD_CELLS_PER_DISTRICT,
+  TRANSIT_ROAD_SHARE,
+  TRIPS_PER_RESIDENT,
   CIVIC_RAMP_SECONDS,
   CIVIC_SERVICES,
   ABANDON_SECONDS,
@@ -93,6 +100,9 @@ import {
   SHOP_BONUS,
   SHOP_GROWTH,
   SHOP_JOBS,
+  SKILL_YIELD,
+  ROAD_VISITORS,
+  VISITOR_TRIPS,
   SHOP_SUPPLY,
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
@@ -473,6 +483,31 @@ export const educationCoverage = (s: GameState): number => {
   return Math.min(1, reached / plots);
 };
 
+/**
+ * What the city's schooling is worth to its industry, as a multiplier.
+ *
+ * One expression, read at every call site that charges the industrial term, so
+ * the ledger, the inspector and the HUD cannot disagree about what a school is
+ * worth. No new save field and no new lag: education already lags, through the
+ * staffing ramp its coverage is multiplied by, so a school opened this instant
+ * is worth nothing yet and ramps in exactly as its coverage does.
+ *
+ * **Applied at the `income` call site rather than inside `bonuses` itself**, and
+ * the difference is `ledgerScale`: `bonuses` is shared with the upkeep model,
+ * where it keeps the wage bill a constant *share* of a ledger that climbs the
+ * level ladder twice. Folding the skill in there would raise the payroll by the
+ * same factor it raised the income, and the city would hand back most of what
+ * it had just been given — which is the one thing "it should be worth building
+ * schools for" rules out. So the skill is a net gain, and the deliberate
+ * consequence is that a fully taught city runs a slightly smaller upkeep share
+ * than an ignorant one. Bounded by SKILL_YIELD, so it is a few points and not a
+ * regime change.
+ *
+ * 1 at no coverage, so every constant in this file keeps the meaning it was
+ * measured with.
+ */
+export const workforceSkill = (s: GameState): number => 1 + SKILL_YIELD * educationCoverage(s);
+
 /** Buildings a zone promotes per second, with every gate open. */
 export const promoteRate = (s: GameState, kind: ZoneKind): number =>
   canLevelUp(s, kind) ? promotable(s, kind) / LEVEL_UP_SECONDS : 0;
@@ -820,6 +855,114 @@ export const riders = (s: GameState): number =>
 export const fareIncome = (s: GameState): number =>
   faresWaived(s) ? 0 : riders(s) * FARE_PER_RIDER;
 
+// ------------------------------------------------------------------- traffic
+
+/**
+ * Trips the city's residents put on the road each second, before transit.
+ *
+ * Residents rather than matched worker/job pairs — see TRIPS_PER_RESIDENT for
+ * the measurement that forces it. Nothing else generates a trip here: freight
+ * and the shops' own deliveries are real and are deliberately not modelled,
+ * because they would be a second term calibrated against the same road supply
+ * for no decision the player can act on.
+ */
+export const trips = (s: GameState): number => residents(s) * TRIPS_PER_RESIDENT;
+
+/**
+ * Share of the city's trips the transit network is carrying, in [0, 1].
+ *
+ * Two factors, and they say different things through the same buses. The
+ * coverage is how much of the city the network reaches — and already rises with
+ * free transport, because `covered` gives transit FREE_TRANSPORT_REACH — and the
+ * ridership term is the people already covered choosing the bus once it costs
+ * nothing. Clamped, so a doctored constant cannot take more trips off the road
+ * than the city makes.
+ */
+export const transitShare = (s: GameState): number => busShare(s, transitCoverage(s));
+
+/**
+ * The same read against a *hypothetical* coverage, so the happiness panel can
+ * price one more depot without building it.
+ *
+ * Split out rather than duplicated, because two expressions for what a bus
+ * carries would be two things to keep in step — the same reasoning `bonuses`
+ * carries for being one expression rather than a copy in `income` and one in
+ * `ledgerScale`.
+ */
+const busShare = (s: GameState, reach: number): number =>
+  Math.min(
+    1,
+    TRANSIT_ROAD_SHARE *
+      Math.max(0, Math.min(1, reach)) *
+      (faresWaived(s) ? 1 + FREE_TRANSPORT_RIDERSHIP : 1),
+  );
+
+/** Trips actually on the road: what the network does not carry. */
+export const roadTrips = (s: GameState): number => trips(s) * (1 - transitShare(s));
+
+/**
+ * How jammed the city's streets are, in [0, 1].
+ *
+ * A city-wide scalar, and that is a property of the generator rather than a
+ * simplification — see ROAD_CELLS_PER_DISTRICT. Every district has the same 81
+ * road cells and the same 3+3 through-lines, so there is no district-to-district
+ * variation to read and a per-district congestion number would be a fabrication.
+ *
+ * Density is discounted by `cityScale ** CONGESTION_DENSITY_EXPONENT` rather
+ * than divided out, which is the whole calibration: raw trips per road cell
+ * swing 150x over the level ladder and full normalisation inverts the sign. See
+ * the exponent's own comment for the table.
+ *
+ * Derived rather than integrated, and deliberately: it has no lag of its own
+ * because everything it reads already has one. Residents come through
+ * `occupancyR`, which is integrated; transit coverage comes through the staffing
+ * ramp, which is integrated; and what congestion feeds is happiness, which is
+ * integrated. A fourth lag on top would be a lag on a lag.
+ *
+ * One consequence is worth stating because nothing else in the happiness model
+ * has it: this **closes a feedback loop that used to be open**. Every other term
+ * happiness reads — coverage, parks, landmarks, the tax rate — is independent of
+ * how full the city is, so happiness drove occupancy and nothing drove back.
+ * Traffic reads `residents`, which is occupancy, so the two are now a coupled
+ * pair: more residents, more traffic, less mood, fewer residents. It is negative
+ * feedback and self-damping, so it converges rather than oscillating — but it is
+ * the reason a 60-second catch-up step and 600 tenth-second ticks now differ by
+ * about 1% on a large city's income where they used to agree to the last figure.
+ * See test/history.test.ts, which carries the measurement.
+ */
+export const congestion = (s: GameState): number => congestionAt(s, transitShare(s));
+
+/** Congestion against a given share of trips carried, so a purchase can be priced. */
+const congestionAt = (s: GameState, carried: number): number => {
+  const road = ROAD_CELLS_PER_DISTRICT * Math.max(1, s.districts);
+  const density = cityScale(s) ** CONGESTION_DENSITY_EXPONENT;
+  const onRoad = trips(s) * (1 - Math.max(0, Math.min(1, carried)));
+  const per = onRoad / road / Math.max(1e-9, density);
+  return Math.max(0, Math.min(1, per / CONGESTION_SCALE));
+};
+
+/**
+ * What congestion would read with one more depot open and fully staffed.
+ *
+ * The marginal reading `happinessFix` needs, and it is built the same way every
+ * other option in that list is: one more building at full staffing against the
+ * coverage the city has now. Goes to zero once the network is complete, so a
+ * covered city never has "open a depot" named at it.
+ */
+export const congestionWithDepot = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (!TRANSIT || plots <= 0) return congestion(s);
+  return congestionAt(s, busShare(s, (covered(s, TRANSIT) + TRANSIT.plots) / plots));
+};
+
+/**
+ * What congestion costs the happiness target, in points. Never negative.
+ *
+ * The sign is here rather than at the call site so a reader of
+ * `happinessTarget` sees one bracket of things added and this among them.
+ */
+export const congestionMood = (s: GameState): number => -CONGESTION_MOOD * congestion(s);
+
 /**
  * Share of the city's housing land a service reaches, capped at all of it.
  *
@@ -965,13 +1108,66 @@ export const visitors = (s: GameState): number =>
  * keeps the happiness scaling — the term that makes tourism the one income line
  * in the game that goes to *zero* in a miserable city rather than to
  * HAPPINESS_FLOOR. Nobody's holiday is somewhere grim, and that is as true of a
- * flight as of a cruise.
+ * flight as of a cruise, and of a coach.
+ *
+ * Three sources, one expression. The road is the third and it is the only one
+ * with no building of its own: it rides on `landmarkCoverage`, so a city that
+ * has been buying museums for the mood has been buying tourism as well without
+ * being told. See `visitorSources`, which is what the Trade tab splits out.
  */
 export const berthsLanding = (s: GameState): number =>
-  s.cruiseTerminals + (s.airport ? AIRPORT_VISITORS : 0);
+  s.cruiseTerminals +
+  (s.airport ? AIRPORT_VISITORS : 0) +
+  // And the road, which is the third source and folded in the same way rather
+  // than opened beside it. Landmarks rather than a terminal, so a landlocked
+  // city under HIGHWAY_MIN_DISTRICTS has tourism at all — see ROAD_VISITORS.
+  ROAD_VISITORS * landmarkCoverage(s);
 
 /** What those visitors spend, per second, before tax. */
 export const cruiseIncome = (s: GameState): number => visitors(s) * VISITOR_SPEND;
+
+/**
+ * Where the visitors came from, in people.
+ *
+ * A split of one number rather than three numbers that have to agree: the
+ * shares are the berth counts and `visitors` is berths times everything else,
+ * so this is that product divided back up. A panel that computed each source
+ * separately would be a second arrivals model, and the first thing to go wrong
+ * with it would be the happiness scaling on one of the three.
+ */
+export interface VisitorSources {
+  readonly quay: number;
+  readonly air: number;
+  readonly road: number;
+  readonly total: number;
+}
+
+export const visitorSources = (s: GameState): VisitorSources => {
+  const berths = berthsLanding(s);
+  const total = visitors(s);
+  if (berths <= 0) return { quay: 0, air: 0, road: 0, total: 0 };
+  const per = total / berths;
+  return {
+    quay: per * s.cruiseTerminals,
+    air: per * (s.airport ? AIRPORT_VISITORS : 0),
+    road: per * ROAD_VISITORS * landmarkCoverage(s),
+    total,
+  };
+};
+
+/**
+ * The share of the city's shopping the visitors are doing, in [0, 1].
+ *
+ * For the panel, and it is the number that says whether tourism is worth
+ * anything: the trips themselves are inside `demandTargets.c` where nothing can
+ * read them, and "12% of the shopping" is a fact a player can act on where
+ * "0.04 of a demand point" is not.
+ */
+export const visitorShare = (s: GameState): number => {
+  const locals = residents(s) * SPEND_PER_RESIDENT;
+  const guests = visitors(s) * VISITOR_TRIPS;
+  return guests + locals <= 0 ? 0 : guests / (guests + locals);
+};
 
 export interface TerminalReading {
   readonly terminal: Terminal;
@@ -1115,7 +1311,7 @@ export function estateBlocker(s: GameState): string | null {
  * the two have in common and nothing more.
  */
 export interface HappinessTerm {
-  readonly key: ServiceKey | 'recreation';
+  readonly key: ServiceKey | 'recreation' | 'congestion';
   readonly coverLabel: string;
   readonly weight: number;
   /**
@@ -1130,6 +1326,19 @@ export interface HappinessTerm {
    * else.
    */
   readonly coverage: number;
+  /**
+   * True for a term that is a *modifier* on earned coverage rather than one of
+   * the weights that sum to 1.
+   *
+   * Congestion is the only one, and it is in this list rather than beside it so
+   * the panel can name it and `bindingTerm` can pick it. What makes that sound
+   * is that a modifier's cost is already in the same units: `weight x (1 -
+   * coverage)` is exactly CONGESTION_MOOD x congestion, which is exactly what it
+   * takes off the target. What the flag says is that the four weights still sum
+   * to 1 without it, and that `shortfallShare` does not apply — a small city is
+   * excused a service it has not needed yet, and is not excused its own traffic.
+   */
+  readonly modifier?: boolean;
 }
 
 /**
@@ -1144,7 +1353,15 @@ export interface HappinessTerm {
 export const shortfallShare = (s: GameState): number =>
   Math.min(1, housingPlots(s) / COVERAGE_GRACE_PLOTS);
 
-/** Every term happiness is made of, services first. The weights sum to 1. */
+/**
+ * Every term happiness is made of, services first, then recreation, then the
+ * one modifier the panel can name.
+ *
+ * The first four are the weights, and they sum to exactly 1. Congestion is
+ * `modifier: true` and is not one of them — it is here so the panel has a row
+ * for it and `bindingTerm` can pick it, which is the whole of what makes a depot
+ * a mood purchase. See `HappinessTerm.modifier`.
+ */
 export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
   ...HAPPINESS_SERVICES.map((service) => ({
     key: service.key,
@@ -1157,6 +1374,15 @@ export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
     coverLabel: 'Parks per plot',
     weight: RECREATION_WEIGHT,
     coverage: recreationCoverage(s),
+  },
+  {
+    key: 'congestion' as const,
+    // Stated as the good thing rather than the bad one, so every row in the
+    // panel reads the same way round: a high number is a city doing well.
+    coverLabel: 'Roads clear',
+    weight: CONGESTION_MOOD,
+    coverage: 1 - congestion(s),
+    modifier: true,
   },
 ];
 
@@ -1189,10 +1415,17 @@ export const happinessTarget = (s: GameState): number => {
   // are an area-of-effect over housing land, not a service the city is covered
   // by, and adding them to the weighted sum would have re-opened a calibration
   // that has held for three cycles. See LANDMARK_MOOD.
+  //
+  // Congestion is the fourth, and the first that is a cost rather than a
+  // purchase. It is not scaled by `shortfallShare` — that grace is about a
+  // service a city is too small to have needed yet, and a city too small to
+  // have needed a hospital has too few residents to jam its own streets, so the
+  // term is already small there on its own.
   const policy =
     taxStep(s).mood +
     (faresWaived(s) ? FREE_TRANSPORT_MOOD : 0) +
-    LANDMARK_MOOD * landmarkCoverage(s);
+    LANDMARK_MOOD * landmarkCoverage(s) +
+    congestionMood(s);
   return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
 
@@ -1259,6 +1492,22 @@ export const happinessFix = (s: GameState): HappinessFix | null => {
     });
   }
 
+  // The depot, and the reason congestion was worth building at all. TRANSIT
+  // carries `weight: 0`, so it is not in HAPPINESS_SERVICES and the loop above
+  // never sees it — but a jammed city has a purchase that fixes it, and a panel
+  // that could not name that purchase would be naming a problem with no answer.
+  if (TRANSIT && serviceCount(s, 'transit') < serviceAllowed(s, TRANSIT)) {
+    const cost = serviceCost(s, TRANSIT);
+    options.push({
+      label: TRANSIT.buildLabel,
+      cost,
+      affordable: s.cash >= cost,
+      // Not scaled by `share`: congestion is a modifier and is not excused for
+      // a small city — see `happinessTarget`.
+      lift: CONGESTION_MOOD * (congestion(s) - congestionWithDepot(s)),
+    });
+  }
+
   if (s.parks < parkCapacity(s)) {
     const now = recreationCoverage(s);
     const then = Math.min(1, ((s.parks + 1) * PLOTS_PER_PARK) / plots);
@@ -1282,10 +1531,15 @@ export const happinessFix = (s: GameState): HappinessFix | null => {
 
 export const bindingTerm = (s: GameState): HappinessTerm => {
   const terms = happinessTerms(s);
+  // The grace applies to the four weighted coverages and not to the modifier,
+  // exactly as `happinessTarget` applies it. It used not to matter here — a
+  // factor common to every term cannot reorder them — and it does now that a
+  // term it does *not* scale is in the list beside them.
+  const share = shortfallShare(s);
   let worst = terms[0] as HappinessTerm;
   let cost = -1;
   for (const term of terms) {
-    const lost = term.weight * (1 - term.coverage);
+    const lost = term.weight * (1 - term.coverage) * (term.modifier === true ? 1 : share);
     if (lost > cost) {
       cost = lost;
       worst = term;
@@ -1891,7 +2145,13 @@ export const demandTargets = (s: GameState): DemandTargets => {
       clampDemand((jobs(s) - reachableWorkers(s)) / scale + demandLift(s, 'home')),
     ),
     c: clampDemand(
-      (residents(s) * SPEND_PER_RESIDENT -
+      (residents(s) * SPEND_PER_RESIDENT +
+        // Visitors shop, and that is the whole of how tourism reaches the
+        // ledger now: not as a line of its own — one outside the income
+        // bracket is 0.0003% of a mature city's ledger — but as demand for
+        // premises, which reaches income through SHOP_BONUS exactly as every
+        // resident's spending does. See VISITOR_TRIPS.
+        visitors(s) * VISITOR_TRIPS -
         openOf(s, 'shop', SHOP_TRIPS) +
         labourReach(s)) /
         scale +
@@ -2132,7 +2392,17 @@ export const income = (s: GameState): number => {
   // The estates are not in the cohort and cannot catch fire — they are outside
   // the city and outside the fire model — so they are added after the burning
   // share comes off rather than before it.
-  const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry')) + estateEarning(s);
+  // The skill multiplies the industrial term and nothing else. It reaches the
+  // estates too, and that is a decision rather than an oversight: the estates
+  // *are* the city's industry — `estateEarning` already multiplies by
+  // `industryScale`, the mean level weight of city industry, because they are
+  // the same firms with a road between them — so a workforce that has been to
+  // school is the same workforce out past the highway. Excluding them would
+  // mean an educated city's industry got better everywhere except where it had
+  // most recently expanded, which is the opposite of the intended shape.
+  const industry =
+    (effectiveOf(s, 'industry') * (1 - alight(s, 'industry')) + estateEarning(s)) *
+    workforceSkill(s);
   return (
     (people *
       RENT *
@@ -2588,7 +2858,9 @@ export const buildingIncome = (
     const bonuses =
       1 +
       SHOP_BONUS * effectiveOf(s, 'shop') +
-      INDUSTRY_BONUS * effectiveOf(s, 'industry') +
+      // The same skill multiplier `income` charges, so the card and the ledger
+      // quote one number rather than two.
+      INDUSTRY_BONUS * effectiveOf(s, 'industry') * workforceSkill(s) +
       DISTRICT_BONUS * (s.districts - 1);
     const land =
       parcel === undefined
@@ -2596,7 +2868,8 @@ export const buildingIncome = (
         : parcelLandValue(s, parcel.plot, parcel.plots);
     return (LEVEL_HOUSING[level] ?? 0) * s.occupancyR * RENT * land * bonuses * mood;
   }
-  const share = kind === 'shop' ? SHOP_BONUS : INDUSTRY_BONUS;
+  const share =
+    kind === 'shop' ? SHOP_BONUS : INDUSTRY_BONUS * workforceSkill(s);
   return (
     residents(s) * RENT * share * (LEVEL_SCALE[level] ?? 1) * occupancyOf(s, kind) * mood
   );

@@ -1,4 +1,17 @@
-import { EventLog, EVENT_COVERAGE_LOST, type GameEvent } from '../core/events.ts';
+import {
+  AWAY_COALESCE_SECONDS,
+  AWAY_EVENT_BUFFER,
+  EventLog,
+  EVENT_COVERAGE_LOST,
+  type GameEvent,
+} from '../core/events.ts';
+import { ACHIEVEMENTS, ACHIEVEMENT_TEST_SECONDS } from './achievements.ts';
+import {
+  HISTORY_COARSE_SECONDS,
+  HISTORY_FINE_SECONDS,
+  advance as advanceTier,
+  emptyHistory,
+} from './history.ts';
 import { districtLand } from './layout.ts';
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
@@ -88,6 +101,7 @@ import {
   recoverRate,
   abandonRate,
   recreationCoverage,
+  residents,
   housingPlots,
   resolvesAt,
   standingOf,
@@ -202,6 +216,43 @@ export interface AwayReport {
   seconds: number;
   /** Seconds that were dropped because the cap bit. */
   forfeited: number;
+  /**
+   * `elapsed` at the moment the absence started.
+   *
+   * The origin the timeline is read against. A `GameEvent` carries an absolute
+   * `at` — it is `GameState.elapsed`, the only clock the simulation has — so
+   * turning one into "+2h14m into the absence" needs the other end of the
+   * interval, and this is it.
+   */
+  startedAt: number;
+  /**
+   * What happened, in the order it happened.
+   *
+   * The half of the report the totals cannot carry. A total is what an absence
+   * *added up to*; this is what it consisted of, and the two answer different
+   * questions — "you lost two buildings" against "at +6h40m two homes burned
+   * down while the fire station was unstaffed".
+   *
+   * Bounded by AWAY_EVENT_BUFFER and coalesced at AWAY_COALESCE_SECONDS, so a
+   * twelve-hour absence is a readable list rather than a log. Never saved: it
+   * is a byproduct of one `catchUp` call and dies with the sheet.
+   */
+  timeline: readonly GameEvent[];
+  /**
+   * Entries the away log ran out of room for, oldest first.
+   *
+   * Measured, and the reason this field exists rather than a comment claiming
+   * the bound is headroom: a twelve-hour absence of a *mid-size* city produces
+   * 117 distinct entries at AWAY_COALESCE_SECONDS and a large one 132, against
+   * a ring of 64. Widening the window barely helps — 30 minutes still leaves 70
+   * and 82 — because what dominates is `level-up`, which has fifteen distinct
+   * (zone, level) subjects and genuinely does happen all day.
+   *
+   * So the ring truncates for any city with something going on, and the sheet
+   * has to say so. Showing the newest sixty-four and nothing else would be
+   * claiming that was the whole absence.
+   */
+  dropped: number;
   earned: number;
   /**
    * Cash auto-development handed straight back out. Reported because it is the
@@ -354,6 +405,28 @@ export class Game {
    */
   private readonly log = new EventLog();
   /**
+   * The second log, and the one an absence is reported through.
+   *
+   * The ticker is silent for the length of a `catchUp` and that is right — see
+   * `recording`, which argues it at length. What that reasoning was right about
+   * is the *ticker*: a sixteen-entry ring drained every frame cannot carry
+   * twelve hours, and replaying it under the away sheet would say the same
+   * facts twice and push the live events out.
+   *
+   * It was wrong about the *sheet*. The sheet is modal, has the player's whole
+   * attention, and lists twenty totals — and a total is what added up, not what
+   * happened. "You earned 4.2M and lost two buildings" and "at +2h14m the grid
+   * went short, at +6h40m two homes burned down" are different reports, and the
+   * second one is the one that explains the first.
+   *
+   * So: the same class, the same merge rule, and a bound and a window of its
+   * own. `Game.recording` still gates the ticker; this records regardless and
+   * is cleared at the top of every `catchUp`.
+   */
+  private readonly awayLog = new EventLog(AWAY_EVENT_BUFFER, AWAY_COALESCE_SECONDS);
+  /** Whether the away log is recording. True only inside a `catchUp`. */
+  private away = false;
+  /**
    * Whether events are being recorded at all.
    *
    * Off for the length of a `catchUp` call, and that is the one interesting
@@ -379,6 +452,15 @@ export class Game {
   private readonly covering = new Set<string>();
   /** Whether the grid was covering the load last tick. Same reasoning again. */
   private lit = true;
+  /**
+   * Simulated seconds banked toward the next pass over the achievement table.
+   *
+   * On the instance rather than in the save — see ACHIEVEMENT_TEST_SECONDS for
+   * why this one does not have to be step-size invariant when `surveyClock`
+   * does. A reload starts it at zero, which only means the first pass happens
+   * sooner, and the record it writes is a pure function of the state either way.
+   */
+  private achievementClock = 0;
 
   constructor(state: GameState = createState()) {
     this.inner = state;
@@ -390,6 +472,17 @@ export class Game {
     this.inner.homeLevels = [...state.homeLevels];
     this.inner.shopLevels = [...state.shopLevels];
     this.inner.industryLevels = [...state.industryLevels];
+    // The achievement record is the fourth field that is not a number, and it
+    // is copied for exactly the reason the three cohorts are: two games built
+    // from one patch object would otherwise share it and unlock each other's
+    // rows.
+    this.inner.unlocked = { ...state.unlocked };
+    // And the chart, for the same reason again: two games spread from one patch
+    // would otherwise write into one another's rings.
+    this.inner.history = {
+      fine: { ...state.history.fine },
+      coarse: { ...state.history.coarse },
+    };
   }
 
   get state(): Readonly<GameState> {
@@ -407,9 +500,17 @@ export class Game {
     return this.log.drain();
   }
 
-  /** The one place an event is recorded, so `catchUp` can silence all of them. */
+  /**
+   * The one place an event is recorded, so `catchUp` can silence the ticker.
+   *
+   * Two logs, and exactly one of them is recording at any moment: the ticker
+   * while the player is watching, the away log while they are not. Written as
+   * two independent tests rather than an if/else so that a future third
+   * consumer does not have to reopen the question.
+   */
   private emit(event: GameEvent): void {
     if (this.recording) this.log.push(event);
+    if (this.away) this.awayLog.push(event);
   }
 
   /**
@@ -464,6 +565,87 @@ export class Game {
     // Last, and after auto-development, so what the ticker reports is the tick's
     // settled state rather than a state the same tick went on to change.
     this.watchTransitions();
+    // And last of all, the record. Same reasoning as the ticker's, one step
+    // further: an achievement about the tick's settled state must be tested
+    // after everything that could settle it, including the purchase
+    // auto-development just made.
+    this.checkAchievements(dt);
+    // And the chart, which reads the settled tick for the same reason. It is a
+    // pure readout — nothing in the loop above consults it — so it is last.
+    this.recordHistory(dt);
+  }
+
+  /**
+   * Banks `dt` into both tiers of the chart and samples whichever have come due.
+   *
+   * `residents` rather than `population`, and `income` rather than `netIncome`:
+   * the chart is about the city that exists, not the one its housing was built
+   * for, and about what the buildings take in before the wage bill — which is
+   * the line the Treasury tab calls gross and the one a player watching a graph
+   * of "income" means.
+   *
+   * Read once and handed to both tiers, because they are two views of the same
+   * instant and computing `income(s)` twice a minute for the sake of symmetry
+   * would be two walks of the cohorts for one number.
+   */
+  private recordHistory(dt: number): void {
+    const s = this.inner;
+    const fine = s.history.fine;
+    const coarse = s.history.coarse;
+    // Neither tier is due on the overwhelming majority of ticks, so the sample
+    // is built only once one of them is — `income` and `residents` are cohort
+    // walks and this runs ten times a second.
+    if (
+      fine.clock + dt < HISTORY_FINE_SECONDS &&
+      coarse.clock + dt < HISTORY_COARSE_SECONDS
+    ) {
+      fine.clock += Math.max(0, dt);
+      coarse.clock += Math.max(0, dt);
+      return;
+    }
+    const sample = {
+      population: residents(s),
+      income: income(s),
+      happiness: s.happiness,
+    };
+    advanceTier(fine, dt, HISTORY_FINE_SECONDS, sample);
+    advanceTier(coarse, dt, HISTORY_COARSE_SECONDS, sample);
+  }
+
+  /**
+   * Records any achievement the city has newly earned.
+   *
+   * Only the rows still locked are walked, so the pass shrinks as the table
+   * fills and costs nothing at all for a city that has earned everything.
+   * Banked rather than run per tick — see ACHIEVEMENT_TEST_SECONDS.
+   *
+   * The record is written whether or not anyone is watching; only the *event*
+   * is silenced during a catch-up, exactly as every other category is. So a
+   * twelve-hour absence comes back with the rows it earned already ticked and
+   * the ticker reporting the state it came back to rather than the history it
+   * missed — see `recording`.
+   */
+  private checkAchievements(dt: number): void {
+    const s = this.inner;
+    this.achievementClock += Math.max(0, dt);
+    if (this.achievementClock < ACHIEVEMENT_TEST_SECONDS) return;
+    // Reset rather than decremented. This is a refresh rhythm, not an
+    // accumulator spending whole passes: a 60-second catch-up step earns one
+    // pass, because sixty passes over an unchanged state would find the same
+    // answer sixty times.
+    this.achievementClock = 0;
+    for (const achievement of ACHIEVEMENTS) {
+      if (s.unlocked[achievement.key] !== undefined) continue;
+      if (!achievement.test(s)) continue;
+      s.unlocked[achievement.key] = s.elapsed;
+      this.emit({
+        kind: 'unlocked',
+        at: s.elapsed,
+        key: achievement.key,
+        name: achievement.name,
+        count: 1,
+      });
+    }
   }
 
   /**
@@ -1467,6 +1649,10 @@ export class Game {
     this.blocked = null;
     this.covering.clear();
     this.lit = true;
+    this.achievementClock = 0;
+    // `createState` already handed the new state empty rings; this says so
+    // explicitly next to the other per-run counters rather than relying on it.
+    this.inner.history = emptyHistory();
   }
 
   /**
@@ -1612,6 +1798,7 @@ export class Game {
     const wanted = Math.max(0, seconds);
     const credited = Math.min(wanted, OFFLINE_CAP_SECONDS);
     const before = {
+      elapsed: this.inner.elapsed,
       cash: this.inner.cash,
       homes: this.inner.homes,
       shops: this.inner.shops,
@@ -1637,6 +1824,11 @@ export class Game {
     // Silent for the length of this call. See `recording` for why the away
     // sheet is the better place for an absence to be reported.
     this.recording = false;
+    // Cleared rather than appended to: a timeline is a byproduct of *one*
+    // catch-up call and dies with the sheet that showed it. Two absences in one
+    // session are two reports.
+    this.awayLog.clear();
+    this.away = true;
     this.lossesLeft = CATCHUP_MAX_LOSSES;
     // The same guard for decay. However long the absence, the city comes back
     // at most CATCHUP_MAX_ABANDONED plots darker than it was left.
@@ -1653,6 +1845,7 @@ export class Game {
     const dt = credited / steps;
     for (let i = 0; i < steps; i++) this.step(dt);
     this.recording = true;
+    this.away = false;
     this.rearm();
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
@@ -1663,6 +1856,12 @@ export class Game {
     return {
       seconds: credited,
       forfeited: wanted - credited,
+      startedAt: before.elapsed,
+      // A live view of the log's own array, in the order things happened. Not
+      // saved, not read back, and gone the moment the next catch-up clears it —
+      // exactly what every other event in this game is.
+      timeline: this.awayLog.entries,
+      dropped: this.awayLog.dropped,
       // What auto-development spent was earned first, so from the player's side
       // it is all collections. This is the actual outgoing, not a replay of the
       // cost curve — cost now depends on the demand at the moment of purchase.

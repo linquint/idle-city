@@ -204,6 +204,11 @@ canvas {
   min-height: 0;
 }
 
+/* The bottom sheet's handle, and it does not exist on a desktop: the dock is
+   already a panel in a corner there and there is nothing to pull up. See the
+   small-screen block at the foot of this file. */
+.sheet-grip { display: none; }
+
 /* Treasury and rate, outside the tabs and painted on every frame the rest is:
    they are the two numbers a decision is made against. */
 .dock-head {
@@ -401,6 +406,142 @@ button.tab[aria-selected='true'] {
   color: var(--dim);
 }
 .svc.covered .covers { color: var(--signal); }
+
+/* The overlay picker: a control over the map rather than over the city, so it
+   sits with the camera hints rather than in the dock. Chips rather than a
+   dropdown — a dropdown hides six of seven options behind a click, and the
+   whole point of the picker is that a cycle of seven on one key hid them all. */
+/* One absolutely positioned wrapper, so the chips and the note flow against
+   each other: the row wraps to two lines on a narrow screen, and a note pinned
+   to its own `top` would have been underneath it. */
+.overlay-pick {
+  position: absolute;
+  top: 132px;
+  left: 18px;
+  z-index: 3;
+  max-width: 320px;
+  pointer-events: none;
+}
+.overlays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  pointer-events: auto;
+}
+button.overlay {
+  width: auto;
+  margin: 0;
+  padding: 5px 9px;
+  min-height: 0;
+  border: 1px solid var(--line);
+  background: rgba(12, 17, 27, 0.72);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+button.overlay:hover { color: var(--concrete); }
+button.overlay[aria-checked='true'] {
+  border-color: var(--sodium);
+  color: var(--concrete);
+  background: rgba(240, 166, 75, 0.14);
+}
+.overlay-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--dim);
+}
+.overlay-note:empty { display: none; }
+
+/* The graphs.
+
+   Three stacked sparklines sharing an x-axis, drawn as inline SVG because a
+   chart library would be a dependency for three polylines. Each one is a header
+   row on .svc's metrics and a fixed-height plot under it, so a panel that is
+   half readout and half picture still reads as one list. */
+.graphs { display: block; }
+.graph:not(:first-child) { margin-top: 10px; }
+.graph-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+.graph-head .k { flex: 1 1 auto; }
+.graph-head .now {
+  font-variant-numeric: tabular-nums;
+  color: var(--concrete);
+}
+.graph svg {
+  display: block;
+  width: 100%;
+  height: 42px;
+  background: #1c2739;
+}
+.graph .line {
+  fill: none;
+  stroke: var(--signal);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  /* The plot is drawn in a 100x100 user space and stretched to the panel's
+     width, so an untouched stroke would be scaled with it and come out a
+     different weight on every screen. */
+  vector-effect: non-scaling-stroke;
+}
+.graph.mood .line { stroke: var(--sodium); }
+/* A series with nothing in it yet: the axis is still worth drawing, so the
+   empty state is a caption rather than a blank panel. */
+.graph.empty svg { opacity: 0.35; }
+
+/* The awards list.
+
+   Built on .svc's metrics rather than beside them, for the reason the demand
+   breakdown is: two blocks of readout rows under different tabs that looked
+   like two designs would be two things to learn. What is new here is the locked
+   state — a row nobody has earned is still worth reading, because the note on
+   it is the instruction, so it dims rather than disappearing. */
+.awards { display: block; }
+.award-group {
+  margin: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.award-group:not(:first-child) { margin-top: 14px; }
+.award {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+.award .k {
+  flex: 1 1 auto;
+  color: var(--concrete);
+}
+.award .at {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--signal);
+}
+.award .note {
+  /* The note carries the whole width of the row on its own line, so it is a
+     block rather than a third column: "Ten homes standing at once" does not fit
+     beside a name in a 300px dock and truncating an instruction is worse than
+     wrapping it. */
+  margin: 0;
+  flex: 1 1 100%;
+}
+.award.locked .k { color: var(--dim); }
+.award.locked { opacity: 0.72; }
+/* An unlocked row has earned its note out of the way: the time it fired at is
+   the fact, and the instruction is spent. */
+.award:not(.locked) .note { display: none; }
 
 /* The demand breakdown: which term is pushing which signal, and by how much.
    A bar shows that a signal moved; this says what moved it, which is the only
@@ -830,7 +971,62 @@ button.step[aria-checked='true'] {
   letter-spacing: 0.02em;
   color: var(--concrete);
 }
-.sheet-rows { margin: 0 0 18px; }
+/* The timeline: what happened, in the order it happened, above the totals it
+   adds up to. Numbers are the offset into the absence rather than an absolute
+   simulated clock — "+2h14m" against the sheet's own "6h 12m" headline. */
+.sheet-timeline {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  max-height: 34dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sheet-timeline li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dashed rgba(37, 52, 75, 0.8);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.sheet-timeline li:last-child { border-bottom: 0; }
+.sheet-timeline .at {
+  flex: none;
+  width: 54px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.sheet-timeline .what { flex: 1 1 auto; color: var(--concrete); }
+.sheet-timeline li.bad .what { color: #f0b4ae; }
+.sheet-timeline li.warn .what { color: #f3cf9d; }
+.sheet-timeline li.good .what { color: var(--signal); }
+.sheet-timeline:empty { display: none; }
+
+.sheet-more {
+  margin: 0 0 14px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.sheet-more:empty { display: none; }
+
+/* The totals, folded away. They are still the ledger identity — earned less
+   spent less wages is the change in the treasury — and still one click from
+   the timeline that explains them. */
+.sheet-totals { margin: 0 0 18px; }
+.sheet-totals > summary {
+  cursor: pointer;
+  padding: 6px 0;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.sheet-totals > summary:hover { color: var(--concrete); }
+.sheet-totals[open] > summary { margin-bottom: 4px; }
+
+.sheet-rows { margin: 0; }
 .sheet-rows div {
   display: flex;
   justify-content: space-between;
@@ -866,26 +1062,254 @@ button.primary {
    ledger goes back to being a dense two-column grid. The demand tab stays one
    column — its rows are caption-and-body pairs rather than key-and-value ones,
    and two columns break the pairing rather than tightening it. */
+/* --------------------------------------------------------------- phone */
+
+/* One DOM, responsive — never a second HUD. What changes below is layout and
+   hit area; every control is the same control.
+
+   Three things drive the whole block:
+
+     - the dock is a *sheet* rather than a corner panel. A 300px column pinned
+       to a corner is most of a phone screen, and a city you cannot see is a
+       city you cannot play — so it goes full width along the bottom, collapses
+       to its treasury line and its tab strip, and pulls up over the city when
+       you want it;
+     - the tab strip scrolls. Nine tabs wrap to three rows at 360px, which is
+       most of the sheet before a single control. Nothing is hidden behind a
+       menu: an idle game whose treasury is one click away is one you misplay,
+       and that reasoning applies to the whole strip;
+     - 44px, everywhere. A 28px tab and a 24px overlay chip are fine with a
+       mouse and are misses with a thumb. */
 @media (max-width: 760px) {
-  :root { --gutter: 12px; }
-  .corner {
-    right: var(--gutter);
-    width: auto;
-    /* Half the viewport at most: the city is the other half, and a control that
-       covered it would leave nothing to control. */
-    max-height: 62dvh;
+  :root { --gutter: 10px; }
+
+  /* Safe-area insets. index.html already sets viewport-fit=cover, so without
+     these the sheet's controls sit under the home indicator and the masthead
+     under the notch. `max()` rather than addition: the gutter is the floor and
+     the inset is what a device asks for on top of it. */
+  /* The chrome column shifts down together rather than each piece to its own
+     `top`: the masthead, the FPS readout and the picker are stacked at fixed
+     offsets from one another, and moving one of them to the inset alone is how
+     "8 fps" ends up printed through "DISTRICT".
+
+     `--inset-top` carries the shift and every fixed offset adds it, so the
+     stack keeps its spacing whatever the notch asks for. */
+  :root { --inset-top: max(0px, calc(env(safe-area-inset-top) - var(--gutter))); }
+  .masthead {
+    top: var(--inset-top);
+    left: max(0px, calc(env(safe-area-inset-left) - 22px));
   }
-  /* `:not([hidden])` because an id beats `.panel[hidden]` on specificity, and a
-     grid display on a hidden panel is a hidden panel that is not hidden. */
+  .fps { top: calc(57px + var(--inset-top)); }
+
+  /* The dock, as a sheet. Full width along the bottom rather than a column in
+     a corner, so the city keeps the whole of the screen above it. */
+  .corner {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    /* dvh rather than vh throughout: the iOS URL bar makes vh larger than what
+       is actually on screen, and a sheet sized in vh loses its bottom rows to
+       it exactly when they matter. */
+    max-height: 62dvh;
+    gap: 0;
+    padding: 0 max(0px, env(safe-area-inset-left)) 0 max(0px, env(safe-area-inset-right));
+  }
+  .corner .hud.dock {
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* The handle. A full-width strip with a grab bar drawn in it, tall enough to
+     be a thumb target on its own. */
+  .sheet-grip {
+    display: flex;
+    /* Its own 44px, like everything else a thumb lands on — and this one is
+       dragged rather than tapped, so it needs the height more than most. The
+       *bar* stays 4px; what is 44 is the hit area around it. */
+    flex: none;
+    width: 100%;
+    min-height: 44px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    justify-content: center;
+    align-items: center;
+    touch-action: none;
+  }
+  .sheet-grip::before {
+    content: '';
+    width: 42px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--line);
+    transition: background 0.12s ease;
+  }
+  .sheet-grip:hover::before { background: var(--sodium); }
+  .sheet-grip:hover { background: transparent; }
+
+  /* Collapsed: the treasury line, the tab strip, and the one control the open
+     tab is chiefly *for*. Everything else in the panel folds away. The key
+     control is tagged in the markup rather than guessed at from position —
+     half the panels open on a caption, and a sheet that collapsed to the word
+     "Terminals" would be a sheet with nothing on it. */
+  .corner.collapsed { max-height: none; }
+  .corner.collapsed .panels {
+    overflow: hidden;
+    /* Room for one control plus the panel's own padding, and no more. */
+    max-height: 96px;
+  }
+  .corner.collapsed .panel > *:not(.sheet-key) { display: none; }
+  .corner.collapsed .panel > .sheet-key { display: flex; }
+  .corner.collapsed .panel > p.sheet-key { display: block; }
+  /* The ticker is the one thing that has to survive a collapse: it is how the
+     city tells you something happened, and the whole point of collapsing is to
+     go on watching the city. */
+  .corner.collapsed .card { display: none; }
+
+  /* The tab strip: one scrolling row, snapping, with the ends faded so it is
+     visibly not the whole list. */
+  .tabs {
+    /* `flex: none`, and it is load-bearing rather than tidy: the dock is a
+       column flex under a 62dvh cap, so without it the strip is the item that
+       shrinks — measured, a 44px row of tabs was being squeezed to 30 and
+       clipping every one of them. The panels are what scroll under a cap; the
+       strip keeps its height. */
+    flex: none;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    /* The fade. A mask rather than a gradient overlay, so it costs no element
+       and cannot swallow a tap on the tab underneath it. */
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  button.tab {
+    flex: 0 0 auto;
+    scroll-snap-align: center;
+    min-height: 44px;
+    padding: 12px 14px;
+    font-size: 11px;
+  }
+
+  /* 44px in the smallest dimension, everywhere a thumb lands. */
+  button { min-height: 44px; }
+  button.civic { min-height: 52px; padding: 8px 9px; }
+  button.step { min-height: 44px; }
+  button.overlay { min-height: 40px; padding: 10px 12px; font-size: 11px; }
+  .overlays { gap: 6px; }
+  /* The picker is the only way to reach an overlay without a Z key, so it keeps
+     its place at the top of the screen — but the hint above it goes, which is
+     what makes room. */
+  /* The picker takes the lane the hint has just vacated, and scrolls in one
+     row for the same reason the tab strip does: seven chips at a thumb's size
+     wrap to two rows and take 185px of a phone screen, which is city the player
+     came to look at. */
+  .overlay-pick {
+    top: calc(74px + var(--inset-top));
+    left: 0;
+    right: 0;
+    max-width: none;
+    padding: 0 max(var(--gutter), env(safe-area-inset-left)) 0
+      max(var(--gutter), env(safe-area-inset-right));
+  }
+  .overlays {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);
+  }
+  .overlays::-webkit-scrollbar { display: none; }
+  button.overlay { flex: 0 0 auto; }
+  .overlay-note { padding-right: 20px; }
+
+  /* Two columns for the treasury's rows, which are label/value pairs and waste
+     a full-width sheet one at a time. */
   #panel-treasury:not([hidden]) {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0 18px;
   }
   #panel-treasury .row { border-bottom: 1px dashed rgba(37, 52, 75, 0.8); }
+  /* Both of those span the grid: one is a caption and one is a block of rows. */
+  #panel-treasury .cap,
+  #panel-treasury .services { grid-column: 1 / -1; }
+
   .hint { display: none; }
+
+  /* The inspector card sits above the sheet rather than beside it, so it takes
+     the width and gives its rows two columns for the same reason the treasury
+     does. */
+  .card { width: auto; }
+  .card-rows {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 14px;
+  }
+
+  /* The modal sheets. Full width less a gutter, and the timeline gets less of
+     the screen so the button it sits above stays reachable. */
+  .sheet {
+    width: 100%;
+    max-height: calc(100dvh - var(--gutter) * 2);
+    overflow-y: auto;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  }
+  .sheet-lede { font-size: 22px; }
+  .sheet-timeline { max-height: 30dvh; }
+  .scrim { padding: var(--gutter); }
+}
+
+/* Below the width the tab strip's shortest labels stop fitting two to a screen.
+   Nothing is hidden — the strip already scrolls — but the graphs get shorter so
+   three of them still fit above the fold. */
+@media (max-width: 400px) {
+  .graph svg { height: 34px; }
+  .sheet-timeline { max-height: 26dvh; }
+}
+
+/* A pointer that cannot hover is a thumb: the same 44px floor, whatever the
+   viewport says. A tablet in landscape is over 760px wide and still has no
+   mouse on it. */
+@media (hover: none) and (pointer: coarse) {
+  button { min-height: 44px; }
+  button.overlay { min-height: 40px; padding: 10px 12px; }
+
+  /* The strip scrolls on any touch device, not only a narrow one. A tablet in
+     landscape has room for the dock as a corner panel and still has no mouse:
+     nine 44px tabs wrapped to three rows there, which is 132px of the panel
+     spent on navigation before a single control. */
+  .tabs {
+    flex: none;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  button.tab {
+    flex: 0 0 auto;
+    scroll-snap-align: center;
+    min-height: 44px;
+    padding: 12px 14px;
+    font-size: 11px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition-duration: 0.01ms !important; }
+  /* Pseudo-elements as well as elements: `*` does not match `::before`, and the
+     sheet's grab bar is one. */
+  *,
+  *::before,
+  *::after { transition-duration: 0.01ms !important; }
 }

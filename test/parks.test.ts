@@ -15,6 +15,7 @@ import {
 } from '../src/sim/config';
 import {
   bindingTerm,
+  congestionMood,
   canBuildPark,
   happinessTarget,
   happinessTerms,
@@ -240,9 +241,18 @@ describe('the happiness weights', () => {
     expect(services + RECREATION_WEIGHT).toBeCloseTo(1, 12);
     expect(HAPPINESS_SERVICES).toHaveLength(3);
     for (const service of EDUCATION_SERVICES) expect(service.weight).toBe(0);
+    // The *weighted* terms, which is what the sum is a statement about.
+    // `happinessTerms` also carries congestion, which is a modifier on earned
+    // coverage rather than one of the weights — it is in the list so the panel
+    // can name it and `bindingTerm` can pick it, and it is flagged so a reader
+    // and this assertion can both tell the difference. See CONGESTION_MOOD.
     const terms = happinessTerms(state());
-    expect(terms).toHaveLength(HAPPINESS_SERVICES.length + 1);
-    expect(terms.reduce((sum, term) => sum + term.weight, 0)).toBeCloseTo(1, 12);
+    const weighted = terms.filter((term) => term.modifier !== true);
+    expect(weighted).toHaveLength(HAPPINESS_SERVICES.length + 1);
+    expect(weighted.reduce((sum, term) => sum + term.weight, 0)).toBeCloseTo(1, 12);
+    expect(terms.filter((term) => term.modifier === true).map((term) => term.key)).toEqual([
+      'congestion',
+    ]);
   });
 
   /**
@@ -252,19 +262,34 @@ describe('the happiness weights', () => {
    * load. 0.82 against 0.35 is not close.
    */
   it('cap a park-less city at 0.82, well clear of the housing gate', () => {
+    // Measured against the earned coverage, which is the target with the
+    // traffic modifier added back. Congestion is a cost the city buys its way
+    // out of with depots and is not part of what the four weights are worth —
+    // the same reading `happinessTarget` itself takes, one bracket apart. See
+    // CONGESTION_MOOD.
+    const earned = (s: GameState): number => happinessTarget(s) - congestionMood(s);
     for (let level = 0; level < LEVELS; level++) {
       const best = state({ ...housed(19, level), parks: 0, ...served() });
-      expect(happinessTarget(best)).toBeLessThanOrEqual(0.82 + 1e-12);
+      expect(earned(best)).toBeLessThanOrEqual(0.82 + 1e-12);
       expect(happinessTarget(best)).toBeGreaterThan(HAPPINESS_MIN_BUILD);
     }
     // Exactly 0.82 when the three services are full and nothing is on fire.
-    expect(happinessTarget(state({ ...housed(19), parks: 0, ...served() }))).toBeCloseTo(0.82, 12);
+    expect(earned(state({ ...housed(19), parks: 0, ...served() }))).toBeCloseTo(0.82, 12);
   });
 
   it('reach 1 only once the parks are in as well', () => {
     const planted = state({ ...housed(19), parks: 4, ...served() });
-    expect(happinessTarget(planted)).toBeCloseTo(1, 12);
-    expect(bindingTerm(planted).coverage).toBe(1);
+    expect(happinessTarget(planted) - congestionMood(planted)).toBeCloseTo(1, 12);
+    // And a city that has also bought its way out of the traffic reaches it for
+    // real — which is the ceiling the game has always promised.
+    const moving = state({ ...planted, depots: 40, depotStaff: 1, cityHall: true, freeTransport: true });
+    expect(happinessTarget(moving)).toBeCloseTo(1, 2);
+    // With every service and every park covered and no depots at all, the thing
+    // holding the city back is its own traffic — which is exactly the story
+    // congestion was added to give a depot. Once the buses are running, nothing
+    // is short and the binding term is back to a full coverage.
+    expect(bindingTerm(planted).key).toBe('congestion');
+    expect(bindingTerm(moving).coverage).toBeGreaterThan(0.98);
   });
 
   it('name recreation when it is the term costing the most', () => {
@@ -278,7 +303,9 @@ describe('the happiness weights', () => {
     const carried = at({ ...housed(19), parks: 0, ...served() });
     for (let i = 0; i < 3000; i++) carried.advance(0.1);
     expect(carried.state.happiness).toBeGreaterThan(HAPPINESS_MIN_BUILD);
-    expect(carried.state.happiness).toBeCloseTo(0.82, 2);
+    // Against the earned coverage, for the reason above: a v3 city has no
+    // depots either, so what it settles at is 0.82 less its own traffic.
+    expect(carried.state.happiness - congestionMood(carried.state)).toBeCloseTo(0.82, 2);
   });
 });
 

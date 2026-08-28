@@ -1,21 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import {
+  INDUSTRY_BONUS,
+  SHOP_BONUS,
   CIVIC_SERVICES,
   EDUCATION_SERVICES,
   HAPPINESS_SERVICES,
   LEVEL_EDUCATION,
   LEVELS,
+  MAX_DISTRICTS,
   SERVICES,
+  SKILL_YIELD,
 } from '../src/sim/config';
 import {
   bindingTerm,
   canBuildService,
+  demandTargets,
+  income,
+  workforceSkill,
   civicSiteCapacity,
   plotsOf,
   coverage,
   educationCoverage,
   happinessTarget,
   happinessTerms,
+  effectiveOf,
+  estateEarning,
   serviceAllowed,
   serviceBlocker,
   serviceCost,
@@ -26,7 +35,7 @@ import {
 import { Game } from '../src/sim/game';
 import { CityLayout } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
-import { housed, housedOn, powered, zonedAt } from './levels';
+import { housed, housedOn, making, powered, trading, zonedAt } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
@@ -290,5 +299,151 @@ describe('coverage still behaves for the three that feed happiness', () => {
     for (const service of HAPPINESS_SERVICES) {
       expect(coverage(taught, service)).toBe(coverage(bare, service));
     }
+  });
+});
+
+/**
+ * Education's second job: an educated city's works are worth more.
+ *
+ * The trap the whole feature is arranged around is that this cannot go on the
+ * goods side. INDUSTRY_OUTPUT feeds `demandTargets.i` *negatively* — it is
+ * supply against the export tap — so a skill bonus that raised output would
+ * make an educated city stop wanting industry, and DEMAND_TERMS' own +0.20
+ * education term on industrial demand would be pulling the other way through
+ * the same coverage. The first test below is the one that would catch it.
+ */
+describe('the workforce skill', () => {
+  const taught = (patch: Partial<GameState> = {}): Partial<GameState> => ({
+    schools: 40,
+    schoolStaff: 1,
+    universities: 40,
+    universityStaff: 1,
+    ...patch,
+  });
+
+  it('is 1 at no coverage and bounded at full', () => {
+    const bare = state({ ...housed(24, 1) });
+    expect(educationCoverage(bare)).toBe(0);
+    expect(workforceSkill(bare)).toBe(1);
+
+    const schooled = state({ ...housed(24, 1), ...taught() });
+    expect(educationCoverage(schooled)).toBe(1);
+    expect(workforceSkill(schooled)).toBeCloseTo(1 + SKILL_YIELD, 12);
+
+    // And it is a share of a share, so nothing can push it past the bound —
+    // there is no city, however over-provisioned, worth more than SKILL_YIELD.
+    const absurd = state({ ...housed(24, 1), schools: 4000, schoolStaff: 1, universities: 4000, universityStaff: 1 });
+    expect(workforceSkill(absurd)).toBeCloseTo(1 + SKILL_YIELD, 12);
+  });
+
+  it('ramps with the staffing rather than with the building', () => {
+    // The lag the feature needs and does not add: education already lags
+    // through the ramp its coverage is multiplied by, so a school opened this
+    // instant is worth nothing yet.
+    const opened = state({ ...housed(24, 1), schools: 40, schoolStaff: 0 });
+    expect(workforceSkill(opened)).toBe(1);
+    let last = 0;
+    for (const staff of [0, 0.25, 0.5, 0.75, 1]) {
+      const s = state({ ...housed(24, 1), schools: 2, schoolStaff: staff });
+      expect(workforceSkill(s)).toBeGreaterThanOrEqual(last);
+      last = workforceSkill(s);
+    }
+  });
+
+  it('never appears in a demand target', () => {
+    // The trap, asserted: schooling must not move the goods side. Industrial
+    // demand may only move through DEMAND_TERMS' own education term, which is
+    // *positive* — so a taught city wants more industry, not less.
+    const base = state({ ...housed(96, 1), ...trading(45), ...making(13), districts: 4, occupancyR: 1, occupancyC: 1, occupancyI: 1 });
+    const schooled = state({ ...base, ...taught() });
+    // Same buildings, same occupancy: the only thing that moved is schooling.
+    expect(demandTargets(schooled).i).toBeGreaterThanOrEqual(demandTargets(base).i);
+    // And with the education demand term held level — same coverage on both
+    // sides — the skill contributes exactly nothing to any signal.
+    const a = demandTargets(schooled);
+    const b = demandTargets({ ...schooled, industry: schooled.industry });
+    expect(a.i).toBe(b.i);
+    expect(a.c).toBe(b.c);
+    expect(a.r).toBe(b.r);
+  });
+
+  it('raises income, monotonically in schools and universities', () => {
+    const base = state({
+      ...housed(96, 1),
+      ...trading(45),
+      ...making(13),
+      districts: 4,
+      occupancyR: 1,
+      occupancyC: 1,
+      occupancyI: 1,
+      happiness: 1,
+    });
+    let last = 0;
+    for (const schools of [0, 1, 2, 4, 8]) {
+      const s = state({ ...base, schools, schoolStaff: 1 });
+      expect(income(s)).toBeGreaterThanOrEqual(last);
+      last = income(s);
+    }
+    last = 0;
+    for (const universities of [0, 1, 2, 4]) {
+      const s = state({ ...base, universities, universityStaff: 1 });
+      expect(income(s)).toBeGreaterThanOrEqual(last);
+      last = income(s);
+    }
+    // Full coverage is worth the whole yield on the industrial term, which is
+    // about a tenth of the ledger — see tools/education.calibrate.mjs.
+    const full = income(state({ ...base, ...taught() }));
+    expect(full / income(base) - 1).toBeGreaterThan(0.05);
+    expect(full / income(base) - 1).toBeLessThan(0.2);
+  });
+
+  it('reaches the estates, because they are the same firms', () => {
+    // `estateEarning` already multiplies by `industryScale` — the mean level
+    // weight of city industry — so the band is the city's industry with a road
+    // between. A skill that stopped at the city limit would mean an educated
+    // city's works got better everywhere except where it had most recently
+    // expanded.
+    const base = state({
+      ...housed(24 * 20, 1),
+      ...making(13 * 20),
+      districts: 20,
+      highway: true,
+      estates: 8,
+      occupancyR: 1,
+      occupancyI: 1,
+      happiness: 1,
+    });
+    const withEstates = income(state({ ...base, ...taught() })) - income(base);
+    const without = income(state({ ...base, estates: 0, ...taught() })) - income({ ...base, estates: 0 });
+    expect(withEstates).toBeGreaterThan(without);
+  });
+
+  it('does not overtake the shop bonus at full coverage', () => {
+    // The bound the design names. Read on the built-out map, where the two
+    // terms are furthest apart in the city's favour.
+    const s = state({
+      ...housed(24 * MAX_DISTRICTS, 2),
+      ...trading(45 * MAX_DISTRICTS / 2),
+      ...making(Math.floor((13 * MAX_DISTRICTS) / 2)),
+      districts: MAX_DISTRICTS,
+      occupancyR: 1,
+      occupancyC: 1,
+      occupancyI: 1,
+      ...taught(),
+    });
+    const shop = SHOP_BONUS * effectiveOf(s, 'shop');
+    const works = INDUSTRY_BONUS * (effectiveOf(s, 'industry') + estateEarning(s)) * workforceSkill(s);
+    expect(works).toBeLessThan(shop);
+  });
+
+  it('leaves LEVEL_EDUCATION alone', () => {
+    // Education still gates height and only gates it. A second education term
+    // on the promotion *rate* would double-count the same coverage — see
+    // NOTES.md, where the case for it is written up and not implemented.
+    for (let level = 1; level < LEVELS; level++) {
+      expect(LEVEL_EDUCATION[level]).toBeGreaterThanOrEqual(0);
+      expect(LEVEL_EDUCATION[level]).toBeLessThanOrEqual(1);
+    }
+    expect(LEVEL_EDUCATION[0]).toBe(0);
   });
 });

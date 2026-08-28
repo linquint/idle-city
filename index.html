@@ -20,13 +20,22 @@
   <p>every purchase is a building</p>
 </header>
 
-<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z for the zoning plan, again for demand</p>
+<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z steps the overlay, Shift-Z steps back</p>
+
+<!-- The overlay picker. Out of the dock and next to the hint on purpose: it is
+     a control over the *map* rather than over the city, and it is the one
+     control a touch device cannot reach any other way — there is no Z key on a
+     phone. -->
+<div class="overlay-pick">
+  <div class="overlays" id="overlays" role="radiogroup" aria-label="Map overlay"></div>
+  <p class="overlay-note" id="overlay-note"></p>
+</div>
 
 <!-- One docked control in the bottom-left corner, with the selected building's
      card stacked above it. A wrapper rather than two fixed panels, because the
      control's height moves with what the city has unlocked and anything pinned
      above it by an offset would have to guess. -->
-<div class="corner">
+<div class="corner" id="corner">
 
 <!-- A polite live region rather than a div that mutates silently: fires, level-up
      waves and stalled housing all happen somewhere the player is not looking,
@@ -45,6 +54,13 @@
 </aside>
 
 <section class="hud dock" aria-label="City controls">
+  <!-- The bottom sheet's handle. Off screen on a desktop, where the dock is
+       already a panel in a corner and there is nothing to collapse; on a phone
+       it is what turns the dock into a sheet you can pull up over the city. A
+       real button, so it works by tap, by keyboard and by drag rather than by
+       drag alone. -->
+  <button class="sheet-grip" id="sheet-grip" type="button" aria-expanded="true"
+    aria-controls="dock-panels" aria-label="Expand or collapse the controls"></button>
   <!-- Always painted, whichever tab is open: an idle game whose treasury is one
        click away is an idle game you misplay. Everything else is in a tab. -->
   <div class="dock-head">
@@ -67,9 +83,13 @@
       aria-controls="panel-trade" aria-selected="false" tabindex="-1">Trade</button>
     <button class="tab" type="button" role="tab" id="tab-estates"
       aria-controls="panel-estates" aria-selected="false" tabindex="-1">Estates</button>
+    <button class="tab" type="button" role="tab" id="tab-graphs"
+      aria-controls="panel-graphs" aria-selected="false" tabindex="-1">Graphs</button>
+    <button class="tab" type="button" role="tab" id="tab-awards"
+      aria-controls="panel-awards" aria-selected="false" tabindex="-1">Awards</button>
   </div>
 
-  <div class="panels">
+  <div class="panels" id="dock-panels">
 
   <div class="panel" id="panel-build" role="tabpanel" aria-labelledby="tab-build" tabindex="0">
     <p class="zone" role="img" aria-label="Zoning">
@@ -82,7 +102,7 @@
       <span class="meter-mark" id="occupancy-mark"></span>
     </div>
 
-    <button id="build-home" type="button">
+    <button id="build-home" class="sheet-key" type="button">
       <span id="build-home-label">Build home</span>
       <span class="price"><span class="chip" id="build-home-chip"></span><i class="trend" id="build-home-trend"></i><span class="cost" id="build-home-cost">15</span></span>
     </button>
@@ -155,7 +175,7 @@
     <div class="row"><span class="k">Treasury</span><span class="v cash" id="ledger-cash">0</span></div>
     <div class="row"><span class="k">Income</span><span class="v rate" id="ledger-gross">0</span></div>
     <div class="row"><span class="k">Upkeep</span><span class="v upkeep" id="ledger-upkeep">0</span></div>
-    <div class="row"><span class="k">Net per second</span><span class="v rate" id="ledger-rate">0</span></div>
+    <div class="row sheet-key"><span class="k">Net per second</span><span class="v rate" id="ledger-rate">0</span></div>
     <div class="row"><span class="k">Earned</span><span class="v" id="earned">0</span></div>
     <div class="row"><span class="k">Residents</span><span class="v" id="residents">0</span></div>
     <div class="row"><span class="k">Plots</span><span class="v zones" id="plots" role="img">
@@ -165,6 +185,22 @@
     </span></div>
     <div class="row"><span class="k">Districts</span><span class="v" id="districts">1</span></div>
     <div class="row"><span class="k">Happiness</span><span class="v" id="happiness">0%</span></div>
+
+    <p class="cap">What multiplies the rent</p>
+    <div class="services" id="bonuses" role="img">
+      <div class="svc"><span class="k">Commerce</span>
+        <span class="built" id="bonus-shop">+0%</span>
+        <span class="covers" id="bonus-shop-note">0 shop plots trading</span></div>
+      <div class="svc"><span class="k">Industry</span>
+        <span class="built" id="bonus-industry">+0%</span>
+        <span class="covers" id="bonus-industry-note">0 works plots running</span></div>
+      <div class="svc"><span class="k">Workforce skill</span>
+        <span class="built" id="bonus-skill">x1.00</span>
+        <span class="covers" id="bonus-skill-note">no schools yet</span></div>
+      <div class="svc"><span class="k">Districts</span>
+        <span class="built" id="bonus-district">+0%</span>
+        <span class="covers" id="bonus-district-note">1 district</span></div>
+    </div>
   </div>
 
   <div class="panel" id="panel-demand" role="tabpanel" aria-labelledby="tab-demand" tabindex="0" hidden>
@@ -185,7 +221,7 @@
     <div class="lift" id="demand-lift"></div>
 
     <p class="cap">Happiness</p>
-    <div class="mood" id="mood" role="img">
+    <div class="mood sheet-key" id="mood" role="img">
       <div class="mood-head"><span class="num" id="mood-pct">0%</span>
         <span class="why" id="mood-why">Health coverage 0%</span></div>
       <span class="bar"><i class="mood-fill" id="mood-fill"></i></span>
@@ -225,6 +261,9 @@
       <div class="svc"><span class="k">Fares</span>
         <span class="built" id="transit-fares">0</span>
         <span class="covers" id="transit-labour">no spare labour reached</span></div>
+      <div class="svc"><span class="k">Traffic</span>
+        <span class="built" id="transit-congestion">0%</span>
+        <span class="covers" id="transit-congestion-mood">no effect on mood</span></div>
     </div>
 
     <p class="cap">Education</p>
@@ -250,7 +289,7 @@
     <p class="note" id="cityhall-note">Nothing on this tab does anything until it is built.</p>
 
     <p class="cap">Tax rate</p>
-    <div class="steps" id="tax-steps" role="radiogroup" aria-label="Tax rate"></div>
+    <div class="steps sheet-key" id="tax-steps" role="radiogroup" aria-label="Tax rate"></div>
     <div class="svc"><span class="k">Ledger</span>
       <span class="built" id="tax-income">x1.00</span>
       <span class="covers" id="tax-mood">no effect on mood</span></div>
@@ -266,7 +305,7 @@
 
   <div class="panel" id="panel-landmarks" role="tabpanel" aria-labelledby="tab-landmarks" tabindex="0" hidden>
     <p class="cap">Landmarks</p>
-    <div class="civic-row">
+    <div class="civic-row sheet-key">
       <button class="civic" id="build-museum" type="button">
         <span>Museum</span><span class="built" id="build-museum-built">0/1</span>
         <span class="cost" id="build-museum-cost">4000</span>
@@ -293,7 +332,7 @@
 
   <div class="panel" id="panel-trade" role="tabpanel" aria-labelledby="tab-trade" tabindex="0" hidden>
     <p class="cap">Terminals</p>
-    <div class="civic-row">
+    <div class="civic-row sheet-key">
       <button class="civic" id="build-cruise" type="button">
         <span>Cruise</span><span class="built" id="build-cruise-built">0/0</span>
         <span class="cost" id="build-cruise-cost">20000</span>
@@ -318,6 +357,9 @@
       <div class="svc"><span class="k">Visitors</span>
         <span class="built" id="port-visitors">0</span>
         <span class="covers" id="port-spend">0.0/s in tourism</span></div>
+      <div class="svc"><span class="k">Arriving</span>
+        <span class="built" id="port-sources">—</span>
+        <span class="covers" id="port-shopping">no visitors yet</span></div>
       <div class="svc"><span class="k">Exports</span>
         <span class="built" id="port-exports">60</span>
         <span class="covers" id="port-lift">no cargo berths</span></div>
@@ -330,7 +372,7 @@
       <span id="build-highway-label">Build the highway</span>
       <span class="cost" id="build-highway-cost">240K</span>
     </button>
-    <button id="build-estate" type="button">
+    <button id="build-estate" class="sheet-key" type="button">
       <span id="build-estate-label">Break ground on an estate</span>
       <span class="price"><span class="cost" id="build-estate-cost">60K</span></span>
     </button>
@@ -349,6 +391,19 @@
     </div>
   </div>
 
+  <div class="panel" id="panel-graphs" role="tabpanel" aria-labelledby="tab-graphs" tabindex="0" hidden>
+    <p class="cap">Time span</p>
+    <div class="steps sheet-key" id="graph-tiers" role="radiogroup" aria-label="Time span"></div>
+    <div class="graphs" id="graphs"></div>
+    <p class="note" id="graphs-note"></p>
+  </div>
+
+  <div class="panel" id="panel-awards" role="tabpanel" aria-labelledby="tab-awards" tabindex="0" hidden>
+    <p class="note sheet-key" id="awards-lede">A record of what the city has done. Nothing here changes the
+      numbers.</p>
+    <div class="awards" id="awards-list"></div>
+  </div>
+
   </div>
 </section>
 
@@ -358,7 +413,15 @@
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
     <h2 id="welcome-title">While you were away</h2>
     <p class="sheet-lede" id="welcome-away">6h 12m</p>
-    <dl class="sheet-rows" id="welcome-rows"></dl>
+    <!-- What happened, above what it added up to. A total answers "how much";
+         the timeline answers "what of", and the second is what explains the
+         first — so it leads and the totals fold away behind a summary. -->
+    <ol class="sheet-timeline" id="welcome-timeline"></ol>
+    <p class="sheet-more" id="welcome-more"></p>
+    <details class="sheet-totals" id="welcome-totals">
+      <summary>What it added up to</summary>
+      <dl class="sheet-rows" id="welcome-rows"></dl>
+    </details>
     <button class="primary" id="welcome-close" type="button">Back to work</button>
   </div>
 </div>

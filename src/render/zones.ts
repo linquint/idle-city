@@ -1,16 +1,19 @@
 import * as THREE from 'three';
 import { hash01 } from '../core/rng';
 import { ZONE } from '../sim/citygen';
-import { CELL, CIVIC_SERVICES } from '../sim/config';
-import { serviceCount } from '../sim/economy';
+import { CELL, CIVIC_SERVICES, HAPPINESS_SERVICES } from '../sim/config';
+import { congestion, covered, serviceCount, zoneOf } from '../sim/economy';
 import {
   BUILDABLE_PARKS_PER_DISTRICT as PARKS_PER_DISTRICT,
+  createPlacement,
+  housingCentrality,
   worldX,
   worldZ,
   type CityLayout,
   type Coord,
 } from '../sim/layout';
-import type { GameState } from '../sim/state';
+import type { GameState, ZoneKind } from '../sim/state';
+import { ROAD_H } from './ground';
 import { GrowableInstancedMesh } from './growable';
 import { PALETTE } from './palette';
 
@@ -19,6 +22,15 @@ const PAD = CELL - 0.8;
 const PAD_H = 0.1;
 /** The land tile's top face sits at y = 0; clear it rather than z-fight it. */
 const PAD_Y = 0.06;
+
+/**
+ * Where a road pad sits.
+ *
+ * The carriageway is already ROAD_H above the ground, so a pad at PAD_Y would
+ * be *under* the street it is trying to colour and the mode would draw nothing.
+ * Clear of it by the same margin the plot pads clear the land tile by.
+ */
+const ROAD_PAD_Y = ROAD_H + 0.06;
 
 /**
  * Quantisation of demand for the rebuild stamp: 20 steps across [-1, 1].
@@ -254,10 +266,40 @@ export class Parks {
 }
 
 /**
- * What the overlay is showing. `plan` is the zoning map; `demand` repaints the
- * same pads by how badly the city wants that type right now.
+ * What the overlay is showing.
+ *
+ * Six modes and an off. `plan` is the zoning map and `demand` repaints the same
+ * pads by how badly the city wants that type; the four that follow are about
+ * the land the city has already built on, which is why `Buildings.setOverlay`
+ * takes a per-slot colour rather than one per zone.
+ *
+ * **Pollution is deliberately not here.** There is no pollution number anywhere
+ * in `src/sim`, so an overlay over it would be a picture of nothing — see
+ * NOTES.md section 9, where it is written up as the simulation feature it would
+ * have to be first.
  */
-export type ZoneMode = 'off' | 'plan' | 'demand';
+export type ZoneMode = 'off' | 'plan' | 'demand' | 'value' | 'coverage' | 'order' | 'traffic';
+
+/**
+ * The modes, in cycle order, with what the picker calls each.
+ *
+ * A cycle of seven on one key is unusable, which is why the HUD has a picker —
+ * but the key stays, because a player who has learned Z should not have to
+ * relearn anything. Shift-Z walks it backwards.
+ */
+export const ZONE_MODES: readonly { key: ZoneMode; label: string; note: string }[] = [
+  { key: 'off', label: 'Off', note: 'No overlay.' },
+  { key: 'plan', label: 'Zoning', note: 'What each plot is zoned for.' },
+  { key: 'demand', label: 'Demand', note: 'How badly the city wants each type.' },
+  { key: 'value', label: 'Land value', note: 'Centrality, which is what rent is multiplied by.' },
+  {
+    key: 'coverage',
+    label: 'Coverage',
+    note: 'Housing the worst-covered service accounts for, oldest land first.',
+  },
+  { key: 'order', label: 'Build order', note: 'Which plots the city took first.' },
+  { key: 'traffic', label: 'Traffic', note: 'How jammed the streets are. One number, city-wide.' },
+];
 
 /**
  * The 2x2 civic types, in the interleave's own order.
@@ -272,18 +314,85 @@ export type ZoneMode = 'off' | 'plan' | 'demand';
  */
 const SERVICE_KEYS = CIVIC_SERVICES.map((service) => service.key);
 
-const CYCLE: readonly ZoneMode[] = ['off', 'plan', 'demand'];
+const CYCLE: readonly ZoneMode[] = ZONE_MODES.map((mode) => mode.key);
 
 /**
- * The zone plan: every plot that is zoned but not yet built on, as a flat
- * coloured pad at ground level. One InstancedMesh, one draw call, and it only
- * rebuilds when the counts it draws from actually move.
+ * A value in [0, 1] as a colour, cold to warm.
+ *
+ * One ramp for every mode that shows a quantity — land value, build order — so
+ * a player who has read one of them can read the others. Deliberately not the
+ * demand ramp, which is diverging around a neutral because demand has a sign
+ * and these do not.
+ */
+function ramp(t: number, out: THREE.Color): THREE.Color {
+  const at = Math.max(0, Math.min(1, t));
+  return out.setHex(PALETTE.overlayLow).lerp(TEMP.setHex(PALETTE.overlayHigh), at);
+}
+
+/** Scratch for the ramp's far end, so a colour lerp allocates nothing. */
+const TEMP = new THREE.Color();
+
+/**
+ * What one plot is worth to the mode being shown, in [0, 1], or null for a plot
+ * the mode has nothing to say about.
+ *
+ * The one place a mode's *meaning* lives, so the pads under the unbuilt land and
+ * the bodies of the buildings standing on the built land cannot disagree about
+ * what a colour means. `zone` is which list the plot came from and `plot` is its
+ * index in that list, which is also its build order.
+ */
+export interface OverlayReading {
+  /** Plots of housing the worst-covered service accounts for. See `coveredPlots`. */
+  readonly covered: number;
+  readonly congestion: number;
+  /** The range the land-value ramp is stretched over. See `read`. */
+  readonly valueMin: number;
+  readonly valueMax: number;
+}
+
+/** What the plan mode calls each zone. The pads and the bodies share it. */
+const ZONE_HEX: Record<ZoneKind, number> = {
+  home: PALETTE.zoneResidential,
+  shop: PALETTE.zoneCommercial,
+  industry: PALETTE.zoneIndustrial,
+};
+
+/**
+ * A per-slot overlay colour for the buildings.
+ *
+ * The other half of the overlay, and the half the pads cannot carry: a pad
+ * drawn under a building is a pad nobody can see. So the unbuilt land is pads
+ * and the built land is the building bodies, and this is what tells `Buildings`
+ * what colour to make the k-th building of a zone.
+ *
+ * A function rather than a colour per zone, which is the change this feature
+ * needed: `bodyColor` already took an overlay hex per instance, so widening
+ * `setOverlay` from one hex to one per slot is the whole of the mesh-layer work.
+ */
+export type OverlaySource = (kind: ZoneKind, slot: number) => number;
+
+/**
+ * The zone plan and every other overlay, as flat coloured pads at ground level.
+ *
+ * Two InstancedMeshes and two draw calls: one over the zoned plots the city has
+ * not built on, and one over the road cells, which only the traffic mode uses.
+ * Both rebuild only when the counts they draw from actually move — see `sync`,
+ * where the stamp covers whatever each mode reads.
  *
  * Unlit on purpose — an overlay that the key light rakes across is a worse
  * diagram than one that just states the colour.
  */
 export class Zones {
   private readonly pads: GrowableInstancedMesh;
+  /**
+   * The road cells, for the traffic mode alone.
+   *
+   * Its own mesh rather than more instances in `pads`, because the two answer
+   * to different counts: the pads follow the build lists and this follows the
+   * district count and nothing else, so a mode that showed both would rebuild
+   * the roads every time a house went up.
+   */
+  private readonly streets: GrowableInstancedMesh;
   private readonly dummy = new THREE.Object3D();
   private readonly tint = new THREE.Color();
   private readonly high = new THREE.Color(PALETTE.demandHigh);
@@ -292,6 +401,10 @@ export class Zones {
   private mode: ZoneMode = 'off';
   /** What the pads were last built for. Empty forces a rebuild. */
   private stamp = '';
+  /** What the road pads were last built for. They follow the districts alone. */
+  private roadStamp = '';
+  /** How many pads each mode drew last, for the performance report. */
+  private drawn = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -304,20 +417,51 @@ export class Zones {
       256,
     );
     this.pads.mesh.visible = false;
+    this.streets = new GrowableInstancedMesh(
+      scene,
+      // The full cell, not PAD: a road pad with a gutter round it would draw a
+      // grid of squares where the city has a street network.
+      new THREE.BoxGeometry(CELL, PAD_H, CELL),
+      new THREE.MeshBasicMaterial({ color: 0xffffff }),
+      256,
+    );
+    this.streets.mesh.visible = false;
   }
 
   get enabled(): boolean {
     return this.mode !== 'off';
   }
 
-  /** Steps to the next mode. The pads themselves are rebuilt by the next `sync`. */
-  cycle(): ZoneMode {
-    const next = CYCLE[(CYCLE.indexOf(this.mode) + 1) % CYCLE.length] as ZoneMode;
-    this.mode = next;
-    this.pads.mesh.visible = next !== 'off';
+  get current(): ZoneMode {
+    return this.mode;
+  }
+
+  /** Pads drawn by the last rebuild. Read by the dev overlay report. */
+  get instances(): number {
+    return this.drawn;
+  }
+
+  /** Steps to the next mode, or the previous one. */
+  cycle(back = false): ZoneMode {
+    const at = CYCLE.indexOf(this.mode);
+    const step = back ? CYCLE.length - 1 : 1;
+    return this.set(CYCLE[(at + step) % CYCLE.length] as ZoneMode);
+  }
+
+  /** Jumps straight to one mode. What the HUD picker calls. */
+  set(mode: ZoneMode): ZoneMode {
+    this.mode = mode;
+    const on = mode !== 'off';
+    this.pads.mesh.visible = on && mode !== 'traffic';
+    this.streets.mesh.visible = mode === 'traffic';
     this.stamp = '';
-    if (next === 'off') this.pads.count = 0;
-    return next;
+    this.roadStamp = '';
+    if (!on) {
+      this.pads.count = 0;
+      this.streets.count = 0;
+      this.drawn = 0;
+    }
+    return mode;
   }
 
   /**
@@ -330,25 +474,185 @@ export class Zones {
     return out.copy(this.neutral).lerp(d >= 0 ? this.high : this.low, t);
   }
 
-  sync(state: Readonly<GameState>): void {
-    if (this.mode === 'off') return;
+  /**
+   * How much of the city's housing the *worst-covered* service reaches.
+   *
+   * One tint rather than a sub-mode per service, and the reason is the same one
+   * that put a picker in the HUD: four more entries on a cycle that already has
+   * seven would make the control unusable to save a player one comparison. The
+   * worst service is also the one the happiness panel already names, so the two
+   * agree about what is short.
+   *
+   * **Coverage in this game has no geometry**, and the overlay says what it can
+   * rather than inventing some: `coverage` is `covered / housingPlots`, a share,
+   * and `covered` is a plot *count* with nothing anywhere deciding which plots.
+   * So the pads state which plots that number accounts for under the city's own
+   * ordering — oldest land first, the same build order that decides which plot
+   * the k-th house takes. Inventing a radius round each hospital would put a
+   * number on screen that the services panel does not have.
+   */
+  private coveredPlots(state: Readonly<GameState>): number {
+    let worst = Number.POSITIVE_INFINITY;
+    for (const service of HAPPINESS_SERVICES) worst = Math.min(worst, covered(state, service));
+    return Number.isFinite(worst) ? worst : 0;
+  }
+
+  /**
+   * The colour of one plot, by mode.
+   *
+   * `zone` says which build list it came from, `index` is its position in that
+   * list — which is its build order — and `built` is how many of that list the
+   * city has built on. Shared by the pads below and, through `overlay`, by the
+   * buildings, so the two halves of a mode cannot drift apart.
+   */
+  private plotColor(
+    state: Readonly<GameState>,
+    kind: ZoneKind,
+    index: number,
+    total: number,
+    reading: OverlayReading,
+    out: THREE.Color,
+  ): THREE.Color {
+    switch (this.mode) {
+      case 'plan':
+        return out.setHex(ZONE_HEX[kind]);
+      case 'demand':
+        return this.demandColor(
+          kind === 'home' ? state.demandR : kind === 'shop' ? state.demandC : state.demandI,
+          out,
+        );
+      case 'value': {
+        // Housing only, and that is not a simplification: `landValue` multiplies
+        // *rent*, and rent is paid by residents. A shop's plot has a centrality
+        // and the ledger has never read it.
+        if (kind !== 'home') return out.setHex(PALETTE.overlayMute);
+        const at = housingCentrality(index, state);
+        const span = reading.valueMax - reading.valueMin;
+        return ramp(span > 1e-6 ? (at - reading.valueMin) / span : 0.5, out);
+      }
+      case 'coverage':
+        if (kind !== 'home') return out.setHex(PALETTE.overlayMute);
+        return index < reading.covered ? ramp(1, out) : ramp(0, out);
+      case 'order':
+        // Within its own list, so a young district's shops read as new even
+        // though the city has far more housing than commerce.
+        return ramp(total > 1 ? 1 - index / (total - 1) : 1, out);
+      case 'traffic':
+        // The streets carry it. A plot has no traffic reading of its own — road
+        // supply does not vary between districts, so congestion is a city-wide
+        // scalar and a per-plot tint would be a fabrication. See `congestion`.
+        return out.setHex(PALETTE.overlayMute);
+      default:
+        return out.setHex(PALETTE.overlayMute);
+    }
+  }
+
+  /** Everything a mode reads that is not per-plot, gathered once per rebuild. */
+  private read(state: Readonly<GameState>): OverlayReading {
+    const homes = this.layout.zoneCells(ZONE.residential).length;
+    let valueMin = Number.POSITIVE_INFINITY;
+    let valueMax = Number.NEGATIVE_INFINITY;
+    if (this.mode === 'value') {
+      // One pass over the housing plots so the ramp uses its whole range: the
+      // raw centralities sit in a narrow band and a ramp over [0, 1] would draw
+      // the whole city one colour.
+      for (let i = 0; i < homes; i++) {
+        const at = housingCentrality(i, state);
+        if (at < valueMin) valueMin = at;
+        if (at > valueMax) valueMax = at;
+      }
+    }
+    return {
+      covered: this.coveredPlots(state),
+      congestion: congestion(state),
+      valueMin: Number.isFinite(valueMin) ? valueMin : 0,
+      valueMax: Number.isFinite(valueMax) ? valueMax : 1,
+    };
+  }
+
+  /**
+   * A per-slot colour for the buildings, or null when the mode has nothing to
+   * say about built land.
+   *
+   * Built once per rebuild and handed to `Buildings.setOverlay`, which walks it
+   * over every instance. `plan` and `demand` are the two that do not vary by
+   * slot — a building's zone is the whole of what they state — so they come
+   * back as a constant per zone and cost nothing.
+   */
+  overlay(state: Readonly<GameState>): OverlaySource | null {
+    if (this.mode === 'off') return null;
+    // The plot lists and the parcel books have to exist before a slot can be
+    // resolved to a plot. `sync` does this too; a mode change can land between
+    // two syncs, so it is done here as well rather than assumed.
+    this.layout.ensure(state);
+    const reading = this.read(state);
+    const scratch = new THREE.Color();
+    const totals: Record<ZoneKind, number> = {
+      home: this.layout.zoneCells(ZONE.residential).length,
+      shop: this.layout.zoneCells(ZONE.commercial).length,
+      industry: this.layout.zoneCells(ZONE.industrial).length,
+    };
+    const merged: Record<ZoneKind, number> = {
+      home: state.mergedR,
+      shop: state.mergedC,
+      industry: state.mergedI,
+    };
+    const at = createPlacement();
+    return (kind, slot) => {
+      // The plot a slot stands on, which is not the slot: merged parcels are
+      // the front of the list and take two plots each. `place` is the same call
+      // the inspector makes, so the card and the overlay agree about the land.
+      const plot =
+        this.mode === 'value' || this.mode === 'coverage' || this.mode === 'order'
+          ? this.layout.place(zoneOf(kind), slot, merged[kind], state, at).plot
+          : slot;
+      return this.plotColor(state, kind, plot, totals[kind], reading, scratch).getHex();
+    };
+  }
+
+  /**
+   * Rebuilds the pads if anything they draw from has moved.
+   *
+   * Returns whether it rebuilt, so the caller knows to re-colour the buildings:
+   * four of the six modes vary per building, so a rebuild here is a rebuild
+   * there and one stamp decides both.
+   */
+  sync(state: Readonly<GameState>): boolean {
+    if (this.mode === 'off') return false;
+    if (this.mode === 'traffic') return this.syncStreets(state);
+
     const counts = `${state.districts}:${state.homes}:${state.shops}:${state.industry}`;
-    const stamp =
-      this.mode === 'plan'
-        ? `plan:${counts}`
-        : `demand:${counts}:${quantise(state.demandR)}:${quantise(state.demandC)}:${quantise(state.demandI)}`;
-    if (stamp === this.stamp) return;
+    // The stamp covers whatever the *mode* reads, which is the rule this had to
+    // grow into: a mode that read a number the stamp did not carry would paint
+    // once and then never notice it had changed.
+    const extra =
+      this.mode === 'demand'
+        ? `${quantise(state.demandR)}:${quantise(state.demandC)}:${quantise(state.demandI)}`
+        : this.mode === 'coverage'
+          ? `${Math.round(this.coveredPlots(state))}`
+          : this.mode === 'value'
+            ? `${state.mergedR}`
+            : `${state.mergedR}:${state.mergedC}:${state.mergedI}`;
+    const stamp = `${this.mode}:${counts}:${extra}`;
+    if (stamp === this.stamp) return false;
     this.stamp = stamp;
     this.layout.ensure(state);
+    this.streets.count = 0;
 
     const residential = this.layout.zoneCells(ZONE.residential);
     const commercial = this.layout.zoneCells(ZONE.commercial);
     const industrial = this.layout.zoneCells(ZONE.industrial);
+    const reading = this.read(state);
 
     // Built plots are the *front* of each zone's build order, so "unbuilt" is
     // simply the tail past the count the simulation reports. Civic sites were
     // taken out of these lists before the city ever saw them, so there is no
     // longer a second run at the far end to work around.
+    //
+    // The pads stop at the unbuilt land in every mode, including the four that
+    // are about built land as well. A pad under a building is a pad nobody can
+    // see: the built half is carried by the building bodies instead, which is
+    // what `overlay` above is for.
     const homes = Math.min(state.homes, residential.length);
     const shops = Math.min(state.shops, commercial.length);
     const industry = Math.min(state.industry, industrial.length);
@@ -357,11 +661,10 @@ export class Zones {
     this.pads.ensure(total);
 
     let n = 0;
-    const write = (cells: readonly Coord[], from: number, to: number, hex: number, d: number): void => {
-      if (this.mode === 'plan') this.tint.setHex(hex);
-      else this.demandColor(d, this.tint);
-      for (let i = from; i < to; i++) {
+    const write = (cells: readonly Coord[], kind: ZoneKind, from: number): void => {
+      for (let i = from; i < cells.length; i++) {
         const cell = cells[i] as Coord;
+        this.plotColor(state, kind, i, cells.length, reading, this.tint);
         this.dummy.position.set(worldX(cell.x), PAD_Y, worldZ(cell.z));
         this.dummy.updateMatrix();
         this.pads.setMatrixAt(n, this.dummy.matrix);
@@ -370,11 +673,49 @@ export class Zones {
       }
     };
 
-    write(residential, homes, residential.length, PALETTE.zoneResidential, state.demandR);
-    write(commercial, shops, commercial.length, PALETTE.zoneCommercial, state.demandC);
-    write(industrial, industry, industrial.length, PALETTE.zoneIndustrial, state.demandI);
+    write(residential, 'home', homes);
+    write(commercial, 'shop', shops);
+    write(industrial, 'industry', industry);
 
     this.pads.count = n;
+    this.drawn = n;
     this.pads.flush();
+    return true;
+  }
+
+  /**
+   * The traffic mode: every road cell, tinted by the one congestion number.
+   *
+   * The roads follow the district count and nothing else, so this rebuilds when
+   * the city annexes and when the number moves and at no other time — where the
+   * plot pads rebuild whenever a building goes up. Two stamps, two meshes.
+   */
+  private syncStreets(state: Readonly<GameState>): boolean {
+    const jam = congestion(state);
+    const stamp = `${state.districts}:${Math.round(jam * 100)}`;
+    if (stamp === this.roadStamp) return false;
+    this.roadStamp = stamp;
+    this.layout.ensure(state);
+    this.pads.count = 0;
+
+    let n = 0;
+    for (const district of this.layout.districts) n += district.roads.length;
+    this.streets.ensure(n);
+    ramp(jam, this.tint);
+
+    let at = 0;
+    for (const district of this.layout.districts) {
+      for (const cell of district.roads as readonly Coord[]) {
+        this.dummy.position.set(worldX(cell.x), ROAD_PAD_Y, worldZ(cell.z));
+        this.dummy.updateMatrix();
+        this.streets.setMatrixAt(at, this.dummy.matrix);
+        this.streets.setColorAt(at, this.tint);
+        at++;
+      }
+    }
+    this.streets.count = at;
+    this.drawn = at;
+    this.streets.flush();
+    return true;
   }
 }

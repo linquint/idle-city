@@ -20,6 +20,8 @@ import {
 } from '../src/sim/config';
 import {
   bindingTerm,
+  congestion,
+  congestionMood,
   canBuildHome,
   happinessFix,
   civicBuildings,
@@ -56,6 +58,18 @@ import { createState, type GameState, type ZoneKind } from '../src/sim/state';
 import { built, housed, housedOn, zonedAt } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
+
+/**
+ * The coverage a city has *earned*, with the traffic modifier added back.
+ *
+ * Congestion joined `happinessTarget` in the same bracket as the tax step and
+ * the landmark bonus, so a target read against the four weights alone is now a
+ * target less whatever the city's streets are costing it. Every calibration in
+ * config.ts is quoted against the earned number, so that is what these
+ * assertions read — see CONGESTION_MOOD, and test/traffic.test.ts, which is
+ * where the modifier itself is asserted.
+ */
+const earned = (s: GameState): number => happinessTarget(s) - congestionMood(s);
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
 
 /** `advance` clamps a single call to a quarter second, so time is taken in ticks. */
@@ -140,9 +154,31 @@ describe('coverage', () => {
         }
         expect(recreationCoverage(climbed)).toBe(recreationCoverage(flat));
         expect(educationCoverage(climbed)).toBe(educationCoverage(flat));
-        expect(happinessTarget(climbed)).toBe(happinessTarget(flat));
+        // The *earned* coverage is level-invariant, which is what this test is
+        // about. The target itself no longer is, and deliberately: congestion
+        // is a modifier that reads the city's density, so a level-4 district
+        // puts more traffic on the same 81 road cells than a level-0 one does.
+        // See CONGESTION_DENSITY_EXPONENT, which is that statement as a number.
+        expect(earned(climbed)).toBe(earned(flat));
+        expect(congestion(climbed)).toBeGreaterThanOrEqual(congestion(flat));
       }
     }
+  });
+
+  it('charges a district more traffic the taller it is built', () => {
+    // The one reading that is deliberately *not* level-invariant, stated on its
+    // own rather than folded into the test above: a level-4 district puts more
+    // people on the same 81 road cells than a level-0 one does, which is what
+    // CONGESTION_DENSITY_EXPONENT is a number for. Read on one district, which
+    // is small enough that the top of the ladder is still short of the clamp.
+    const staffing = { ...staffed(), depots: 3, depotStaff: 1, parks: 6 };
+    let last = -1;
+    for (let level = 0; level < LEVELS; level++) {
+      const jam = congestion(state({ ...housedOn(24, level), ...staffing }));
+      expect(jam).toBeGreaterThan(last);
+      last = jam;
+    }
+    expect(last).toBeLessThan(1);
   });
 
   it('goes short again when the city builds out under it', () => {
@@ -152,8 +188,8 @@ describe('coverage', () => {
     // hospital over four districts of housing is stretched four ways.
     const before = state({ ...housedOn(hospital.plots), parks: 4, ...staffed() });
     const after = state({ ...housedOn(hospital.plots * 4), parks: 4, ...staffed() });
-    expect(happinessTarget(before)).toBeCloseTo(1, 12);
-    expect(happinessTarget(after)).toBeLessThan(1);
+    expect(earned(before)).toBeCloseTo(1, 12);
+    expect(earned(after)).toBeLessThan(1);
   });
 
   /**
@@ -434,7 +470,7 @@ describe('happiness as a gate on housing', () => {
    */
   it('needs two purchases to lift the gate, and names one of them', () => {
     const s = state({ ...housed(12), ...staffed({ police: 0, fire: 0 }) });
-    expect(happinessTarget(s)).toBeCloseTo(hospital.weight, 12);
+    expect(earned(s)).toBeCloseTo(hospital.weight, 12);
     expect(happinessTarget(s)).toBeLessThan(HAPPINESS_MIN_BUILD);
 
     // The panel points at the biggest shortfall, which is the police station.
@@ -488,10 +524,18 @@ describe('happiness as a gate on housing', () => {
     for (const plots of [1, 2, 4, 6, 8, 12, 24]) {
       const s = state(housed(plots));
       expect(shortfallShare(s)).toBeCloseTo(Math.min(1, plots / COVERAGE_GRACE_PLOTS), 12);
-      expect(happinessTarget(s)).toBeCloseTo(1 - Math.min(1, plots / COVERAGE_GRACE_PLOTS), 12);
+      // Written against the clamp rather than against the earned coverage,
+      // because a city with nothing built at all is *at* the floor by the top
+      // of this range: what the modifier takes off is taken off zero.
+      expect(happinessTarget(s)).toBeCloseTo(
+        Math.max(0, 1 - Math.min(1, plots / COVERAGE_GRACE_PLOTS) + congestionMood(s)),
+        12,
+      );
     }
     // Continuous at both ends: the empty city's 1 is where the ramp starts
     // rather than a case beside it, and it is spent by COVERAGE_GRACE_PLOTS.
+    // A city with no housing has no residents and so no traffic either, which
+    // is why this one needs no adjustment.
     expect(happinessTarget(state())).toBeCloseTo(1, 12);
     expect(shortfallShare(state(housed(COVERAGE_GRACE_PLOTS)))).toBe(1);
   });
@@ -504,7 +548,7 @@ describe('happiness as a gate on housing', () => {
     for (const plots of [COVERAGE_GRACE_PLOTS, 19, 24, 48]) {
       const s = state({ ...housedOn(plots), parks: 1, ...staffed({ police: 0, fire: 0 }) });
       expect(shortfallShare(s)).toBe(1);
-      expect(happinessTarget(s)).toBeCloseTo(
+      expect(earned(s)).toBeCloseTo(
         hospital.weight * coverage(s, hospital) + RECREATION_WEIGHT * recreationCoverage(s),
         12,
       );
@@ -573,13 +617,13 @@ describe('happiness as a gate on housing', () => {
     // genuinely is not failing anybody, so this *is* the earned number and
     // everything that reads it goes on reading one number.
     const s = state({ ...housed(4), elapsed: 0 });
-    expect(happinessTarget(s)).toBeCloseTo(1 - 4 / COVERAGE_GRACE_PLOTS, 12);
+    expect(earned(s)).toBeCloseTo(1 - 4 / COVERAGE_GRACE_PLOTS, 12);
     expect(happinessTarget({ ...s, elapsed: 10 * 3_600 })).toBe(happinessTarget(s));
 
     // And it is a discount on what is short, not a floor: a city that has earned
     // its coverage is not held anywhere.
     const covered = state({ ...housed(4), ...staffed(), parks: 4 });
-    expect(happinessTarget(covered)).toBeCloseTo(1, 12);
+    expect(earned(covered)).toBeCloseTo(1, 12);
   });
 
   /**
@@ -608,8 +652,16 @@ describe('happiness as a gate on housing', () => {
     expect(saving?.affordable).toBe(false);
     expect(saving?.label).toBe('Open park');
 
-    // And a city with nothing left to fix is not told to buy anything.
-    const done = state({ ...housed(12), ...staffed(), parks: 12 });
+    // A covered city with no buses is told to open a depot, which is the whole
+    // of what congestion bought: TRANSIT carries `weight: 0`, so before there
+    // was a traffic term this panel had no way to name it at all.
+    const jammed = state({ ...housed(12), ...staffed(), parks: 12, cash: 1e6 });
+    const depot = SERVICES.find((entry) => entry.key === 'transit');
+    expect(happinessFix(jammed)?.label).toBe(depot?.buildLabel);
+
+    // And a city with nothing left to fix — buses included — is not told to buy
+    // anything.
+    const done = state({ ...jammed, depots: 40, depotStaff: 1 });
     expect(happinessFix(done)).toBeNull();
   });
 

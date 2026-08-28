@@ -34,6 +34,7 @@ import { Glow } from './glow';
 import { GrowableInstancedMesh, SlotRanges } from './growable';
 import { GrowthSchedule } from './growth';
 import { PALETTE } from './palette';
+import type { OverlaySource } from './zones';
 
 const GROW_SECONDS = 0.55;
 const GROW_SECONDS_REDUCED = 0.12;
@@ -587,7 +588,15 @@ class ZoneLayer {
   /** The zoning the shown plots were placed against. See `CityLayout.ensure`. */
   private shownZoning: Zoning = EMPTY_ZONING;
   private ruins = 0;
-  private overlay: number | null = null;
+  /**
+   * The overlay's colour for each slot, or null when no overlay is on.
+   *
+   * A function rather than one hex per zone, which is what the modes about
+   * *built* land needed: land value, coverage and build order all differ from
+   * one building to the next, and `bodyColor` already took a hex per instance —
+   * so widening this is the whole of the mesh layer's part in it.
+   */
+  private overlay: OverlaySource | null = null;
   /**
    * Which part instance each of a building's dressing pieces landed on.
    *
@@ -630,8 +639,8 @@ class ZoneLayer {
     else if (count < this.shown) this.growth.clear();
   }
 
-  setOverlay(hex: number | null): void {
-    this.overlay = hex;
+  setOverlay(source: OverlaySource | null): void {
+    this.overlay = source;
   }
 
   /** Registers every body mesh's slot run, so a raycast hit resolves. */
@@ -767,7 +776,10 @@ class ZoneLayer {
     dummy.scale.set(sx, stretch * scale, sz);
     dummy.updateMatrix();
     body.mesh.setMatrixAt(index, dummy.matrix);
-    body.mesh.setColorAt(index, bodyColor(this.kind, slot, level, this.overlay, tint));
+    body.mesh.setColorAt(
+      index,
+      bodyColor(this.kind, slot, level, this.overlay?.(this.kind, slot) ?? null, tint),
+    );
 
     writeParts(
       this.kind,
@@ -797,7 +809,16 @@ class ZoneLayer {
       const start = this.starts[l] ?? 0;
       for (let i = 0; i < this.levelCount(l); i++) {
         const slot = start + i;
-        body.mesh.setColorAt(i, bodyColor(this.kind, slot, slot < standing ? l : -1, this.overlay, tint));
+        body.mesh.setColorAt(
+          i,
+          bodyColor(
+            this.kind,
+            slot,
+            slot < standing ? l : -1,
+            this.overlay?.(this.kind, slot) ?? null,
+            tint,
+          ),
+        );
       }
       body.flush();
     }
@@ -1101,6 +1122,10 @@ class CivicMeshes {
   private readonly roof: GrowableInstancedMesh;
   /** Tower for the hospital, parapet for police, bay door for fire. */
   private readonly mark: GrowableInstancedMesh;
+  /**
+   * One hex, not a source: a civic building has no slot in any build list, so
+   * there is nothing per-slot for it to read. See `Buildings.setZoneOverlay`.
+   */
   private overlay: number | null = null;
 
   constructor(
@@ -1605,24 +1630,28 @@ export class Buildings {
   }
 
   /**
-   * Recolours the city by zone. Homes stand on residential plots and shops on
-   * commercial ones by construction, so the zone of a building is known from
-   * which list placed it — no per-plot lookup needed.
+   * Recolours the city under whatever overlay is on.
+   *
+   * `source` decides the colour of the k-th building of a zone, so a mode about
+   * built land — land value, coverage, build order — states itself on the
+   * buildings where the pads cannot: a pad under a building is a pad nobody can
+   * see. Null turns the overlay off.
+   *
+   * Homes stand on residential plots and shops on commercial ones by
+   * construction, so the *zone* of a building is known from which list placed
+   * it; anything finer than that is `source`'s to resolve.
    */
-  setZoneOverlay(on: boolean): void {
-    const hex: Record<ZoneKind, number> = {
-      home: PALETTE.zoneResidential,
-      shop: PALETTE.zoneCommercial,
-      industry: PALETTE.zoneIndustrial,
-    };
+  setZoneOverlay(source: OverlaySource | null): void {
     for (const zone of this.zones) {
-      zone.setOverlay(on ? hex[zone.kind] : null);
+      zone.setOverlay(source);
       zone.recolor(this.tint);
     }
     // A civic site is carved out of the zone it sits in, so under the plan it
     // reads as that zone — the overlay states zoning, not what stands there.
+    // Civic buildings have no slot of their own in a build list, so they take
+    // the residential reading at slot 0 rather than a colour of their own.
     for (const set of this.civic) {
-      set.meshes.setOverlay(on ? PALETTE.zoneResidential : null);
+      set.meshes.setOverlay(source === null ? null : source('home', 0));
       set.meshes.recolor(set.shown, this.tint);
     }
   }

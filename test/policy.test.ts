@@ -17,6 +17,7 @@ import {
   cityHallBlocker,
   cityHallCost,
   civicSiteCapacity,
+  congestion,
   demandTargets,
   developed,
   fareIncome,
@@ -226,15 +227,29 @@ describe('the transit depot', () => {
     expect(income(s)).toBeGreaterThan(income(withDepot({ depots: 0, depotStaff: 0 })));
   });
 
-  it('carries no happiness weight at all', () => {
+  it('carries no happiness weight at all, and moves happiness anyway', () => {
     expect(transit?.weight).toBe(0);
     expect(happinessTerms(withDepot()).some((t) => t.key === 'transit')).toBe(false);
-    // The four weights still sum to exactly one.
-    const total = happinessTerms(withDepot()).reduce((sum, t) => sum + t.weight, 0);
-    expect(total).toBeCloseTo(1, 12);
-    // And opening one changes happiness by nothing.
+    // The four *weights* still sum to exactly one. `happinessTerms` also carries
+    // congestion, which is flagged as a modifier and is not one of them.
+    const weighted = happinessTerms(withDepot()).filter((t) => t.modifier !== true);
+    expect(weighted.reduce((sum, t) => sum + t.weight, 0)).toBeCloseTo(1, 12);
+
+    // And what a depot buys is not a weight but a *modifier*: it takes trips
+    // off the road, which lifts happiness through the traffic term in the same
+    // bracket as the tax step. That is the whole reason congestion exists — the
+    // four weights were calibrated to sum to 1 three cycles ago and a fifth
+    // would have re-opened them to buy something transport already had two
+    // better routes to. See CONGESTION_MOOD.
     const bare = withDepot({ depots: 0, depotStaff: 0 });
-    expect(happinessTarget(withDepot())).toBeCloseTo(happinessTarget(bare), 12);
+    expect(congestion(bare)).toBeGreaterThan(congestion(withDepot()));
+    expect(happinessTarget(withDepot())).toBeGreaterThan(happinessTarget(bare));
+    // With the roads empty either way, the depot is worth nothing to the mood —
+    // which is what "no weight" means: it is paid for the traffic it removes,
+    // not for existing.
+    const empty = { ...withDepot(), homes: 0, homeLevels: [0, 0, 0, 0, 0], mergedR: 0 };
+    const emptyBare = { ...empty, depots: 0, depotStaff: 0 };
+    expect(happinessTarget(empty)).toBeCloseTo(happinessTarget(emptyBare), 12);
   });
 
   it('lifts commercial and industrial demand rather than income', () => {

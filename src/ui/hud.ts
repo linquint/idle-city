@@ -1,18 +1,38 @@
 import { EventLog, type GameEvent } from '../core/events';
+import {
+  HISTORY_SAMPLES,
+  HISTORY_TIER_LABELS,
+  readTier,
+  tierLength,
+  tierOf,
+  type HistorySample,
+  type HistoryTierKey,
+} from '../sim/history';
+import {
+  ACHIEVEMENT_COUNT,
+  ACHIEVEMENT_GROUPS,
+  achievementReadings,
+  unlockedCount,
+} from '../sim/achievements';
 import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
   ANNEX_MIN_OCCUPANCY,
   CELL,
   LANDMARKS,
   LANDMARK_MOOD,
+  CONGESTION_MOOD,
   HAPPINESS_MIN_BUILD,
   PLOTS_PER_PARK,
   LEVEL_EDUCATION,
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
   LEVEL_HOUSING,
+  SHOP_BONUS,
   SHOP_JOBS,
   SHOP_TRIPS,
+  INDUSTRY_BONUS,
+  DISTRICT_BONUS,
+  SKILL_YIELD,
   FREE_TRANSPORT_MOOD,
   FREE_TRANSPORT_REACH,
   TAX_STEPS,
@@ -24,6 +44,7 @@ import {
   TAX_NEUTRAL,
   AIRPORT_EXPORT_LIFT,
   AIRPORT_VISITORS,
+  ROAD_VISITORS,
   CARGO_EXPORT_LIFT,
   HIGHWAY_MIN_DISTRICTS,
   TERMINALS,
@@ -100,6 +121,11 @@ import {
   promotionBlocker,
   taxStep,
   transitCoverage,
+  workforceSkill,
+  effectiveOf,
+  estateEarning,
+  congestion,
+  transitShare,
   zoneOf,
   priceModifier,
   housingPlots,
@@ -115,10 +141,13 @@ import {
   terminalReadings,
   upkeep,
   visitors,
+  visitorShare,
+  visitorSources,
   willAutoAnnex,
 } from '../sim/economy';
 import { ESTATE_CELLS } from '../sim/estates';
 import type { BuildingRef } from '../render/buildings';
+import { ZONE_MODES, type ZoneMode } from '../render/zones';
 import type { AwayReport, Game } from '../sim/game';
 import {
   createPlacement,
@@ -137,6 +166,16 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
 
 export interface HudHooks {
   onReset: () => void;
+  /**
+   * Steps the map overlay to one mode, and reports what it settled on.
+   *
+   * The overlay is view state and stays in the view — nothing about it reaches
+   * `GameState` — so the HUD asks rather than deciding. The return is what the
+   * view actually chose, which is what the picker marks.
+   */
+  onZoneMode?: (mode: ZoneMode) => ZoneMode;
+  /** What the view is showing now, so the picker opens marked correctly. */
+  zoneMode?: () => ZoneMode;
   /** Dev-only time travel, wired to a button that only exists in dev builds. */
   onSkip?: (seconds: number) => void;
   /** Told when the card is dismissed, so the outline goes with it. */
@@ -151,7 +190,17 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 };
 
 /** The tabs the docked control is split into, in the order they are shown. */
-const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'trade', 'estates'] as const;
+const TAB_KEYS = [
+  'build',
+  'treasury',
+  'demand',
+  'taxes',
+  'landmarks',
+  'trade',
+  'estates',
+  'graphs',
+  'awards',
+] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /**
@@ -175,6 +224,25 @@ const TICKER_SECONDS = 45;
  */
 const TICKER_LINES = 4;
 
+/**
+ * Lines the away timeline shows before it says "and N more".
+ *
+ * Against a log bounded at AWAY_EVENT_BUFFER, so this is a rendering cap rather
+ * than the bound: twelve is what a modal sheet holds without the button
+ * scrolling off the bottom of a phone, and the list scrolls past that. Measured
+ * on a twelve-hour absence of a mid-size auto-developing city, the log holds 24.
+ */
+const AWAY_TIMELINE_LINES = 12;
+
+/**
+ * Pixels a thumb has to travel on the sheet's handle before it is a drag.
+ *
+ * The same idea `cameraRig`'s CLICK_SLOP carries and the same reason: nobody
+ * taps a phone without moving, so a control that treated any movement as a
+ * drag would never register a tap at all.
+ */
+const SHEET_DRAG_SLOP = 8;
+
 /** What the ticker calls each zone, in the plural a count reads well against. */
 /** What the ticker calls each zone's land when the surveyor moves it. */
 const ZONE_LAND: Record<ZoneKind, string> = {
@@ -188,6 +256,25 @@ const ZONE_PLURAL: Record<ZoneKind, string> = {
   shop: 'shops',
   industry: 'works',
 };
+
+/**
+ * The singular, for the lines that can carry a count of one.
+ *
+ * "1 shops became high street" was a wart the ticker could carry — four lines
+ * that scroll past in forty-five seconds — and the away timeline cannot: it
+ * shows a dozen at once on a modal sheet with the player's whole attention.
+ * Works is the one that does not inflect, which is why this is a table rather
+ * than a rule about trailing letters.
+ */
+const ZONE_SINGULAR: Record<ZoneKind, string> = {
+  home: 'home',
+  shop: 'shop',
+  industry: 'works',
+};
+
+/** The right one of the two, for a count. */
+const zonePlural = (zone: ZoneKind, count: number): string =>
+  count === 1 ? ZONE_SINGULAR[zone] : ZONE_PLURAL[zone];
 
 /** Below this a chip would say "-0%", which is noise rather than information. */
 const CHIP_DEADBAND = 0.005;
@@ -206,6 +293,105 @@ const ZONE_LIFT_NAMES: Record<ZoneKind, string> = {
   shop: 'Commercial',
   industry: 'Industrial',
 };
+
+/** The three series the Graphs tab draws. */
+type GraphKey = 'population' | 'income' | 'happiness';
+
+/**
+ * What each series is called, how it is read out of a sample, and what shape its
+ * y-axis is.
+ *
+ * Population and income are logarithmic and have to be: income spans 54/s at the
+ * opening to 9.04e9/s at 49 districts of megastructures, so a linear axis over a
+ * whole game would draw the first eight orders of magnitude as a flat line along
+ * the bottom. Happiness is a share of one and is drawn against 0..1 fixed, so the
+ * height of the line means the same thing on every chart rather than being
+ * rescaled to whatever range the city happened to sit in.
+ */
+const GRAPH_SERIES: readonly {
+  key: GraphKey;
+  label: string;
+  log: boolean;
+  read: (sample: HistorySample) => number;
+  format: (value: number) => string;
+}[] = [
+  {
+    key: 'population',
+    label: 'Residents',
+    log: true,
+    read: (sample) => sample.population,
+    format: (value) => fmtInt(value),
+  },
+  {
+    key: 'income',
+    label: 'Income',
+    log: true,
+    read: (sample) => sample.income,
+    format: (value) => `${fmt(value)}/s`,
+  },
+  {
+    key: 'happiness',
+    label: 'Happiness',
+    log: false,
+    read: (sample) => sample.happiness,
+    format: (value) => pct(value),
+  },
+];
+
+/** Padding at the top and bottom of a plot, in the 100-unit user space. */
+const GRAPH_INSET = 6;
+
+/**
+ * One series as an SVG path, in a fixed 100 x 100 user space.
+ *
+ * The viewBox is stretched to whatever width the dock is, which is why the
+ * stroke carries `vector-effect`. Time runs left to right with the oldest sample
+ * at x = 0 and the newest at x = 100 whether the ring holds five samples or a
+ * hundred and twenty: a chart that grew in from the left would redraw its whole
+ * x-axis every minute for the first two hours.
+ *
+ * A log axis is taken over the *decades the data actually spans*, padded by one
+ * so a flat series is a line through the middle rather than a line pinned to an
+ * edge. Zero and anything negative are dropped to the floor of the range, which
+ * is the honest reading: a city with no residents has no point on a log axis.
+ *
+ * The plot is inset by GRAPH_INSET at the top and bottom, because the stroke is
+ * centred on the path and a series sitting at either extreme — happiness at 100%
+ * is the everyday case — would otherwise be drawn half outside the box and come
+ * out looking like a hairline.
+ */
+function graphPath(values: readonly number[], log: boolean): string {
+  if (values.length === 0) return '';
+  let lo: number;
+  let hi: number;
+  if (log) {
+    const positive = values.filter((v) => v > 0);
+    // Nothing to plot yet: one flat line along the bottom says "not yet" better
+    // than an empty box does.
+    lo = positive.length > 0 ? Math.log10(Math.min(...positive)) : 0;
+    hi = positive.length > 0 ? Math.log10(Math.max(...positive)) : 0;
+    if (hi - lo < 1) {
+      const mid = (hi + lo) / 2;
+      lo = mid - 0.5;
+      hi = mid + 0.5;
+    }
+  } else {
+    lo = 0;
+    hi = 1;
+  }
+  const span = hi - lo || 1;
+  const step = values.length > 1 ? 100 / (values.length - 1) : 0;
+  let d = '';
+  for (let i = 0; i < values.length; i++) {
+    const raw = values[i] ?? 0;
+    const at = log ? (raw > 0 ? Math.log10(raw) : lo) : raw;
+    const y = 100 - GRAPH_INSET - ((at - lo) / span) * (100 - GRAPH_INSET * 2);
+    // Two decimal places is a tenth of a pixel at any width the dock reaches,
+    // and it keeps the path string short enough to compare cheaply.
+    d += `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(2)} ${Math.max(0, Math.min(100, y)).toFixed(2)}`;
+  }
+  return d;
+}
 
 /** The highest level anything in a cohort has reached. 0 for an empty city. */
 function topLevel(levels: readonly number[]): number {
@@ -249,6 +435,15 @@ export class Hud {
     plots: el('plots'),
     districts: el('districts'),
     happiness: el('happiness'),
+    bonuses: el('bonuses'),
+    bonusShop: el('bonus-shop'),
+    bonusShopNote: el('bonus-shop-note'),
+    bonusIndustry: el('bonus-industry'),
+    bonusIndustryNote: el('bonus-industry-note'),
+    bonusSkill: el('bonus-skill'),
+    bonusSkillNote: el('bonus-skill-note'),
+    bonusDistrict: el('bonus-district'),
+    bonusDistrictNote: el('bonus-district-note'),
     mood: el('mood'),
     moodPct: el('mood-pct'),
     moodWhy: el('mood-why'),
@@ -262,6 +457,14 @@ export class Hud {
     demandCNum: el('demand-c-num'),
     demandINum: el('demand-i-num'),
     services: el('services'),
+    awardsList: el('awards-list'),
+    graphs: el('graphs'),
+    graphTiers: el('graph-tiers'),
+    graphsNote: el('graphs-note'),
+    overlays: el('overlays'),
+    overlayNote: el('overlay-note'),
+    corner: el('corner'),
+    sheetGrip: el<HTMLButtonElement>('sheet-grip'),
     education: el('education'),
     educationReach: el('education-reach'),
     educationNext: el('education-next'),
@@ -298,6 +501,9 @@ export class Hud {
     welcome: el('welcome'),
     welcomeAway: el('welcome-away'),
     welcomeRows: el('welcome-rows'),
+    welcomeTimeline: el('welcome-timeline'),
+    welcomeMore: el('welcome-more'),
+    welcomeTotals: el<HTMLDetailsElement>('welcome-totals'),
     welcomeClose: el<HTMLButtonElement>('welcome-close'),
     inspect: el('inspect'),
     inspectTitle: el('inspect-title'),
@@ -326,6 +532,8 @@ export class Hud {
     transit: el('transit'),
     transitFares: el('transit-fares'),
     transitLabour: el('transit-labour'),
+    transitCongestion: el('transit-congestion'),
+    transitCongestionMood: el('transit-congestion-mood'),
     landmarkShare: el('landmark-share'),
     landmarkMood: el('landmark-mood'),
     portBerths: el('port-berths'),
@@ -333,6 +541,8 @@ export class Hud {
     portVisitors: el('port-visitors'),
     portSpend: el('port-spend'),
     portExports: el('port-exports'),
+    portSources: el('port-sources'),
+    portShopping: el('port-shopping'),
     portLift: el('port-lift'),
     airport: el<HTMLButtonElement>('build-airport'),
     airportLabel: el('build-airport-label'),
@@ -456,6 +666,37 @@ export class Hud {
   private tickerShown = '';
   /** What the demand breakdown was last built for. See `paintLift`. */
   private liftShown = '';
+  /**
+   * One row per achievement, built once and then only written to.
+   *
+   * The table is static, so the *markup* is static: what a paint changes is a
+   * class and one time string. Rebuilding twenty-odd rows from scratch on every
+   * paint would be the same DOM churn the card and the ticker are both arranged
+   * to avoid.
+   */
+  private readonly awardRows = new Map<string, { row: HTMLElement; at: HTMLElement }>();
+  /** What the awards list last rendered, so an unchanged panel is left alone. */
+  private awardsShown = '';
+  /** What the awards tab label last said. Painted on every tick — see `paint`. */
+  private awardsTabShown = '';
+  /** One chip per overlay mode, built once. See `buildOverlays`. */
+  private readonly overlayButtons = new Map<ZoneMode, HTMLButtonElement>();
+  /** The mode the picker is marking, so the note can be repainted live. */
+  private overlayShown: ZoneMode = 'off';
+  /** What that note last said, so an unchanged one is left alone. */
+  private overlayNoteShown = '';
+  /**
+   * Which tier the chart is showing. View state, and it stays in the view: the
+   * ring the simulation keeps is the same whichever span is on screen.
+   */
+  private graphTier: HistoryTierKey = 'fine';
+  /** One block per series, built once. Same reasoning as `awardRows`. */
+  private readonly graphRows = new Map<
+    GraphKey,
+    { block: HTMLElement; now: HTMLElement; path: SVGPathElement }
+  >();
+  /** What the chart last drew, so an unchanged panel is left alone. */
+  private graphsShown = '';
 
   constructor(
     private readonly game: Game,
@@ -540,6 +781,11 @@ export class Hud {
       this.taxButtons.push(button);
       n.taxSteps.append(button);
     }
+
+    this.wireSheet();
+    this.buildOverlays();
+    this.buildGraphs();
+    this.buildAwards();
 
     n.occupancyMark.style.left = `${ANNEX_MIN_OCCUPANCY * 100}%`;
 
@@ -662,7 +908,17 @@ export class Hud {
     else if (this.open === 'taxes') this.paintTaxes(s);
     else if (this.open === 'landmarks') this.paintLandmarks(s);
     else if (this.open === 'trade') this.paintTrade(s);
-    else this.paintEstates(s);
+    else if (this.open === 'estates') this.paintEstates(s);
+    else if (this.open === 'graphs') this.paintGraphs(s);
+    else this.paintAwards(s);
+
+    // The one label painted whatever tab is open, because the count is the
+    // reason to open the tab at all. Cheap: one integer compare and, on the
+    // handful of ticks it changes, one string write.
+    this.paintAwardsTab(s);
+    // The traffic overlay's number, which the map cannot carry — see
+    // `paintOverlayNote`. Cheap and guarded, like the tab label above it.
+    if (this.overlayShown !== 'off') this.paintOverlayNote();
 
     this.paintCard(s);
   }
@@ -695,7 +951,7 @@ export class Hud {
         };
       case 'fire-lost':
         return {
-          text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} lost to fire`,
+          text: `${many(event.count)} ${zonePlural(event.zone, event.count)} lost to fire`,
           tone: 'bad',
         };
       case 'blocked':
@@ -712,14 +968,20 @@ export class Hud {
         // that meant a different thing at one rung than at the others.
         const from =
           event.level === MERGE_LEVEL
-            ? `pairs of ${ZONE_PLURAL[event.zone]}`
-            : ZONE_PLURAL[event.zone];
+            ? `${event.count === 1 ? 'pair' : 'pairs'} of ${ZONE_PLURAL[event.zone]}`
+            : zonePlural(event.zone, event.count);
         return { text: `${many(event.count)} ${from} became ${to}`, tone: 'good' };
       }
       case 'abandoned':
-        return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} boarded up`, tone: 'bad' };
+        return {
+          text: `${many(event.count)} ${zonePlural(event.zone, event.count)} boarded up`,
+          tone: 'bad',
+        };
       case 'recovered':
-        return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} reopened`, tone: 'good' };
+        return {
+          text: `${many(event.count)} ${zonePlural(event.zone, event.count)} reopened`,
+          tone: 'good',
+        };
       case 'annexed':
         return { text: `District ${many(event.districts)} annexed`, tone: 'good' };
       case 'surveyed':
@@ -742,7 +1004,307 @@ export class Hud {
           tone: 'warn',
         };
       }
+      case 'unlocked':
+        // The name and nothing else. An achievement grants nothing, so there is
+        // no consequence to report — the line is the whole of it.
+        return { text: `Unlocked — ${event.name}`, tone: 'good' };
     }
+  }
+
+  /**
+   * The bottom sheet's handle: tap to toggle, drag to the same end.
+   *
+   * The one place this feature reaches `hud.ts` at all, and it is here because
+   * a sheet you can only *tap* open is a sheet that fights the gesture every
+   * phone has trained its owner to make. Everything else about the small-screen
+   * layout is CSS.
+   *
+   * A real `<button>` underneath, so the same control works by keyboard and to
+   * a screen reader, and `aria-expanded` says which way it is. The drag is
+   * pointer events on top of that rather than instead of it: a short drag is a
+   * tap and the button handles it, and a long one settles by direction.
+   */
+  private wireSheet(): void {
+    const grip = this.nodes.sheetGrip;
+    const corner = this.nodes.corner;
+    let from = 0;
+    let dragging = false;
+
+    const set = (collapsed: boolean): void => {
+      corner.classList.toggle('collapsed', collapsed);
+      grip.setAttribute('aria-expanded', String(!collapsed));
+    };
+
+    grip.addEventListener('click', () => {
+      // Suppressed after a drag that actually went somewhere, or the pointer's
+      // own click would undo what the drag just did.
+      if (dragging) return;
+      set(!corner.classList.contains('collapsed'));
+    });
+
+    grip.addEventListener('pointerdown', (event) => {
+      from = event.clientY;
+      dragging = false;
+      grip.setPointerCapture(event.pointerId);
+    });
+
+    grip.addEventListener('pointermove', (event) => {
+      if (!grip.hasPointerCapture(event.pointerId)) return;
+      const moved = event.clientY - from;
+      // A threshold, because a thumb never moves zero: under it this is still a
+      // tap and the click handler owns it.
+      if (Math.abs(moved) < SHEET_DRAG_SLOP) return;
+      dragging = true;
+      // Down collapses, up expands — the direction the sheet itself moves.
+      set(moved > 0);
+    });
+
+    const done = (event: PointerEvent): void => {
+      if (grip.hasPointerCapture(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+      // Cleared on the next frame rather than now: the click event that follows
+      // a pointerup has to see the flag the drag set.
+      requestAnimationFrame(() => {
+        dragging = false;
+      });
+    };
+    grip.addEventListener('pointerup', done);
+    grip.addEventListener('pointercancel', done);
+  }
+
+  /**
+   * Builds the overlay picker once, and keeps it marked.
+   *
+   * Rendered whether or not the view wired the hooks, because the markup is in
+   * `index.html` either way and an empty row of chips would be worse than none:
+   * with no hook the picker simply is not built.
+   */
+  private buildOverlays(): void {
+    if (!this.hooks.onZoneMode) return;
+    for (const mode of ZONE_MODES) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'overlay';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', 'false');
+      button.title = mode.note;
+      button.textContent = mode.label;
+      button.addEventListener('click', () => {
+        this.markOverlay(this.hooks.onZoneMode?.(mode.key) ?? mode.key);
+      });
+      this.overlayButtons.set(mode.key, button);
+      this.nodes.overlays.append(button);
+    }
+    this.markOverlay(this.hooks.zoneMode?.() ?? 'off');
+  }
+
+  /**
+   * Marks the mode the view is showing.
+   *
+   * Public because the Z key belongs to the view, not to this panel: the view
+   * cycles and tells the HUD what it landed on, so one control cannot get out
+   * of step with the other.
+   */
+  markOverlay(mode: ZoneMode): void {
+    for (const [key, button] of this.overlayButtons) {
+      button.setAttribute('aria-checked', String(key === mode));
+    }
+    this.overlayShown = mode;
+    this.paintOverlayNote();
+  }
+
+  /**
+   * The note under the picker.
+   *
+   * Repainted every tick rather than only on a mode change, because the traffic
+   * mode has to carry its *number*: congestion is a city-wide scalar, so the
+   * map can only show that the streets are tinted and not how badly — the
+   * reading itself has to be in words. Guarded on the string, like every other
+   * live region in this file.
+   */
+  private paintOverlayNote(): void {
+    const mode = this.overlayShown;
+    const entry = ZONE_MODES.find((one) => one.key === mode);
+    const text =
+      mode === 'off' ? ''
+      : mode === 'traffic'
+        ? `${pct(congestion(this.game.state))} jammed. ${entry?.note ?? ''}`
+        : (entry?.note ?? '');
+    if (text === this.overlayNoteShown) return;
+    this.overlayNoteShown = text;
+    this.nodes.overlayNote.textContent = text;
+  }
+
+  /**
+   * Builds the three charts and the span toggle once.
+   *
+   * SVG rather than a canvas, and no library at all: three polylines over a
+   * hundred and twenty points is a `d` attribute, and a chart package would be a
+   * dependency and a build step for something the DOM already draws. Only the
+   * path and the current value are written on a paint.
+   */
+  private buildGraphs(): void {
+    const n = this.nodes;
+    for (const key of ['fine', 'coarse'] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'step';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(key === this.graphTier));
+      button.textContent = HISTORY_TIER_LABELS[key];
+      button.addEventListener('click', () => {
+        this.graphTier = key;
+        for (const other of n.graphTiers.children) {
+          other.setAttribute('aria-checked', String(other === button));
+        }
+        // The panel is keyed on the tier, so the guard has to be cleared or the
+        // toggle would change the label and leave the old span on screen.
+        this.graphsShown = '';
+        this.paint();
+      });
+      n.graphTiers.append(button);
+    }
+
+    for (const series of GRAPH_SERIES) {
+      const block = document.createElement('div');
+      block.className = `graph ${series.key === 'happiness' ? 'mood' : ''}`.trim();
+      const head = document.createElement('div');
+      head.className = 'graph-head';
+      const label = document.createElement('span');
+      label.className = 'k';
+      label.textContent = series.label;
+      const now = document.createElement('span');
+      now.className = 'now';
+      head.append(label, now);
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 100 100');
+      // The aspect ratio is deliberately not preserved: the plot is stretched to
+      // the dock's width, which is what makes one x-axis span the panel at any
+      // size. `vector-effect` on the stroke is what keeps that from thickening
+      // the line — see the stylesheet.
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', `${series.label} over time`);
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('class', 'line');
+      svg.append(path);
+
+      block.append(head, svg);
+      this.nodes.graphs.append(block);
+      this.graphRows.set(series.key, { block, now, path });
+    }
+  }
+
+  /**
+   * The graphs panel: three series over the span the toggle selects.
+   *
+   * Read out of the save's ring rather than out of a buffer the HUD keeps, which
+   * is the whole point of the feature: a city that was away for six hours comes
+   * back with six hours of chart rather than with an empty one. The current value
+   * is the *live* reading rather than the last sample, because a sample can be a
+   * minute old and the number next to a chart should agree with the dock.
+   */
+  private paintGraphs(s: Readonly<GameState>): void {
+    const tier = tierOf(s, this.graphTier);
+    const held = tierLength(tier);
+    // Keyed on the tier and on how much of it is filled plus the head, which is
+    // exactly what changes when a sample lands. Cheaper than decoding 120
+    // samples ten times a second to find out nothing moved.
+    const shown = `${this.graphTier}:${held}:${tier.head}:${Math.floor(s.elapsed)}`;
+    if (shown === this.graphsShown) return;
+    this.graphsShown = shown;
+
+    const samples = readTier(tier);
+    for (const series of GRAPH_SERIES) {
+      const row = this.graphRows.get(series.key);
+      if (!row) continue;
+      row.path.setAttribute('d', graphPath(samples.map(series.read), series.log));
+      row.block.classList.toggle('empty', samples.length === 0);
+      row.now.textContent = series.format(
+        series.key === 'population' ? residents(s)
+        : series.key === 'income' ? income(s)
+        : s.happiness,
+      );
+    }
+
+    this.nodes.graphsNote.textContent =
+      held === 0
+        ? 'Nothing charted yet — the first point lands a minute in.'
+        : held < HISTORY_SAMPLES
+          ? `${held} of ${HISTORY_SAMPLES} points, oldest on the left.`
+          : `The last ${HISTORY_TIER_LABELS[this.graphTier]}, oldest on the left.`;
+  }
+
+  /**
+   * Builds the awards list once, grouped.
+   *
+   * Sectioned rather than flat because the groups are the only structure a list
+   * of two dozen one-line facts has: "Land" and "Adversity" say what a row is
+   * about before it is read, and a player looking for what to do next reads the
+   * headings rather than every note.
+   */
+  private buildAwards(): void {
+    const list = this.nodes.awardsList;
+    const readings = achievementReadings(this.game.state);
+    for (const group of ACHIEVEMENT_GROUPS) {
+      const rows = readings.filter((reading) => reading.achievement.group === group.key);
+      if (rows.length === 0) continue;
+      const heading = document.createElement('p');
+      heading.className = 'award-group';
+      heading.textContent = group.name;
+      list.append(heading);
+      for (const { achievement } of rows) {
+        const row = document.createElement('div');
+        row.className = 'award locked';
+        const name = document.createElement('span');
+        name.className = 'k';
+        name.textContent = achievement.name;
+        const at = document.createElement('span');
+        at.className = 'at';
+        const note = document.createElement('p');
+        note.className = 'note';
+        note.textContent = achievement.note;
+        row.append(name, at, note);
+        list.append(row);
+        this.awardRows.set(achievement.key, { row, at });
+      }
+    }
+  }
+
+  /**
+   * The awards panel: what is unlocked, and when it fired.
+   *
+   * The time is `fmtDuration` against the `elapsed` the row was stamped with —
+   * how long the city had been running when it happened, which is the only
+   * clock the simulation has and the only one that means anything across a
+   * twelve-hour absence. A locked row keeps its note, because the note is the
+   * instruction and a greyed instruction is still an instruction.
+   */
+  private paintAwards(s: Readonly<GameState>): void {
+    const readings = achievementReadings(s);
+    // One string compare against a list of two dozen rows, for the reason the
+    // card does it: the panel is static between unlocks and rewriting it ten
+    // times a second is DOM traffic carrying no new information.
+    const shown = readings.map((reading) => `${reading.achievement.key}:${reading.at ?? ''}`).join('|');
+    if (shown === this.awardsShown) return;
+    this.awardsShown = shown;
+
+    for (const { achievement, at } of readings) {
+      const row = this.awardRows.get(achievement.key);
+      if (!row) continue;
+      const locked = at === null;
+      row.row.classList.toggle('locked', locked);
+      row.at.textContent = locked ? '' : fmtDuration(at);
+    }
+  }
+
+  /** The count on the tab itself, which is the reason to open it. */
+  private paintAwardsTab(s: Readonly<GameState>): void {
+    const label = `Awards ${unlockedCount(s)}/${ACHIEVEMENT_COUNT}`;
+    if (label === this.awardsTabShown) return;
+    this.awardsTabShown = label;
+    const tab = this.tabs.find((entry) => entry.key === 'awards');
+    if (tab) tab.button.textContent = label;
   }
 
   /**
@@ -803,6 +1365,34 @@ export class Hud {
     );
     n.districts.textContent = `${s.districts} / ${MAX_DISTRICTS}`;
     n.happiness.textContent = pct(s.happiness);
+
+    // What multiplies the rent, spelled out. Three of these have always been in
+    // the ledger and none of them was ever on screen, which made the fourth —
+    // the workforce skill — impossible to introduce honestly: a player told
+    // "+30% industrial yield" on a school button has no way to find out what
+    // the industrial term was worth in the first place.
+    const trading = effectiveOf(s, 'shop');
+    const works = effectiveOf(s, 'industry') + estateEarning(s);
+    const skill = workforceSkill(s);
+    n.bonusShop.textContent = `+${(SHOP_BONUS * trading * 100).toFixed(0)}%`;
+    n.bonusShopNote.textContent = `${fmtInt(trading)} shop plots trading`;
+    n.bonusIndustry.textContent = `+${(INDUSTRY_BONUS * works * skill * 100).toFixed(0)}%`;
+    n.bonusIndustryNote.textContent = `${fmtInt(works)} works plots running`;
+    n.bonusSkill.textContent = `x${skill.toFixed(2)}`;
+    n.bonusSkillNote.textContent =
+      skill <= 1
+        ? 'no schooling yet'
+        : `${pct(educationCoverage(s))} taught, on industry only`;
+    n.bonusDistrict.textContent = `+${(DISTRICT_BONUS * (s.districts - 1) * 100).toFixed(0)}%`;
+    n.bonusDistrictNote.textContent =
+      s.districts === 1 ? 'one district' : `${s.districts} districts`;
+    n.bonuses.setAttribute(
+      'aria-label',
+      `Rent multipliers: commerce plus ${Math.round(SHOP_BONUS * trading * 100)} percent, ` +
+        `industry plus ${Math.round(INDUSTRY_BONUS * works * skill * 100)} percent ` +
+        `at a workforce skill of ${skill.toFixed(2)}, ` +
+        `districts plus ${Math.round(DISTRICT_BONUS * (s.districts - 1) * 100)} percent`,
+    );
   }
 
   /**
@@ -964,7 +1554,8 @@ export class Hud {
 
     // Transport gets a block of its own for the same reason education does: it
     // answers a different question from happiness. What it says is what the
-    // network earns and what it reaches, which are its two jobs.
+    // network earns, what it reaches, and — since congestion arrived — what the
+    // streets are like, which is the third thing a depot is for.
     const fares = fareIncome(s);
     const spare = labourReach(s);
     n.transitFares.textContent = s.freeTransport ? 'free' : `${fmt(fares)}/s`;
@@ -972,10 +1563,22 @@ export class Hud {
       spare < 1
         ? 'no spare labour reached'
         : `reaches ${fmtInt(spare)} spare workers`;
+    // The number and what it costs, in the units every other modifier in this
+    // HUD is stated in — see the tax and landmark rows, which both say "points
+    // of mood" against the same happiness target.
+    const jam = congestion(s);
+    const carried = transitShare(s);
+    n.transitCongestion.textContent = pct(jam);
+    n.transitCongestionMood.textContent =
+      jam <= 0
+        ? 'no effect on mood'
+        : `−${(CONGESTION_MOOD * jam * 100).toFixed(1)} points of mood`;
     n.transit.setAttribute(
       'aria-label',
       `Transport: ${s.depots} depots covering ${Math.round(transitCoverage(s) * 100)} percent, ` +
-        (s.freeTransport ? 'fares free' : `${Math.round(fares * 10) / 10} per second in fares`),
+        (s.freeTransport ? 'fares free' : `${Math.round(fares * 10) / 10} per second in fares`) +
+        `. Traffic ${Math.round(jam * 100)} percent, with ${Math.round(carried * 100)} percent of ` +
+        'trips on the network.',
     );
 
     // Education gets its own panel because it answers a different question: not
@@ -1128,16 +1731,39 @@ export class Hud {
     // Berths *landing* rather than berths owned, because the runway lands on the
     // same path a quay does — see `berthsLanding`. An inland city reads three
     // and no coast, which is the whole point of the building.
-    n.portBerths.textContent = `${fmtInt(berthsLanding(s))}/${fmtInt(berths + (s.airport ? AIRPORT_VISITORS : 0))}`;
+    // `fmt` rather than `fmtInt`, because a berth is no longer a whole number:
+    // road tourism is ROAD_VISITORS berths times a coverage, so a city with two
+    // museums is landing a fraction of one and flooring it to zero would say it
+    // had none. The allowance counts the road's two the same way.
+    const allowed = berths + (s.airport ? AIRPORT_VISITORS : 0) + ROAD_VISITORS;
+    n.portBerths.textContent = `${fmt(berthsLanding(s))}/${fmt(allowed)}`;
     n.portWhere.textContent =
       first >= 0 ? `first quay on district ${fmtInt(first + 1)}`
-      : s.airport ? 'by air only'
-      : 'no coast yet';
+      : s.airport ? 'by air and road'
+      : 'by road only';
 
     const heads = visitors(s);
     n.portVisitors.textContent = fmt(heads);
     n.portSpend.textContent =
       berthsLanding(s) <= 0 ? 'nowhere to arrive' : `${fmt(cruiseIncome(s))}/s in tourism`;
+
+    // Where they came from, and — the row that matters — what they are worth.
+    // The spend line above is honest and asymptotically nothing: tourism sits
+    // outside the income bracket, so one berth is 3.4% of a one-district
+    // ledger and 0.0003% of a finished one. What a berth is actually worth now
+    // is the shopping, which reaches income through SHOP_BONUS like everyone
+    // else's. See VISITOR_TRIPS.
+    const from = visitorSources(s);
+    const parts: string[] = [];
+    if (from.quay > 0) parts.push(`${fmt(from.quay)} sea`);
+    if (from.air > 0) parts.push(`${fmt(from.air)} air`);
+    if (from.road > 0) parts.push(`${fmt(from.road)} road`);
+    n.portSources.textContent = parts.length > 0 ? parts.join(' · ') : '—';
+    const share = visitorShare(s);
+    n.portShopping.textContent =
+      heads <= 0
+        ? 'no visitors yet'
+        : `${pct(share)} of the city's shopping`;
 
     n.portExports.textContent = fmt(exportMarket(s));
     const lift = CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0);
@@ -1199,7 +1825,19 @@ export class Hud {
       row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
       row.cost.textContent = fmt(serviceCost(s, service));
       row.button.disabled = !canBuildService(s, service);
-      row.button.title = serviceBlocker(s, service) ?? service.buildLabel;
+      // The two education types carry a second reason to buy them now: what the
+      // schooling is worth to the city's industry. On the tooltip rather than
+      // the face of the button, which is a price and a count and has no room —
+      // and quoted at the coverage the city *would* have, because "+30% at full
+      // coverage" is a promise and "+11% right now" is a fact.
+      const why = serviceBlocker(s, service);
+      row.button.title =
+        why ??
+        (service.key === 'school' || service.key === 'university'
+          ? `${service.buildLabel} — schooling is worth +${Math.round(
+              SKILL_YIELD * educationCoverage(s) * 100,
+            )}% industrial yield now, +${Math.round(SKILL_YIELD * 100)}% at full coverage`
+          : service.buildLabel);
     }
 
     // There is no single zoning any more, so the readout names the tallest
@@ -1379,6 +2017,7 @@ export class Hud {
     if (report.seconds < 60 || (report.earned < 1 && !notable)) return;
     const n = this.nodes;
     n.welcomeAway.textContent = fmtDuration(report.seconds);
+    this.paintTimeline(report);
 
     const rows: Array<[string, string]> = [['Collected', fmt(report.earned)]];
     if (report.homes > 0) rows.push(['Homes built', fmtInt(report.homes)]);
@@ -1425,5 +2064,55 @@ export class Hud {
 
     n.welcome.hidden = false;
     n.welcomeClose.focus();
+  }
+
+  /**
+   * The timeline, above the totals.
+   *
+   * Offsets rather than an absolute clock: an event carries `elapsed`, which
+   * for a city that has been running for three days is a six-figure number
+   * meaning nothing to anybody. Against `report.startedAt` it becomes "+2h14m",
+   * which reads directly against the sheet's own "6h 12m" headline.
+   *
+   * Capped, and the cap is on the *rendering* rather than on the log: the log
+   * is already bounded at AWAY_EVENT_BUFFER, and this is the shorter number a
+   * modal sheet can show without scrolling past the button. What is kept is the
+   * newest end, because the last thing that happened is the state the player is
+   * looking at.
+   *
+   * Wording comes from `tickLine`, so the sheet and the ticker say the same
+   * thing about the same event — two vocabularies for one set of facts would be
+   * two things to learn.
+   */
+  private paintTimeline(report: AwayReport): void {
+    const n = this.nodes;
+    const all = report.timeline;
+    const shown = all.slice(-AWAY_TIMELINE_LINES);
+    n.welcomeTimeline.replaceChildren(
+      ...shown.map((event) => {
+        const line = this.tickLine(event);
+        const row = document.createElement('li');
+        row.className = line.tone;
+        const at = document.createElement('span');
+        at.className = 'at';
+        // Floored at zero: the first step of a catch-up lands a hair past the
+        // origin, and "-0s" would be a stray minus sign on the first line.
+        at.textContent = `+${fmtDuration(Math.max(0, event.at - report.startedAt))}`;
+        const what = document.createElement('span');
+        what.className = 'what';
+        what.textContent = line.text;
+        row.append(at, what);
+        return row;
+      }),
+    );
+    // Both halves of what is not on screen: the lines this list did not render,
+    // and the ones the log itself ran out of room for. They are the same fact
+    // to a player — things happened that are not shown — and splitting them
+    // into two sentences would be an implementation detail on a modal sheet.
+    const more = all.length - shown.length + report.dropped;
+    n.welcomeMore.textContent = more > 0 ? `and ${fmtInt(more)} more, earlier` : '';
+    // Open when there is no timeline to explain them, closed when there is: a
+    // sheet that led with a fold nobody opened would have buried the report.
+    n.welcomeTotals.open = all.length === 0;
   }
 }

@@ -71,6 +71,24 @@ export const ROAD_GAP_MAX = 7;
 export const TARGET_PLOTS = 144;
 
 /**
+ * Road cells a district carves out, and the reason congestion is a scalar.
+ *
+ * Derived, not chosen, and not choosable: the rejection sampler in `citygen`
+ * accepts only a plan with exactly TARGET_PLOTS buildable plots, and a plan on a
+ * DISTRICT_SPAN grid has `span^2` cells — so every district in every city has
+ * exactly this many road cells, and exactly three full row lines and three full
+ * column lines. Measured over all 49 districts of the default seed: 81 road
+ * cells each, 3 and 3 each, 18 distinct line *placements* between them.
+ *
+ * Placement varies; supply does not. That is what makes traffic a city-wide
+ * number rather than a map — see `congestion`, which multiplies this by the
+ * district count and stops there. Getting spatial congestion would mean
+ * changing the generator, which re-opens every per-district constant from
+ * SHOP_BASE to EXPORT_PER_DISTRICT.
+ */
+export const ROAD_CELLS_PER_DISTRICT = DISTRICT_SPAN * DISTRICT_SPAN - TARGET_PLOTS;
+
+/**
  * What one district must offer once every reservation has taken its share.
  *
  * Every building fronts a street, so only the road-adjacent plots of a
@@ -718,6 +736,43 @@ export const INDUSTRY_GROWTH = 1.14;
  * nothing at all and was not civic would simply never be worth a plot.
  */
 export const INDUSTRY_BONUS = 0.11;
+
+/**
+ * What a fully educated workforce adds to the city's industrial yield.
+ *
+ * Education's second job, and the whole difficulty is *where* it can go. It
+ * cannot go on the goods side: INDUSTRY_OUTPUT feeds `demandTargets.i`
+ * negatively — it is supply against the export tap — so a skill bonus that
+ * raised output would make an educated city stop wanting industry, and the next
+ * works would cost a surcharge for having built schools. Worse, DEMAND_TERMS
+ * already carries a +0.20 education term on industrial demand, so the two would
+ * be pulling in opposite directions through the same coverage.
+ *
+ * So it goes on the income side, and specifically on the industrial term inside
+ * `bonuses` at the `income` call site. See `workforceSkill` for why that call
+ * site rather than inside `bonuses` itself.
+ *
+ * Sized against the measurement rather than picked — see
+ * tools/education.calibrate.mjs. The industrial term is the *second* multiplier
+ * in the rent bracket everywhere on the map: at 12 districts of towers it
+ * carries 38.8% of the bracket against commerce's 61.1%, and the ordering holds
+ * at every size and every level. At 0.30 a fully taught city earns 11.6% more,
+ * and the industrial term climbs from 0.64 of the shop term to 0.83 of it — so
+ * it closes the gap without passing it, which is the bound the design asks for:
+ * commerce is the city's main multiplier and education must not quietly become
+ * a better one. 0.58 is where the two would meet; 0.80 overtakes outright, and
+ * the calibrator marks it.
+ *
+ * The lift is almost perfectly flat across the map — 11.1% at one district,
+ * 11.6% at forty-nine, and within half a point at every rung of the ladder —
+ * because it multiplies a term that is itself a stable share of the bracket.
+ * That is the right shape for a bonus that is bought once and kept.
+ *
+ * Worth building schools for, then, without being the reason to. Two schools
+ * and a university already pay for themselves through LEVEL_EDUCATION; this is
+ * what makes the third one worth staffing.
+ */
+export const SKILL_YIELD = 0.3;
 
 export const ANNEX_BASE = 60_000;
 export const ANNEX_GROWTH = 3.4;
@@ -2215,6 +2270,153 @@ export const TRANSIT_LABOUR_DRAW = 0.30;
 export const FREE_TRANSPORT_REACH = 0.33;
 export const FREE_TRANSPORT_MOOD = 0.05;
 
+// ------------------------------------------------------------------- traffic
+
+/**
+ * Trips one resident puts on the road in a second.
+ *
+ * Derived from the two shares the rest of the model is already built on rather
+ * than typed as a third: WORKING_SHARE is the share of residents who go to
+ * work and SPEND_PER_RESIDENT is the shopping trips they generate, so their sum
+ * is a resident's day. Typing a number here would be a third statement about
+ * what a resident does, free to drift from the two that decide the labour
+ * market and the high street.
+ *
+ * Driven by *residents* rather than by `min(workers, jobs)`, and the
+ * measurement is why. Jobs are flat per plot while residents are not, so a
+ * mature city is enormously worker-rich — 714,067 workers against 27,924 jobs
+ * at 49 districts of megastructures — and commuting per capita collapses as the
+ * city grows. Against matched pairs a finished city reads as having almost no
+ * traffic at all, which is the opposite of true: a resident with nowhere to
+ * commute to still shops, still runs errands, and is still on the road.
+ */
+export const TRIPS_PER_RESIDENT = WORKING_SHARE + SPEND_PER_RESIDENT;
+
+/**
+ * How hard density is discounted when trips are measured against road supply.
+ *
+ * The one constant in this file that exists purely to stop a signal pinning, and
+ * the same job `cityScale` does for demand. Trips against a fixed road supply
+ * span a 150x range over the level ladder — 1.14 trips per road cell at level 0
+ * against 170.28 at level 4, on a fully built city — which is exactly the
+ * failure DEMAND_SCALE's comment describes.
+ *
+ * Measured, trips per road cell divided by `cityScale ** p` on a fully built
+ * city at each level — see tools/traffic.calibrate.mjs, which prints this:
+ *
+ *     p       L0     L1     L2     L3     L4    L4/L0
+ *   0.50    1.14   2.29   4.79   9.92  19.83    17.3x
+ *   0.60    1.14   1.99   3.60   6.44  11.21     9.8x
+ *   0.75    1.14   1.62   2.34   3.37   4.76     4.2x
+ *   0.85    1.14   1.41   1.76   2.19   2.69     2.4x
+ *   1.00    1.14   1.14   1.14   1.14   1.14     1.0x
+ *
+ * The bottom row is worth understanding before choosing anything above it: at
+ * p = 1 the ladder is *exactly* flat, and not approximately. Population is
+ * `housing plots x cityScale x LEVEL_HOUSING[0]` by construction, so trips
+ * driven by residents are exactly proportional to `cityScale` and dividing by
+ * it removes density completely. That makes p a clean design dial — how much
+ * of a city's density it is charged for — running from "all of it" at 0 to
+ * "none of it" at 1, with no perverse region anywhere in between.
+ *
+ * ---
+ *
+ * **This corrects the table the brief for this feature carried**, which read
+ * 1.15 / 1.62 / 1.94 / 1.88 / 2.37 at p = 0.75 and concluded that full
+ * normalisation *inverts* the sign — that towers would reduce congestion. That
+ * table was computed with trips as `min(workers, jobs) + shopping`, which is
+ * the matched-pairs definition the same brief then says not to use: the two
+ * agree at level 0, where jobs are plentiful, and diverge as the city grows
+ * worker-rich. Under residents-driven trips there is no inverting region to
+ * avoid, and p = 0.75 charges a tower for rather more of its density than the
+ * brief's "roughly double" expected — 4.2x end to end rather than 2.1x.
+ *
+ * 0.75 is kept because it is what was chosen and because it is defensible on
+ * its own terms: a tower puts three hundred people on one plot fronting the same
+ * street, and charging that four times over is closer to true than twice. What
+ * it costs is the top of the ladder, which sits near the clamp — see
+ * CONGESTION_SCALE. 0.85 is the value that reproduces the brief's stated intent
+ * (2.4x, and a top-of-ladder city reading 0.77 rather than 0.99) and is a
+ * one-character change if the pacing wants it.
+ */
+export const CONGESTION_DENSITY_EXPONENT = 0.75;
+
+/**
+ * What counts as a jammed city, in density-adjusted trips per road cell.
+ *
+ * The divisor that turns the table above into a number in [0, 1]. Set so a
+ * mid-ladder, transit-free city reads about half and the top of the ladder
+ * stops just short of the clamp. Measured, transit-free, at every district
+ * count (the reading does not vary with size — road supply and residents grow
+ * together):
+ *
+ *     L0     L1     L2     L3     L4
+ *   0.24   0.34   0.49   0.70   0.99
+ *
+ * So a city that has never opened a depot goes from "a bit slow" to jammed as
+ * it climbs, which is the pressure the feature exists to apply, and a fully
+ * covered one reads 0.50 at the top of the ladder against 0.30 with the fares
+ * waived. Nothing clamps, but the top of the ladder is close enough to 1 that a
+ * larger CONGESTION_DENSITY_EXPONENT would have to come with a larger divisor
+ * here — see the exponent's note.
+ */
+export const CONGESTION_SCALE = 4.8;
+
+/**
+ * Share of a city's trips a fully covered transit network takes off the road.
+ *
+ * The lever, and the point of the whole feature. TRANSIT carries `weight: 0` in
+ * SERVICES — the four happiness weights sum to exactly 1 and a fifth would
+ * re-open a calibration that has held for three cycles — so a depot has never
+ * had a mood story. Congestion gives it one without touching those weights,
+ * because it lands in the modifier bracket beside the tax step and LANDMARK_MOOD.
+ *
+ * Set from the ceiling rather than picked. `test/services.test.ts` asserts that
+ * a city which has bought everything the land allows reaches at least 0.95
+ * happiness at every size, and that promise predates this feature: neglect is
+ * supposed to read as a ceiling on what a city can become, not as a tax on
+ * playing well. At 0.5 a maxed 49-district city at the top of the ladder still
+ * sat at 0.30 congestion with every depot open, which is -0.042 of mood and
+ * 0.93 — so the ceiling would have moved, and a constant that quietly lowers
+ * the best a city can ever feel is a constant that has re-opened someone else's
+ * calibration.
+ *
+ * 0.70 is what keeps it: fully covered reads 0.30 jammed at the very top of the
+ * ladder, which is -0.042 and lands at 0.958. Everything below the top is
+ * better than that. Measured, transit-free against fully covered against fares
+ * waived, on a 12-district city — see tools/traffic.calibrate.mjs.
+ */
+export const TRANSIT_ROAD_SHARE = 0.7;
+
+/**
+ * How much more of the city rides when the fares are waived.
+ *
+ * The second half of what free transport buys, and distinct from
+ * FREE_TRANSPORT_REACH: that one makes the same depots *reach* a third further,
+ * which is a statement about coverage, and this is a statement about the people
+ * already covered choosing the bus over the car.
+ *
+ * A fully covered city with the fares waived takes 0.70 x 1.35 = 94.5% of its
+ * trips off the road, so it reads about 5% jammed at the very top of the ladder
+ * and nothing at all below it. That is the brief's "a fully covered city loses
+ * nothing", and it is deliberately 94.5% rather than a round 100: a city with
+ * no cars on it at all would be a claim, and the last twentieth is the freight
+ * and the people who will drive whatever is running.
+ */
+export const FREE_TRANSPORT_RIDERSHIP = 0.35;
+
+/**
+ * Happiness lost to a completely jammed city.
+ *
+ * Sized against the punitive tax rate's -0.14, which is the largest modifier
+ * already in the bracket: sitting in traffic all day should cost a city about
+ * what taxing it to the hilt does, and a fully covered network should give
+ * essentially all of it back. A modifier rather than a fifth weight, for the
+ * reason LANDMARK_MOOD and FREE_TRANSPORT_MOOD are both modifiers — the four
+ * weights sum to 1 and go on doing so.
+ */
+export const CONGESTION_MOOD = 0.14;
+
 // ---------------------------------------------------------------------- port
 
 /**
@@ -2293,6 +2495,73 @@ export const VISITORS_PER_RESIDENT = 0.03;
  * not a building. What makes it worth buying is not the size of the line.
  */
 export const VISITOR_SPEND = 0.7;
+
+/**
+ * What a fully landmarked city is worth in arrivals, in cruise berths.
+ *
+ * Road tourism, and it is stated in berths for exactly the reason
+ * AIRPORT_VISITORS is: `visitors` is one expression — residents x
+ * VISITORS_PER_RESIDENT x happiness, per berth — and a second path beside it
+ * would be a second place for the happiness scaling to be got wrong. A coach is
+ * a berth that arrives by road.
+ *
+ * Driven by landmarks rather than by a terminal, which is what makes it worth
+ * having at all: a quay needs a coastal district and a runway needs the
+ * highway's fourteen, so a landlocked young city has no tourism whatsoever. A
+ * museum is buildable from district one. `landmarkCoverage` reads 0.19 at one
+ * museum plus one stadium over four districts and 0.92 at four of each, so this
+ * ramps in over the same purchases that were already lifting the mood.
+ *
+ * Two berths at full coverage, against the six a full waterfront holds and the
+ * three an airport is worth. A city that has covered itself in landmarks has
+ * about a third of a coast, which is the right order for something bought for
+ * another reason entirely.
+ */
+export const ROAD_VISITORS = 2;
+
+/**
+ * Shopping trips one visitor generates, against SPEND_PER_RESIDENT's 0.5.
+ *
+ * The whole of what makes tourism scale, and the reason it needed to. Tourism
+ * sits outside the income bracket — rent is multiplied by `bonuses` over shops
+ * and industry and a visitor's spend is not — so measured against a ledger that
+ * compounds, one cruise berth is 3.4% of income at one district and 0.0003% at
+ * forty-nine. A new arrivals path on the same line would be invisible within an
+ * hour of play.
+ *
+ * So visitors are routed into *commerce* instead: they are people in the city
+ * doing what people in the city do, and what they do most is shop. That reaches
+ * income the way everything else does — through commercial demand, the shops it
+ * justifies, and SHOP_BONUS — rather than through a line of its own, and it
+ * feeds the R -> C -> I cycle rather than sitting beside it.
+ *
+ * **Two fifths of a resident's, and the flavour argues for more.** A visitor is
+ * in the city *to* spend where a resident also works and sleeps, so three times
+ * a resident was the first number tried. It does not survive the measurement,
+ * and the reason is worth stating: `visitors` is not a small number. A full
+ * waterfront is six berths, the airport is three more and full landmarks are
+ * two, and at VISITORS_PER_RESIDENT that is 29% of the resident count standing
+ * in the city at any moment. Measured across {1,4,12,25,49} districts x {0..4}
+ * levels, with every berth, the runway and every landmark:
+ *
+ *     trips/visitor   share of the city's shopping   configurations newly pinned
+ *          0.10                      5.5%                        0 of 25
+ *          0.20                     10.4%                        0 of 25
+ *          0.30                     14.8%                        0 of 25
+ *          0.50                     22.4%                        3 of 25
+ *          1.50                     46.5%                        3 of 25
+ *
+ * Commerce is the signal nearest its upper bound — DEMAND_TERMS says so in its
+ * own comment — so a term that pins it is a term that has taken the decision
+ * away rather than added one. 0.20 is the largest value that lifts commercial
+ * demand everywhere and pins it nowhere it was not already pinned, and it still
+ * hands the most touristed city a tenth of its retail.
+ *
+ * The honest reading of the number, then, is spend-weight rather than bodies:
+ * `visitors` is what the tourism model calibrated as a berth's worth of trade,
+ * and this is how much of that trade lands on the high street.
+ */
+export const VISITOR_TRIPS = 0.2;
 
 /**
  * What one cargo terminal adds to the export tap, as a fraction of it.
