@@ -402,6 +402,53 @@ button.tab[aria-selected='true'] {
 }
 .svc.covered .covers { color: var(--signal); }
 
+/* The awards list.
+
+   Built on .svc's metrics rather than beside them, for the reason the demand
+   breakdown is: two blocks of readout rows under different tabs that looked
+   like two designs would be two things to learn. What is new here is the locked
+   state — a row nobody has earned is still worth reading, because the note on
+   it is the instruction, so it dims rather than disappearing. */
+.awards { display: block; }
+.award-group {
+  margin: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.award-group:not(:first-child) { margin-top: 14px; }
+.award {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+.award .k {
+  flex: 1 1 auto;
+  color: var(--concrete);
+}
+.award .at {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--signal);
+}
+.award .note {
+  /* The note carries the whole width of the row on its own line, so it is a
+     block rather than a third column: "Ten homes standing at once" does not fit
+     beside a name in a 300px dock and truncating an instruction is worse than
+     wrapping it. */
+  margin: 0;
+  flex: 1 1 100%;
+}
+.award.locked .k { color: var(--dim); }
+.award.locked { opacity: 0.72; }
+/* An unlocked row has earned its note out of the way: the time it fired at is
+   the fact, and the instruction is spent. */
+.award:not(.locked) .note { display: none; }
+
 /* The demand breakdown: which term is pushing which signal, and by how much.
    A bar shows that a signal moved; this says what moved it, which is the only
    reason the service terms are worth having. Reuses .svc's row metrics so the

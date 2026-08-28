@@ -1,4 +1,10 @@
 import { EventLog, type GameEvent } from '../core/events';
+import {
+  ACHIEVEMENT_COUNT,
+  ACHIEVEMENT_GROUPS,
+  achievementReadings,
+  unlockedCount,
+} from '../sim/achievements';
 import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
   ANNEX_MIN_OCCUPANCY,
@@ -151,7 +157,16 @@ const ZONE_LABEL: Record<ZoneKind, string> = {
 };
 
 /** The tabs the docked control is split into, in the order they are shown. */
-const TAB_KEYS = ['build', 'treasury', 'demand', 'taxes', 'landmarks', 'trade', 'estates'] as const;
+const TAB_KEYS = [
+  'build',
+  'treasury',
+  'demand',
+  'taxes',
+  'landmarks',
+  'trade',
+  'estates',
+  'awards',
+] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /**
@@ -262,6 +277,7 @@ export class Hud {
     demandCNum: el('demand-c-num'),
     demandINum: el('demand-i-num'),
     services: el('services'),
+    awardsList: el('awards-list'),
     education: el('education'),
     educationReach: el('education-reach'),
     educationNext: el('education-next'),
@@ -456,6 +472,19 @@ export class Hud {
   private tickerShown = '';
   /** What the demand breakdown was last built for. See `paintLift`. */
   private liftShown = '';
+  /**
+   * One row per achievement, built once and then only written to.
+   *
+   * The table is static, so the *markup* is static: what a paint changes is a
+   * class and one time string. Rebuilding twenty-odd rows from scratch on every
+   * paint would be the same DOM churn the card and the ticker are both arranged
+   * to avoid.
+   */
+  private readonly awardRows = new Map<string, { row: HTMLElement; at: HTMLElement }>();
+  /** What the awards list last rendered, so an unchanged panel is left alone. */
+  private awardsShown = '';
+  /** What the awards tab label last said. Painted on every tick — see `paint`. */
+  private awardsTabShown = '';
 
   constructor(
     private readonly game: Game,
@@ -540,6 +569,8 @@ export class Hud {
       this.taxButtons.push(button);
       n.taxSteps.append(button);
     }
+
+    this.buildAwards();
 
     n.occupancyMark.style.left = `${ANNEX_MIN_OCCUPANCY * 100}%`;
 
@@ -662,7 +693,13 @@ export class Hud {
     else if (this.open === 'taxes') this.paintTaxes(s);
     else if (this.open === 'landmarks') this.paintLandmarks(s);
     else if (this.open === 'trade') this.paintTrade(s);
-    else this.paintEstates(s);
+    else if (this.open === 'estates') this.paintEstates(s);
+    else this.paintAwards(s);
+
+    // The one label painted whatever tab is open, because the count is the
+    // reason to open the tab at all. Cheap: one integer compare and, on the
+    // handful of ticks it changes, one string write.
+    this.paintAwardsTab(s);
 
     this.paintCard(s);
   }
@@ -742,7 +779,83 @@ export class Hud {
           tone: 'warn',
         };
       }
+      case 'unlocked':
+        // The name and nothing else. An achievement grants nothing, so there is
+        // no consequence to report — the line is the whole of it.
+        return { text: `Unlocked — ${event.name}`, tone: 'good' };
     }
+  }
+
+  /**
+   * Builds the awards list once, grouped.
+   *
+   * Sectioned rather than flat because the groups are the only structure a list
+   * of two dozen one-line facts has: "Land" and "Adversity" say what a row is
+   * about before it is read, and a player looking for what to do next reads the
+   * headings rather than every note.
+   */
+  private buildAwards(): void {
+    const list = this.nodes.awardsList;
+    const readings = achievementReadings(this.game.state);
+    for (const group of ACHIEVEMENT_GROUPS) {
+      const rows = readings.filter((reading) => reading.achievement.group === group.key);
+      if (rows.length === 0) continue;
+      const heading = document.createElement('p');
+      heading.className = 'award-group';
+      heading.textContent = group.name;
+      list.append(heading);
+      for (const { achievement } of rows) {
+        const row = document.createElement('div');
+        row.className = 'award locked';
+        const name = document.createElement('span');
+        name.className = 'k';
+        name.textContent = achievement.name;
+        const at = document.createElement('span');
+        at.className = 'at';
+        const note = document.createElement('p');
+        note.className = 'note';
+        note.textContent = achievement.note;
+        row.append(name, at, note);
+        list.append(row);
+        this.awardRows.set(achievement.key, { row, at });
+      }
+    }
+  }
+
+  /**
+   * The awards panel: what is unlocked, and when it fired.
+   *
+   * The time is `fmtDuration` against the `elapsed` the row was stamped with —
+   * how long the city had been running when it happened, which is the only
+   * clock the simulation has and the only one that means anything across a
+   * twelve-hour absence. A locked row keeps its note, because the note is the
+   * instruction and a greyed instruction is still an instruction.
+   */
+  private paintAwards(s: Readonly<GameState>): void {
+    const readings = achievementReadings(s);
+    // One string compare against a list of two dozen rows, for the reason the
+    // card does it: the panel is static between unlocks and rewriting it ten
+    // times a second is DOM traffic carrying no new information.
+    const shown = readings.map((reading) => `${reading.achievement.key}:${reading.at ?? ''}`).join('|');
+    if (shown === this.awardsShown) return;
+    this.awardsShown = shown;
+
+    for (const { achievement, at } of readings) {
+      const row = this.awardRows.get(achievement.key);
+      if (!row) continue;
+      const locked = at === null;
+      row.row.classList.toggle('locked', locked);
+      row.at.textContent = locked ? '' : fmtDuration(at);
+    }
+  }
+
+  /** The count on the tab itself, which is the reason to open it. */
+  private paintAwardsTab(s: Readonly<GameState>): void {
+    const label = `Awards ${unlockedCount(s)}/${ACHIEVEMENT_COUNT}`;
+    if (label === this.awardsTabShown) return;
+    this.awardsTabShown = label;
+    const tab = this.tabs.find((entry) => entry.key === 'awards');
+    if (tab) tab.button.textContent = label;
   }
 
   /**

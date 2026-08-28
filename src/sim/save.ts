@@ -1,3 +1,4 @@
+import { ACHIEVEMENTS } from './achievements';
 import {
   LEVELS,
   MAX_ACTIVE_FIRES,
@@ -38,7 +39,7 @@ import {
   openZoning,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v10';
+export const SAVE_KEY = 'idle-city/save/v11';
 
 /**
  * Keys this game has written in the past, newest first.
@@ -48,6 +49,7 @@ export const SAVE_KEY = 'idle-city/save/v10';
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v10',
   'idle-city/save/v9',
   'idle-city/save/v8',
   'idle-city/save/v7',
@@ -430,6 +432,8 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // one setting that would silently change what a reopened city earns.
     freeTransport: r['freeTransport'] === true,
     autoDevelop: r['autoDevelop'] === true,
+    // Filled in below, once the table is there to check the keys against.
+    unlocked: {},
     savedAt: num(r['savedAt'], now),
   };
 
@@ -554,6 +558,30 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // seconds of free housing every time they reloaded. Computed after the fires
   // land, so a city that was on fire when it was saved reopens unhappy.
   state.happiness = share(r['happiness'], happinessTarget(state));
+
+  /**
+   * The achievement record, filtered through the table rather than trusted.
+   *
+   * A v10 save has none, and an empty record is exactly right for it: every test
+   * is a pure read over the state, so the first tick re-tests the whole table
+   * and a large loaded city unlocks everything it has already earned at once.
+   * That is the property that makes this migration free — there is no history to
+   * reconstruct, because the state *is* the history.
+   *
+   * Only keys the table still has survive, which is what keeps the record
+   * bounded by the table and not by whatever a doctored save put in it. Times
+   * are clamped into the past for the reason a fire's `startedAt` is: an entry
+   * stamped in the future would read as "unlocked in 3 hours" forever.
+   */
+  const record = r['unlocked'];
+  if (typeof record === 'object' && record !== null && !Array.isArray(record)) {
+    const held = record as Record<string, unknown>;
+    for (const achievement of ACHIEVEMENTS) {
+      const at = held[achievement.key];
+      if (typeof at !== 'number' || !Number.isFinite(at)) continue;
+      state.unlocked[achievement.key] = Math.min(state.elapsed, Math.max(0, at));
+    }
+  }
   return state;
 }
 

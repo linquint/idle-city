@@ -67,6 +67,8 @@
       aria-controls="panel-trade" aria-selected="false" tabindex="-1">Trade</button>
     <button class="tab" type="button" role="tab" id="tab-estates"
       aria-controls="panel-estates" aria-selected="false" tabindex="-1">Estates</button>
+    <button class="tab" type="button" role="tab" id="tab-awards"
+      aria-controls="panel-awards" aria-selected="false" tabindex="-1">Awards</button>
   </div>
 
   <div class="panels">
@@ -347,6 +349,12 @@
         <span class="built" id="estate-ledger">+0%</span>
         <span class="covers" id="estate-supply">no goods yet</span></div>
     </div>
+  </div>
+
+  <div class="panel" id="panel-awards" role="tabpanel" aria-labelledby="tab-awards" tabindex="0" hidden>
+    <p class="note" id="awards-lede">A record of what the city has done. Nothing here changes the
+      numbers.</p>
+    <div class="awards" id="awards-list"></div>
   </div>
 
   </div>

@@ -124,6 +124,24 @@ export type GameEvent =
       readonly service: string;
       readonly coverage: number;
       readonly count: number;
+    }
+  /**
+   * An achievement fired.
+   *
+   * The one kind that names something the *player* did rather than something
+   * the city did to itself, and the only one whose subject is a stable string
+   * the save also holds. `key` is an `Achievement.key`; the HUD looks the name
+   * up, exactly as it does for a `coverage` event's service.
+   *
+   * Never coalesced — see `sameSubject`. Two achievements are two achievements,
+   * and "3 achievements unlocked" is the one line a player most wants three of.
+   */
+  | {
+      readonly kind: 'unlocked';
+      readonly at: number;
+      readonly key: string;
+      readonly name: string;
+      readonly count: number;
     };
 
 export type GameEventKind = GameEvent['kind'];
@@ -208,6 +226,10 @@ function sameSubject(a: GameEvent, b: GameEvent): boolean {
     case 'annexed':
       // Never. Each district is its own milestone, and "2 districts annexed"
       // would be the one line a player most wants two of.
+      return false;
+    case 'unlocked':
+      // Never, and for the same reason annexation is never merged: each row is
+      // its own milestone and its name is the whole of the line.
       return false;
   }
 }

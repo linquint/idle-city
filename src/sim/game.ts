@@ -1,4 +1,5 @@
 import { EventLog, EVENT_COVERAGE_LOST, type GameEvent } from '../core/events.ts';
+import { ACHIEVEMENTS, ACHIEVEMENT_TEST_SECONDS } from './achievements.ts';
 import { districtLand } from './layout.ts';
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
@@ -379,6 +380,15 @@ export class Game {
   private readonly covering = new Set<string>();
   /** Whether the grid was covering the load last tick. Same reasoning again. */
   private lit = true;
+  /**
+   * Simulated seconds banked toward the next pass over the achievement table.
+   *
+   * On the instance rather than in the save — see ACHIEVEMENT_TEST_SECONDS for
+   * why this one does not have to be step-size invariant when `surveyClock`
+   * does. A reload starts it at zero, which only means the first pass happens
+   * sooner, and the record it writes is a pure function of the state either way.
+   */
+  private achievementClock = 0;
 
   constructor(state: GameState = createState()) {
     this.inner = state;
@@ -390,6 +400,11 @@ export class Game {
     this.inner.homeLevels = [...state.homeLevels];
     this.inner.shopLevels = [...state.shopLevels];
     this.inner.industryLevels = [...state.industryLevels];
+    // The achievement record is the fourth field that is not a number, and it
+    // is copied for exactly the reason the three cohorts are: two games built
+    // from one patch object would otherwise share it and unlock each other's
+    // rows.
+    this.inner.unlocked = { ...state.unlocked };
   }
 
   get state(): Readonly<GameState> {
@@ -464,6 +479,47 @@ export class Game {
     // Last, and after auto-development, so what the ticker reports is the tick's
     // settled state rather than a state the same tick went on to change.
     this.watchTransitions();
+    // And last of all, the record. Same reasoning as the ticker's, one step
+    // further: an achievement about the tick's settled state must be tested
+    // after everything that could settle it, including the purchase
+    // auto-development just made.
+    this.checkAchievements(dt);
+  }
+
+  /**
+   * Records any achievement the city has newly earned.
+   *
+   * Only the rows still locked are walked, so the pass shrinks as the table
+   * fills and costs nothing at all for a city that has earned everything.
+   * Banked rather than run per tick — see ACHIEVEMENT_TEST_SECONDS.
+   *
+   * The record is written whether or not anyone is watching; only the *event*
+   * is silenced during a catch-up, exactly as every other category is. So a
+   * twelve-hour absence comes back with the rows it earned already ticked and
+   * the ticker reporting the state it came back to rather than the history it
+   * missed — see `recording`.
+   */
+  private checkAchievements(dt: number): void {
+    const s = this.inner;
+    this.achievementClock += Math.max(0, dt);
+    if (this.achievementClock < ACHIEVEMENT_TEST_SECONDS) return;
+    // Reset rather than decremented. This is a refresh rhythm, not an
+    // accumulator spending whole passes: a 60-second catch-up step earns one
+    // pass, because sixty passes over an unchanged state would find the same
+    // answer sixty times.
+    this.achievementClock = 0;
+    for (const achievement of ACHIEVEMENTS) {
+      if (s.unlocked[achievement.key] !== undefined) continue;
+      if (!achievement.test(s)) continue;
+      s.unlocked[achievement.key] = s.elapsed;
+      this.emit({
+        kind: 'unlocked',
+        at: s.elapsed,
+        key: achievement.key,
+        name: achievement.name,
+        count: 1,
+      });
+    }
   }
 
   /**
@@ -1467,6 +1523,7 @@ export class Game {
     this.blocked = null;
     this.covering.clear();
     this.lit = true;
+    this.achievementClock = 0;
   }
 
   /**

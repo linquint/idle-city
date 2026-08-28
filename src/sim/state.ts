@@ -80,7 +80,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 10;
+export const SAVE_VERSION = 11;
 
 /**
  * The entire game, in a handful of fields.
@@ -382,6 +382,20 @@ export interface GameState {
   freeTransport: boolean;
   /** When on, surplus cash is spent on the cheapest available plot, awake or away. */
   autoDevelop: boolean;
+  /**
+   * Achievements the city has earned, keyed by `Achievement.key`, valued at the
+   * `elapsed` each one fired at.
+   *
+   * The exception to "the save is counts" that is bounded by something other
+   * than the city: it grows with the *table* in `achievements.ts` and stops
+   * there, so a 49-district city and a one-district city carry the same handful
+   * of entries at most. That is the same line `surveyedR` stays on the right
+   * side of — grow with districts or with a static table, never with buildings.
+   *
+   * Nothing in the simulation reads it back. Delete it and the city is
+   * identical; what would be lost is the record, which is the whole feature.
+   */
+  unlocked: Record<string, number>;
   /** Epoch ms of the last save, used to compute time away. */
   savedAt: number;
 }
@@ -460,6 +474,8 @@ export function createState(now = Date.now()): GameState {
     taxRate: TAX_NEUTRAL,
     freeTransport: false,
     autoDevelop: false,
+    // Nothing earned yet, which is the one thing a fresh city is certain of.
+    unlocked: {},
     savedAt: now,
   };
 }
