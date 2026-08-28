@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { mixSeed, rng } from '../core/rng';
 import { CELL, DISTRICT_SPAN, SEED } from '../sim/config';
-import { residents } from '../sim/economy';
+import { ZONE } from '../sim/citygen';
+import { congestion, residents } from '../sim/economy';
 import {
   DISTRICT_WIDTH,
+  districtLayoutAt,
   worldX,
   worldZ,
   type CityLayout,
@@ -69,6 +71,49 @@ const SPEED_MIN = 5.5;
 const SPEED_MAX = 9;
 
 /**
+ * What a jammed street does to a car.
+ *
+ * The free-flowing speed is SPEED_MAX and the crawl is a third of SPEED_MIN, so
+ * a fully congested city runs at about a fifth of an empty one — far enough
+ * apart to read from the play camera without the fleet looking parked. The
+ * simulation's `congestion` is the only input, which is what makes this a
+ * readout: the number is decided in `sim/` and drawn here.
+ */
+const CAR_CRAWL = SPEED_MIN / 3;
+
+/**
+ * Per-vehicle speed spread, re-rolled on every leg.
+ *
+ * Re-rolled rather than fixed at route time, which is what turns a slow street
+ * into a stop-start one: a car that turns four times over a route drives each
+ * leg at a slightly different speed, so a queue bunches and thins the way a
+ * queue does instead of gliding along in formation.
+ */
+const SPEED_JITTER = 0.35;
+
+/**
+ * Waiting at the lights, and how likely it is at full congestion.
+ *
+ * The other half of the stop-start read, and nearly free: a junction is already
+ * where a car stops being on one street and starts being on another, so a pause
+ * there costs one comparison and reuses the field a bus stop already uses.
+ * Scaled by congestion, so an empty city never waits at all.
+ */
+const JUNCTION_WAIT_CHANCE = 0.55;
+const JUNCTION_WAIT_SECONDS = 1.1;
+
+/**
+ * Legs in one route, before the vehicle is retired and sent somewhere new.
+ *
+ * Two to four. One would be the old behaviour with extra bookkeeping; more than
+ * four and a car spends long enough on screen that the eye starts following it,
+ * which is when a bias toward housing at one end stops reading as a commute and
+ * starts reading as a car that cannot make up its mind.
+ */
+const ROUTE_LEGS_MIN = 2;
+const ROUTE_LEGS_MAX = 4;
+
+/**
  * How far from what the player is looking at a car is still worth drawing.
  *
  * Distance from the camera focus, not district index: the focus is where the
@@ -109,6 +154,19 @@ const STOP_SECONDS = 1.6;
 
 /** Buses run slower than cars, which is most of what makes them read as buses. */
 const BUS_SPEED = 4.2;
+
+/**
+ * How much of the city's congestion a bus actually suffers, and how far down it
+ * takes one.
+ *
+ * Less than half, and this is the visual argument for the depot: on a jammed
+ * street the buses are the things still moving. It is a claim about bus lanes
+ * and priority at the lights rather than about the road being emptier for them.
+ * A bus is already the slowest thing on the street, so its crawl is shallower
+ * than a car's — three quarters of its free speed rather than a fifth.
+ */
+const BUS_CONGESTION_SHARE = 0.45;
+const BUS_CRAWL = BUS_SPEED * 0.55;
 
 /**
  * Lorries, out of the same pool again.
@@ -157,20 +215,68 @@ interface Car {
   bus: boolean;
   /** True for a lorry: a longer body again, and a route out of town. */
   truck: boolean;
-  /** Seconds left at the current stop. Only ever non-zero for a bus. */
+  /** Seconds left at the current stop, or at a junction in heavy traffic. */
   waiting: number;
   /** How far along the run the next stop is. */
   nextStop: number;
-}
-
-/** The full row and column streets of one district, in global grid coordinates. */
-interface RoadLines {
-  readonly rows: number[];
-  readonly cols: number[];
+  /**
+   * Legs left in the route, this one included. Zero means retire and re-route.
+   *
+   * A count rather than a list of legs, which is the whole of what keeps a
+   * turning route allocation-free: the next leg is arithmetic over the junction
+   * this one ends at, so there is nothing to store ahead of time.
+   */
+  legsLeft: number;
+  /** Which district the route is in, so a turn does not re-sample the map. */
+  district: number;
+  /** Grid coordinate of the street being driven along — a row's z, a column's x. */
+  line: number;
+  /** Grid coordinate of the junction this leg started at, along the driving axis. */
+  at: number;
+  /** Grid coordinate of the junction it ends at. Never equal to `at`. */
+  to: number;
 }
 
 /**
- * Which of a district's streets run the whole way across it.
+ * The junction grid of one district: every street that runs the whole way
+ * across it, and what each of them fronts.
+ *
+ * Grid coordinates rather than world ones, because a junction is the *pair* of
+ * a row and a column and the arithmetic that turns a car onto a crossing street
+ * is arithmetic over those two numbers. World positions are a multiplication
+ * away and are worked out per leg.
+ *
+ * The far boundary is included in both axes. It is the neighbouring district's
+ * line 0 rather than this district's — that is how `citygen` keeps a district
+ * edge a single-width street instead of a double one — but it is a street, and
+ * the old router already drove cars to it by spanning `centre +/- half`.
+ */
+interface RoadLines {
+  /** Grid z of each full row street, plus the district's far edge. */
+  readonly rows: number[];
+  /** Grid x of each full column street, plus the district's far edge. */
+  readonly cols: number[];
+  /**
+   * Zoned plots fronting each street, housing and workplaces counted apart.
+   *
+   * The bias that makes a route read as a commute rather than as wandering: a
+   * car starts on a street with houses on it and finishes on one with shops or
+   * works. Indexed alongside `rows` / `cols`.
+   *
+   * Read off the generator's *zoning* rather than off the built plots, and that
+   * is the load-bearing choice: a route must not depend on which specific
+   * building exists, or a car would be holding a fact the simulation could not
+   * reproduce. Zoning is a pure function of the seed, so this is cached once
+   * per district and never recomputed.
+   */
+  readonly rowHomes: number[];
+  readonly colHomes: number[];
+  readonly rowWork: number[];
+  readonly colWork: number[];
+}
+
+/**
+ * Which of a district's streets run the whole way across it, and what they front.
  *
  * A district's road cells are the union of its full rows and its full columns,
  * so a line is exactly a coordinate that contributes DISTRICT_SPAN cells. Any
@@ -193,11 +299,53 @@ function roadLines(district: District): RoadLines {
   }
   const rows: number[] = [];
   const cols: number[] = [];
+  const local: number[] = [];
+  const localCols: number[] = [];
   for (let i = 0; i < DISTRICT_SPAN; i++) {
-    if (rowCount[i] === DISTRICT_SPAN) rows.push(oz + i);
-    if (colCount[i] === DISTRICT_SPAN) cols.push(ox + i);
+    if (rowCount[i] === DISTRICT_SPAN) {
+      rows.push(oz + i);
+      local.push(i);
+    }
+    if (colCount[i] === DISTRICT_SPAN) {
+      cols.push(ox + i);
+      localCols.push(i);
+    }
   }
-  return { rows, cols };
+  // The neighbour's line 0, which is this district's far kerb. A car is only
+  // ever created, turned or retired at a junction, and the edge is one.
+  rows.push(oz + DISTRICT_SPAN);
+  local.push(DISTRICT_SPAN);
+  cols.push(ox + DISTRICT_SPAN);
+  localCols.push(DISTRICT_SPAN);
+
+  const zone = districtLayoutAt(district.coord.x, district.coord.z).zone;
+  const at = (x: number, z: number): number =>
+    x < 0 || x >= DISTRICT_SPAN || z < 0 || z >= DISTRICT_SPAN ? -1 : (zone[z * DISTRICT_SPAN + x] ?? -1);
+  /** Plots of one kind fronting a street, counted along both of its kerbs. */
+  const fronting = (line: number, alongX: boolean, homes: boolean): number => {
+    let n = 0;
+    for (let i = 0; i < DISTRICT_SPAN; i++) {
+      for (const side of [-1, 1]) {
+        const z = alongX ? line + side : i;
+        const x = alongX ? i : line + side;
+        const kind = at(x, z);
+        if (kind < 0) continue;
+        if (homes ? kind === ZONE.residential : kind === ZONE.commercial || kind === ZONE.industrial) {
+          n++;
+        }
+      }
+    }
+    return n;
+  };
+
+  return {
+    rows,
+    cols,
+    rowHomes: local.map((z) => fronting(z, true, true)),
+    colHomes: localCols.map((x) => fronting(x, false, true)),
+    rowWork: local.map((z) => fronting(z, true, false)),
+    colWork: localCols.map((x) => fronting(x, false, false)),
+  };
 }
 
 /**
@@ -234,6 +382,14 @@ export class Cars {
   /** What the highway looked like last sync. Lorries re-route when it moves. */
   private highwayDistricts = -1;
   private highwayEstates = -1;
+  /**
+   * How jammed the city's streets are, straight off the simulation.
+   *
+   * Read in `sync` and held, rather than read per car: it is a city-wide scalar
+   * — see ROAD_CELLS_PER_DISTRICT for why it has to be — so asking for it once
+   * a sync is asking for it as often as it can change. Nothing is written back.
+   */
+  private jam = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -287,6 +443,11 @@ export class Cars {
         truck: false,
         waiting: 0,
         nextStop: STOP_SPACING,
+        legsLeft: 0,
+        district: 0,
+        line: 0,
+        at: 0,
+        to: 0,
       });
     }
   }
@@ -335,6 +496,10 @@ export class Cars {
       }
       this.districts = state.districts;
     }
+    // The one number the simulation hands the router. A readout, like the fleet
+    // size above it: the streets are slow because `congestion` says so, and the
+    // view has no opinion of its own about traffic.
+    this.jam = congestion(state);
     const freight = Cars.freight(state);
     // The fleet has to make room for the services rather than crowd them out:
     // a city whose population would only justify eight cars still runs whatever
@@ -396,9 +561,12 @@ export class Cars {
     car.alongX = lane.alongX;
     car.dir = dir;
     car.length = lane.length;
-    car.speed = TRUCK_SPEED;
+    car.speed = this.speedFor(car);
     car.waiting = 0;
     car.nextStop = Infinity;
+    // One leg, always. A lorry's run is the highway end to end and there is
+    // nothing to turn onto — see `turn`, which the leg counter keeps it out of.
+    car.legsLeft = 1;
     // The same right-hand lane offsets the streets use, so a lorry meeting a
     // car at the edge of town is on the side of the road it should be.
     if (lane.alongX) {
@@ -415,7 +583,128 @@ export class Cars {
   }
 
   /**
-   * Gives a car a street to drive.
+   * The speed one vehicle runs at, at the city's current congestion.
+   *
+   * Interpolated rather than switched, so a city that is buying its way out of
+   * a jam sees the fleet pick up gradually as the depots open rather than all
+   * at once. Re-rolled per *leg* rather than per route — see SPEED_JITTER.
+   *
+   * Lorries are exempt. They run the highway between the estates and the town,
+   * which is not a city street and is not what `congestion` measures: it is
+   * trips against the road cells inside the districts. A lorry slowed by
+   * downtown traffic would be the view claiming something the simulation does
+   * not say.
+   */
+  private speedFor(car: Car): number {
+    if (car.truck) return TRUCK_SPEED;
+    const jam = Math.max(0, Math.min(1, car.bus ? this.jam * BUS_CONGESTION_SHARE : this.jam));
+    const free = car.bus ? BUS_SPEED : SPEED_MAX;
+    const crawl = car.bus ? BUS_CRAWL : CAR_CRAWL;
+    return (free + (crawl - free) * jam) * (1 - SPEED_JITTER * this.random());
+  }
+
+  /**
+   * Picks one of a street's junctions, weighted toward what it fronts.
+   *
+   * A running-sum draw over at most four entries, which is why it can afford to
+   * be a weighted pick at all: no sorting, no array, one pass. `floor` is the
+   * share every candidate gets whatever it fronts, so a district with no
+   * housing yet still has somewhere for a car to start rather than dividing by
+   * zero — the bias is a lean, not a rule.
+   */
+  private pickWeighted(weights: readonly number[], exclude: number, floor: number): number {
+    let total = 0;
+    for (let i = 0; i < weights.length; i++) {
+      if (i === exclude) continue;
+      total += (weights[i] ?? 0) + floor;
+    }
+    if (total <= 0) {
+      // Every candidate is excluded, which only happens with a single junction.
+      return exclude === 0 ? Math.min(1, weights.length - 1) : 0;
+    }
+    let roll = this.random() * total;
+    for (let i = 0; i < weights.length; i++) {
+      if (i === exclude) continue;
+      roll -= (weights[i] ?? 0) + floor;
+      if (roll <= 0) return i;
+    }
+    return exclude === 0 ? Math.min(1, weights.length - 1) : 0;
+  }
+
+  /** One of `count` junctions, never `exclude`. A leg of zero length is not a leg. */
+  private pickUniform(count: number, exclude: number): number {
+    if (count <= 1) return 0;
+    const roll = Math.floor(this.random() * (count - 1));
+    return roll >= exclude ? roll + 1 : roll;
+  }
+
+  /**
+   * Points a car down one leg: a street, and the two junctions it runs between.
+   *
+   * Everything the renderer draws a car from — the world start, the lane offset,
+   * the heading, the length — falls out of three grid numbers, so a turn is
+   * three assignments and this call rather than a route to look up.
+   */
+  private setLeg(car: Car, alongX: boolean, line: number, at: number, to: number): void {
+    const start = alongX ? worldX(at) : worldZ(at);
+    const end = alongX ? worldX(to) : worldZ(to);
+    car.alongX = alongX;
+    car.line = line;
+    car.at = at;
+    car.to = to;
+    car.dir = end >= start ? 1 : -1;
+    car.length = Math.abs(end - start);
+    car.from = start;
+    if (alongX) {
+      // Right-hand traffic: heading +x, the near kerb is +z; heading -x, -z.
+      car.fixed = worldZ(line) + car.dir * LANE;
+      car.heading = car.dir > 0 ? 0 : Math.PI;
+    } else {
+      // Heading +z the near kerb is -x, so the lane offset flips against dir.
+      car.fixed = worldX(line) - car.dir * LANE;
+      car.heading = car.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+    }
+    car.speed = this.speedFor(car);
+    car.travelled = 0;
+  }
+
+  /**
+   * Turns onto a crossing street at the junction the last leg ended on.
+   *
+   * The whole of the junction model, and it needs no lane graph because every
+   * row line crosses every column line by construction — a district's streets
+   * are a grid. The car was driving along `line` and stopped at `to`; the
+   * crossing street *is* `to`, and the position along it is the line it came in
+   * on. Two numbers swap places.
+   *
+   * The last leg of a route is aimed at workplaces rather than at nothing in
+   * particular, which is what makes the whole thing read as a commute — see
+   * `RoadLines.rowWork`.
+   */
+  private turn(car: Car): void {
+    const lines = this.lines[car.district] as RoadLines;
+    const alongX = !car.alongX;
+    // The junctions along the *new* driving axis, which are the crossing
+    // streets of the one the car is turning onto.
+    const junctions = alongX ? lines.cols : lines.rows;
+    const line = car.to;
+    // Where on the new street the car already is: the street it just drove.
+    const at = junctions.indexOf(car.line);
+    if (at < 0) {
+      // The crossing street is not one this district lists, which can only
+      // happen if the caches ever disagreed. Start again rather than drive off.
+      car.routed = false;
+      return;
+    }
+    const last = car.legsLeft <= 1;
+    const weights = last ? (alongX ? lines.colWork : lines.rowWork) : (alongX ? lines.colHomes : lines.rowHomes);
+    const to = this.pickWeighted(weights, at, last ? 1 : 4);
+    this.setLeg(car, alongX, line, junctions[at] as number, junctions[to] as number);
+  }
+
+  /**
+   * Gives a car a whole route: a district, a street with houses on it, and two
+   * to four legs' worth of turns.
    *
    * Districts are sampled rather than searched: a handful of draws biased
    * toward the camera focus keeps the fleet where it can be seen without
@@ -435,41 +724,38 @@ export class Cars {
       const dz = d.centreZ - focusZ;
       if (dx * dx + dz * dz <= VIEW_RADIUS * VIEW_RADIUS) break;
     }
-    const district = this.layout.districts[chosen] as District;
     const lines = this.lines[chosen] as RoadLines;
 
-    // A district always has at least one of each — line 0 of both axes is a
-    // street — but the fallback keeps this honest if that ever stops holding.
-    const useX = lines.rows.length > 0 && (lines.cols.length === 0 || this.random() < 0.5);
-    const dir = this.random() < 0.5 ? 1 : -1;
-    const half = DISTRICT_WIDTH / 2;
-
-    car.alongX = useX;
-    car.dir = dir;
-    car.length = DISTRICT_WIDTH;
-    car.speed = car.bus ? BUS_SPEED : SPEED_MIN + this.random() * (SPEED_MAX - SPEED_MIN);
+    car.district = chosen;
+    car.legsLeft = ROUTE_LEGS_MIN + Math.floor(this.random() * (ROUTE_LEGS_MAX - ROUTE_LEGS_MIN + 1));
     car.waiting = 0;
     // The first stop is a fraction of the way in, so a line of buses on one
     // street does not pull up in formation.
     car.nextStop = car.bus ? STOP_SPACING * (0.4 + this.random() * 0.6) : Infinity;
-    // Start and finish at the district's own edges, which are streets in their
-    // own right: a car is only ever created or retired at a junction on the
-    // boundary, never halfway down a block with nothing to have come from.
-    if (useX) {
-      const row = lines.rows[Math.floor(this.random() * lines.rows.length)] as number;
-      car.from = dir > 0 ? district.centreX - half : district.centreX + half;
-      // Right-hand traffic: heading +x, the near kerb is +z; heading -x, -z.
-      car.fixed = worldZ(row) + dir * LANE;
-      car.heading = dir > 0 ? 0 : Math.PI;
-    } else {
-      const col = lines.cols[Math.floor(this.random() * lines.cols.length)] as number;
-      car.from = dir > 0 ? district.centreZ - half : district.centreZ + half;
-      // Heading +z the near kerb is -x, so the lane offset flips against dir.
-      car.fixed = worldX(col) - dir * LANE;
-      car.heading = dir > 0 ? -Math.PI / 2 : Math.PI / 2;
-    }
+
+    // A district always has at least one of each — line 0 of both axes is a
+    // street — but the fallback keeps this honest if that ever stops holding.
+    const alongX = lines.rows.length > 0 && (lines.cols.length === 0 || this.random() < 0.5);
+    const axis = alongX ? lines.rows : lines.cols;
+    const cross = alongX ? lines.cols : lines.rows;
+    // The street the commute starts on, leaning toward the one with houses on
+    // it. A weighted draw with a floor rather than a hard rule — see
+    // `pickWeighted`, and `RoadLines.rowHomes` for why it is zoning rather than
+    // buildings that decides.
+    const homes = alongX ? lines.rowHomes : lines.colHomes;
+    const line = axis[this.pickWeighted(homes, -1, 2)] as number;
+    const at = Math.floor(this.random() * cross.length);
+    // A one-leg route would finish where a commute finishes, so the first leg
+    // is only aimed at work when it is also the last. `cross.map(() => 0)` for
+    // the uniform case would be an array a frame, which is exactly what this
+    // router is not allowed to do.
+    const to =
+      car.legsLeft <= 1
+        ? this.pickWeighted(alongX ? lines.colWork : lines.rowWork, at, 1)
+        : this.pickUniform(cross.length, at);
+    this.setLeg(car, alongX, line, cross[at] as number, cross[to] as number);
     // A parked fleet is placed along its streets rather than stacked on the
-    // kerb it would have entered from; a moving one always enters at the edge.
+    // kerb it would have entered from; a moving one always enters at a junction.
     car.travelled = this.moving ? 0 : this.random() * car.length;
     car.routed = true;
   }
@@ -519,7 +805,29 @@ export class Cars {
             car.nextStop += STOP_SPACING;
           }
         }
-        if (car.travelled >= car.length) this.route(car, fx, fz);
+        if (car.travelled >= car.length) {
+          // Arrived at a junction. The overshoot is carried onto the next leg
+          // rather than dropped, so a short leg at speed does not cost the car
+          // a frame's worth of travel every time it turns.
+          const over = car.travelled - car.length;
+          car.legsLeft--;
+          if (car.legsLeft > 0) {
+            this.turn(car);
+            if (car.routed) {
+              car.travelled = Math.min(over, car.length);
+              // Waiting at the lights, and only in traffic worth waiting in.
+              // Buses are exempt: they already stop, and a bus that queued as
+              // well would be the one vehicle on screen that never moved.
+              if (!car.bus && this.random() < this.jam * JUNCTION_WAIT_CHANCE) {
+                car.waiting = JUNCTION_WAIT_SECONDS * (0.4 + this.random());
+              }
+            } else {
+              this.route(car, fx, fz);
+            }
+          } else {
+            this.route(car, fx, fz);
+          }
+        }
       }
 
       const along = car.from + car.dir * car.travelled;
