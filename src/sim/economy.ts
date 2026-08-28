@@ -11,6 +11,7 @@ import {
   AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   CITY_HALL_BASE,
+  LEGACY_YIELD,
   RANKS,
   RANK_GATES,
   type CityRank,
@@ -791,6 +792,50 @@ export const rankBlocker = (s: GameState, gate: RankGate): string | null => {
   const needed = RANKS[rankAt(gate)] as CityRank | undefined;
   return needed ? `Needs a ${needed.name.toLowerCase()}` : null;
 };
+
+// ---------------------------------------------------------------- ascension
+
+/**
+ * What the cities before this one are worth to it, as a multiplier on income.
+ *
+ * Sublinear on purpose — see LEGACY_YIELD, which carries the sizing and the
+ * argument for violating the "achievements grant nothing" rule.
+ *
+ * Applied beside `incomeMultiplier` rather than inside `bonuses`, and the
+ * distinction is `ledgerScale`: `bonuses` is shared with the upkeep model,
+ * where it keeps the wage bill a constant share of a ledger that climbs the
+ * level ladder twice. A legacy is not a property of the city's buildings, it is
+ * a property of the player's history — the same kind of thing the tax rate and
+ * the mood are, and those are deliberately outside the upkeep scaling too. The
+ * consequence is stated rather than hidden: a legacy city runs a smaller upkeep
+ * share than a first one, exactly as a taught city does. See `workforceSkill`,
+ * which makes the same trade for the same reason.
+ */
+export const legacyMultiplier = (s: GameState): number =>
+  1 + LEGACY_YIELD * Math.sqrt(Math.max(0, s.legacy));
+
+/**
+ * What ascending now would leave behind, in districts.
+ *
+ * The districts the city currently holds, and nothing else. Not `earned`, not
+ * the population, not the elapsed time: those all grow with how long a run is
+ * left going, and a carryover that did would reward patience rather than
+ * progress. See `GameState.legacy`.
+ */
+export const legacyGain = (s: GameState): number => s.districts;
+
+/**
+ * Whether the city may be given up and founded again.
+ *
+ * On the rank ladder like everything else that unlocks, at the rung the
+ * calibrator says a played run reaches in about two hours — see RANK_GATES.
+ * Early enough that a player who wants the loop can have it, late enough that
+ * "found it again" is a decision rather than a reflex.
+ */
+export const canAscend = (s: GameState): boolean => rankAllows(s, 'ascend');
+
+/** Why the ascend button is off, phrased for the HUD. */
+export const ascendBlocker = (s: GameState): string | null => rankBlocker(s, 'ascend');
 
 /**
  * How far the city is through the rung it is climbing, in [0, 1].
@@ -2510,7 +2555,13 @@ export const income = (s: GameState): number => {
     // The tax rate multiplies the whole ledger, which is why the happiness it
     // costs is worth more than it looks: happiness multiplies this same line
     // through `incomeMultiplier`, so the two terms compound against each other.
-    taxStep(s).income
+    taxStep(s).income *
+    // And what the cities before this one left behind. Out here with the tax
+    // rate rather than inside `bonuses`, because it is a property of the
+    // player's history rather than of this city's buildings — see
+    // `legacyMultiplier`. Exactly 1 on a first founding, so every constant in
+    // this file keeps the meaning it was measured with.
+    legacyMultiplier(s)
   );
 };
 

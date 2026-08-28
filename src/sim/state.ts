@@ -81,7 +81,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 12;
+export const SAVE_VERSION = 13;
 
 /**
  * The entire game, in a handful of fields.
@@ -410,6 +410,28 @@ export interface GameState {
    * Nothing in the simulation reads it back.
    */
   history: History;
+  /**
+   * How many times a city has been founded on this seed. One for a fresh save.
+   *
+   * The first of exactly two fields ascension adds, and it is a scalar for the
+   * same reason everything else here is: it grows with nothing. A city founded
+   * a thousand times carries the number 1,000 and not a thousand of anything.
+   */
+  foundings: number;
+  /**
+   * What the cities before this one left behind, in districts.
+   *
+   * The second field, and the only one anything reads back. Districts rather
+   * than cash, population or `earned`, and the choice is the whole sizing: a
+   * founding can contribute at most MAX_DISTRICTS, so the legacy grows by a
+   * bounded amount however long a run is left going. Population would have
+   * spanned four to a million and made the second city's bonus a function of
+   * how patient the first player was rather than of how far they got.
+   *
+   * See `legacyMultiplier`, which is what reads it, and `Game.ascend`, which is
+   * the only thing that writes it.
+   */
+  legacy: number;
   /** Epoch ms of the last save, used to compute time away. */
   savedAt: number;
 }
@@ -491,6 +513,10 @@ export function createState(now = Date.now()): GameState {
     // Nothing earned yet, which is the one thing a fresh city is certain of.
     unlocked: {},
     history: emptyHistory(),
+    // The city being founded right now is the first one. `Game.ascend` is what
+    // makes it the second, by re-seeding these two over a fresh state.
+    foundings: 1,
+    legacy: 0,
     savedAt: now,
   };
 }

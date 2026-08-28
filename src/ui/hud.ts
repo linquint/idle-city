@@ -72,8 +72,12 @@ import {
   canBuildCityHall,
   canBuildPlant,
   canBuildTerminal,
+  ascendBlocker,
+  canAscend,
   cityHallBlocker,
   cityRank,
+  legacyGain,
+  legacyMultiplier,
   nextRank,
   population,
   rankProgress,
@@ -512,6 +516,9 @@ export class Hud {
     annex: el<HTMLButtonElement>('annex'),
     auto: el<HTMLButtonElement>('auto'),
     reset: el<HTMLButtonElement>('reset'),
+    ascend: el<HTMLButtonElement>('ascend'),
+    ascendLabel: el('ascend-label'),
+    ascendGain: el('ascend-gain'),
     welcome: el('welcome'),
     welcomeAway: el('welcome-away'),
     welcomeRows: el('welcome-rows'),
@@ -761,6 +768,31 @@ export class Hud {
       this.game.reset();
       // The ticker is the one part of the HUD that holds anything across a
       // paint, so it is the one part a reset has to be told about.
+      this.ticker.clear();
+      this.tickerShown = '';
+      this.hooks.onReset();
+      this.paint();
+    });
+
+    n.ascend.addEventListener('click', () => {
+      const s = this.game.state;
+      if (!canAscend(s)) return;
+      const gain = legacyGain(s);
+      const after = legacyMultiplier({ ...s, legacy: s.legacy + gain });
+      if (
+        !confirm(
+          `Give up ${fmtInt(s.districts)} district${s.districts === 1 ? '' : 's'} and found the ` +
+            `city again on the same land?\n\nEverything goes: the buildings, the treasury, ` +
+            `the awards and the charts. What comes back is a permanent ` +
+            `${after.toFixed(2)}x on everything the next city earns.`,
+        )
+      ) {
+        return;
+      }
+      this.game.ascend();
+      // The ticker is the one part of the HUD that holds anything across a
+      // paint, so it is the one part a founding has to be told about — same as
+      // a reset, because underneath it is one.
       this.ticker.clear();
       this.tickerShown = '';
       this.hooks.onReset();
@@ -1974,6 +2006,21 @@ export class Hud {
     n.auto.setAttribute('aria-pressed', String(developing));
     n.auto.disabled = govern !== null;
     n.auto.title = govern ?? 'Spend surplus cash while you are away';
+
+    // Founding again. The button carries what it is worth rather than what it
+    // costs, which is the one place in this HUD that reads the other way round
+    // — the cost is the whole city and it is on the button's face already.
+    const ascendWhy = ascendBlocker(s);
+    const gain = legacyGain(s);
+    const after = legacyMultiplier({ ...s, legacy: s.legacy + gain });
+    n.ascendLabel.textContent =
+      ascendWhy ?? (s.foundings > 1 ? `Found again · city ${fmtInt(s.foundings)}` : 'Found again');
+    n.ascendGain.textContent = ascendWhy === null ? `${after.toFixed(2)}x` : '';
+    n.ascend.disabled = !canAscend(s);
+    n.ascend.title =
+      ascendWhy ??
+      `Give up ${fmtInt(s.districts)} districts for a permanent ${after.toFixed(2)}x` +
+        ` on everything the next city earns (now ${legacyMultiplier(s).toFixed(2)}x)`;
   }
 
   /**

@@ -23,6 +23,7 @@
     "traffic:calibrate": "node tools/traffic.calibrate.mjs",
     "education:calibrate": "node tools/education.calibrate.mjs",
     "ranks:calibrate": "node tools/ranks.calibrate.mjs",
+    "ascension:calibrate": "node tools/ascension.calibrate.mjs",
     "pedestrians:calibrate": "node --experimental-transform-types tools/pedestrians.calibrate.mjs",
     "lod:calibrate": "node --experimental-transform-types tools/lod.calibrate.mjs"
   },

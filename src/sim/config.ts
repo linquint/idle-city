@@ -2740,6 +2740,42 @@ export const HIGHWAY_COST = ANNEX_BASE * ANNEX_GROWTH ** (HIGHWAY_MIN_DISTRICTS 
  */
 export const AIRPORT_BASE = ANNEX_BASE * ANNEX_GROWTH ** HIGHWAY_MIN_DISTRICTS;
 
+// --------------------------------------------------------------- ascension
+
+/**
+ * What a founding is worth to the next city, and how fast that compounds.
+ *
+ * `achievements.ts` refuses to grant anything and explains why at length: every
+ * bonus in this game is a multiplier on a ledger that already compounds to
+ * 9e9/s, so a payout is "a multiplier handed to the player for doing what they
+ * were going to do anyway". This feature violates that rule, and the violation
+ * is the point rather than an oversight — an achievement fires for playing, and
+ * ascension fires for *giving a city up*. The player pays 49 districts and an
+ * hour of their life for it. That is a decision, which is exactly the thing the
+ * achievements argument says a bonus has to be attached to.
+ *
+ * What is kept from the argument is the shape. The multiplier is
+ * `1 + LEGACY_YIELD * sqrt(legacy)`, and every part of that is doing work:
+ *
+ *   - `legacy` counts *districts given up*, so one founding contributes at most
+ *     MAX_DISTRICTS however long it is left running. A run's contribution is
+ *     bounded by the map rather than by the player's patience;
+ *   - the square root is what makes it compound slowly. Four full runs are
+ *     twice the bonus of one, not four times it. Measured in
+ *     tools/ascension.calibrate.mjs, at the ceiling of a full 49-district run
+ *     each time: the second city runs at 2.05x, the third at 2.48x, the fifth
+ *     at 3.10x, the twentieth at 5.58x and the fiftieth at 8.35x;
+ *   - 0.15 is set from the guard the brief names — time to the first
+ *     annexation, run by run. Run 1 buys its second district at 1:30:18, run 2
+ *     at 49:35, run 3 at 43:05, run 5 at 36:05 and run 20 at 22:47, against a
+ *     rule that says run 3 clearing its first district inside a minute means
+ *     the multiplier is too strong. The reason it can be as large as it is is
+ *     that cash is only half of that gate: `activeDeveloped` has to reach
+ *     ANNEX_MIN_OCCUPANCY before a district can be bought at any price, so a
+ *     rich second city still has to build its first one out.
+ */
+export const LEGACY_YIELD = 0.15;
+
 // ------------------------------------------------------------------- ranks
 
 /**
@@ -2841,6 +2877,12 @@ export const RANK_GATES = {
   stadium: 2,
   /** Replaces HIGHWAY_MIN_DISTRICTS as the gate. See `highwayAllowed`. */
   highway: 3,
+  /**
+   * Founding the city again. Not a building — a rank gate on the one button
+   * that takes the city away — but the same ladder answers it, and a second
+   * mechanism for "are you big enough yet" would be a second thing to tune.
+   */
+  ascend: 2,
 } as const;
 
 export type RankGate = keyof typeof RANK_GATES;

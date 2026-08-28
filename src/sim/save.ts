@@ -448,6 +448,21 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
      * wrong-length ring costs the chart and nothing else.
      */
     history: version >= 12 ? migrateHistory(r['history']) : emptyHistory(),
+    /**
+     * The founding count and what earlier foundings left behind.
+     *
+     * A save older than v13 has neither, and the defaults are the only reading
+     * that could be right: an existing city has been founded once, and it has
+     * nothing behind it because there was nothing behind it to have. So a
+     * returning player's city is exactly the city they left — the multiplier is
+     * 1 at a legacy of 0, which is what a first founding earns anyway.
+     *
+     * Clamped like every other count: a doctored save cannot buy itself a
+     * legacy larger than the districts it could ever have given up, which is
+     * MAX_DISTRICTS a founding.
+     */
+    foundings: Math.max(1, Math.floor(num(r['foundings'], 1))),
+    legacy: Math.max(0, Math.floor(num(r['legacy'], 0))),
     savedAt: num(r['savedAt'], now),
   };
 
@@ -562,6 +577,11 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     else if (service.key === 'transit') state.depots = Math.min(state.depots, allowed);
     else state.universities = Math.min(state.universities, allowed);
   }
+
+  // A legacy is what earlier foundings gave up, and a founding can give up at
+  // most MAX_DISTRICTS. So the two fields bound each other, and a doctored save
+  // cannot claim a legacy no run could have earned.
+  state.legacy = Math.min(state.legacy, (state.foundings - 1) * MAX_DISTRICTS);
 
   // After the building counts are legal, because a fire is only legal if the
   // building it is burning still exists.

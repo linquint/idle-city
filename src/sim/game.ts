@@ -38,6 +38,8 @@ import {
 } from './config.ts';
 import {
   annexCost,
+  canAscend,
+  legacyGain,
   arrearsStep,
   burnableBuildings,
   burnableOf,
@@ -1653,6 +1655,43 @@ export class Game {
     // `createState` already handed the new state empty rings; this says so
     // explicitly next to the other per-run counters rather than relying on it.
     this.inner.history = emptyHistory();
+  }
+
+  /**
+   * Gives the city up and founds another one on the same seed.
+   *
+   * Cheaper than it sounds, and the reason is worth stating: SEED is a
+   * compile-time constant, so every city this game has ever drawn is already on
+   * the same map. The water, the street walks, the plot lists and the
+   * annexation spiral are identical across runs by construction — there is no
+   * world generation here at all, only a `reset` and two numbers that survive
+   * it. `test/ascension.test.ts` asserts the property the whole feature rests
+   * on: a city founded twice draws the same map as one founded once.
+   *
+   * Built on top of `reset` rather than inside it, because `reset` is correct
+   * as it stands: "clear the city" means clear it, and a reset that quietly
+   * kept a multiplier would be a reset that lied. So this calls it and then
+   * re-seeds exactly the two fields that are allowed to survive:
+   *
+   *   - `foundings`, because a city that has been founded three times is on its
+   *     third founding whatever else is true of it;
+   *   - `legacy`, because it is the whole feature. It is what the city being
+   *     given up is worth to the one replacing it.
+   *
+   * Everything else goes, and two of them are worth naming because a player
+   * will notice. The awards go: `unlocked` keys to `elapsed`, which restarts,
+   * so a carried record would timestamp a city that no longer exists — and the
+   * rows re-earn quickly in a city that earns faster. The history rings go for
+   * the same reason: they are a chart of a city, and this is a different one.
+   */
+  ascend(): boolean {
+    if (!canAscend(this.inner)) return false;
+    const foundings = this.inner.foundings + 1;
+    const legacy = this.inner.legacy + legacyGain(this.inner);
+    this.reset();
+    this.inner.foundings = foundings;
+    this.inner.legacy = legacy;
+    return true;
   }
 
   /**

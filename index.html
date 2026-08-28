@@ -182,6 +182,13 @@
       <button class="ghost" id="auto" type="button" aria-pressed="false">Auto-develop · off</button>
       <button class="ghost" id="reset" type="button">Clear city</button>
     </div>
+    <!-- Beside "Clear city" and not in it: both take the city away and only one
+         of them gives anything back, so the two have to be told apart at a
+         glance. It carries what it is worth on the button, the way every other
+         purchase in this HUD carries its price. -->
+    <button class="ghost" id="ascend" type="button">
+      <span id="ascend-label">Found again</span><span class="cost" id="ascend-gain"></span>
+    </button>
   </div>
 
   <div class="panel" id="panel-treasury" role="tabpanel" aria-labelledby="tab-treasury" tabindex="0" hidden>

@@ -538,6 +538,29 @@ university looks like the archetypal late building and is the one that was
 measured out: it is what a city needs to clear the second education rung, which
 arrives inside the first hour, and a rank on it deadlocks the level ladder.
 
+### Founding the city again
+
+`SEED` is a compile-time constant, so every city this game has ever drawn is
+already on the same map — the water, the street walks, the plot lists and the
+annexation spiral are identical across runs by construction. So an ascension is
+not world generation: it is `reset()` plus two scalars that survive it.
+`foundings` counts how many cities have stood here, and `legacy` counts the
+districts they gave up. `test/ascension.test.ts` fingerprints the whole world and
+asserts a city founded six times draws exactly what one founded once does.
+
+The carryover is `1 + 0.15 * sqrt(legacy)` on income. `achievements.ts` refuses
+to grant anything and explains why — a payout is "a multiplier handed to the
+player for doing what they were going to do anyway" — and this violates that
+rule deliberately: an achievement fires for playing, and this fires for *giving a
+city up*. The shape of the argument is kept, though. Districts are the currency
+because one run can contribute at most 49 of them however long it is left
+running, and the square root is what makes four full runs twice the first rather
+than four times it. The sizing guard is time to the first annexation: run 1 buys
+its second district at 1:30:18, run 2 at 49:35, run 3 at 43:05, run 20 at 22:47.
+Cash is only half of that gate — `activeDeveloped` has to reach
+`ANNEX_MIN_OCCUPANCY` first — which is why the multiplier can be as large as it
+is without deleting the opening hour.
+
 ## Balance
 
 Every tunable is in `src/sim/config.ts`, and nothing else in that file imports
