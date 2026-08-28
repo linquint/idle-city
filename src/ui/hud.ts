@@ -234,6 +234,15 @@ const TICKER_LINES = 4;
  */
 const AWAY_TIMELINE_LINES = 12;
 
+/**
+ * Pixels a thumb has to travel on the sheet's handle before it is a drag.
+ *
+ * The same idea `cameraRig`'s CLICK_SLOP carries and the same reason: nobody
+ * taps a phone without moving, so a control that treated any movement as a
+ * drag would never register a tap at all.
+ */
+const SHEET_DRAG_SLOP = 8;
+
 /** What the ticker calls each zone, in the plural a count reads well against. */
 /** What the ticker calls each zone's land when the surveyor moves it. */
 const ZONE_LAND: Record<ZoneKind, string> = {
@@ -454,6 +463,8 @@ export class Hud {
     graphsNote: el('graphs-note'),
     overlays: el('overlays'),
     overlayNote: el('overlay-note'),
+    corner: el('corner'),
+    sheetGrip: el<HTMLButtonElement>('sheet-grip'),
     education: el('education'),
     educationReach: el('education-reach'),
     educationNext: el('education-next'),
@@ -771,6 +782,7 @@ export class Hud {
       n.taxSteps.append(button);
     }
 
+    this.wireSheet();
     this.buildOverlays();
     this.buildGraphs();
     this.buildAwards();
@@ -997,6 +1009,66 @@ export class Hud {
         // no consequence to report — the line is the whole of it.
         return { text: `Unlocked — ${event.name}`, tone: 'good' };
     }
+  }
+
+  /**
+   * The bottom sheet's handle: tap to toggle, drag to the same end.
+   *
+   * The one place this feature reaches `hud.ts` at all, and it is here because
+   * a sheet you can only *tap* open is a sheet that fights the gesture every
+   * phone has trained its owner to make. Everything else about the small-screen
+   * layout is CSS.
+   *
+   * A real `<button>` underneath, so the same control works by keyboard and to
+   * a screen reader, and `aria-expanded` says which way it is. The drag is
+   * pointer events on top of that rather than instead of it: a short drag is a
+   * tap and the button handles it, and a long one settles by direction.
+   */
+  private wireSheet(): void {
+    const grip = this.nodes.sheetGrip;
+    const corner = this.nodes.corner;
+    let from = 0;
+    let dragging = false;
+
+    const set = (collapsed: boolean): void => {
+      corner.classList.toggle('collapsed', collapsed);
+      grip.setAttribute('aria-expanded', String(!collapsed));
+    };
+
+    grip.addEventListener('click', () => {
+      // Suppressed after a drag that actually went somewhere, or the pointer's
+      // own click would undo what the drag just did.
+      if (dragging) return;
+      set(!corner.classList.contains('collapsed'));
+    });
+
+    grip.addEventListener('pointerdown', (event) => {
+      from = event.clientY;
+      dragging = false;
+      grip.setPointerCapture(event.pointerId);
+    });
+
+    grip.addEventListener('pointermove', (event) => {
+      if (!grip.hasPointerCapture(event.pointerId)) return;
+      const moved = event.clientY - from;
+      // A threshold, because a thumb never moves zero: under it this is still a
+      // tap and the click handler owns it.
+      if (Math.abs(moved) < SHEET_DRAG_SLOP) return;
+      dragging = true;
+      // Down collapses, up expands — the direction the sheet itself moves.
+      set(moved > 0);
+    });
+
+    const done = (event: PointerEvent): void => {
+      if (grip.hasPointerCapture(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+      // Cleared on the next frame rather than now: the click event that follows
+      // a pointerup has to see the flag the drag set.
+      requestAnimationFrame(() => {
+        dragging = false;
+      });
+    };
+    grip.addEventListener('pointerup', done);
+    grip.addEventListener('pointercancel', done);
   }
 
   /**
