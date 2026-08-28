@@ -281,3 +281,148 @@ courtyard costs the city no frontage at all (`PLOTS_PER_PARK`'s own argument).
 Four plots a district is small for something meant to be low-density, and it
 would put fields inside blocks rather than at the city's edge, so the fiction is
 worse. It is the fallback, not the plan.
+
+
+---
+
+# Phase 4 design notes
+
+Two write-ups asked for by the Phase 4 brief, in the same shape as the two
+above: measured, argued, and **not implemented**. The first is a feature the
+brief listed and the code cannot honestly carry yet; the second is a change the
+brief explicitly asked to be written up rather than built.
+
+Every number below is measured against this build (`tools/*.calibrate.mjs` and
+short probes over `src/sim`), not estimated.
+
+---
+
+## 9. Pollution
+
+### Why it is not in the overlay set
+
+The Phase 4 brief listed pollution as an overlay mode alongside land value,
+coverage, build order and traffic. The other four read numbers the simulation
+already has. **There is no pollution number anywhere in `src/sim`**, and an
+overlay over a number that does not exist would be a picture of nothing.
+
+So it is out of the overlay framework, and it should stay out until it is a
+simulation feature with a calibration of its own. What follows is what that
+feature would have to be.
+
+### It is derivable in-invariant, which is the good news
+
+Nothing about pollution needs the save to grow. Every source is already a pure
+function of counts and the seed:
+
+- **industry.** The k-th works stands on the k-th industrial plot, and where
+  that is falls out of `citygen`'s zoning and the build order — the same
+  property `landmarkCoverage` already relies on to resolve "around it" against
+  the layout rather than storing anything;
+- **estates.** `estateCell` is a pure function of the ordinal and the seed;
+- **traffic.** `congestion` is a city-wide scalar and its road supply is
+  `ROAD_CELLS_PER_DISTRICT x districts`, both derived.
+
+So a falloff field over industrial cells, estate cells and the road network is
+recomputable on load and needs nothing new in `GameState`. That is the same
+machinery feature F's land-value overlay uses and the same machinery a spatial
+version of congestion would need, which is why the brief was right to say the
+two share a falloff and should be sequenced together.
+
+### What it would cost, and the two hard questions
+
+**Where it lands.** The happiness bracket already carries four modifiers — the
+tax step, free transport, landmarks and now congestion — against four weights
+that sum to exactly 1. A fifth modifier is cheap to add and expensive to size:
+congestion took CONGESTION_MOOD 0.14, matched to the punitive tax rate, and it
+turned out (see `TRANSIT_ROAD_SHARE`) that a modifier which cannot be bought
+back to nearly zero moves the happiness *ceiling* the whole game is calibrated
+against. Pollution has the same shape and the same trap. Whatever it costs, a
+city that has done everything available to it must be able to get back to ~1.
+
+**Whether it is spatial at all.** This is the question, and it is the same one
+congestion answered in the negative. A field over industrial cells is genuinely
+spatial — industry clusters, `zoneBlocks` scores blocks on rail proximity and
+area, and `test/citygen` asserts at most 4 connected industrial clusters a
+district — so unlike traffic there *is* district-to-district variation to read.
+But happiness is a city-wide scalar and `LevelCohort` is the reason: a
+per-building modifier is exactly the input `state.ts` says would push the save
+off cohorts and onto instances. So pollution would have to be summarised the way
+land value is — a mean over the housing plots, computed from a prefix table —
+and the overlay would draw the field while the ledger read the mean.
+
+That is a real feature with a real design. It is not an overlay mode.
+
+### What would need measuring before coding
+
+- the field itself: industrial plots per district and their clustering, at every
+  district count, in the shape `tools/landvalue.calibrate.mjs` prints centrality;
+- what a falloff radius does to the share of housing plots affected — the
+  number that decides whether pollution is a thing you zone around or a thing
+  you suffer;
+- the mood cost against the four modifiers already in the bracket, and the
+  ceiling test in `test/services.test.ts`, which is what caught congestion's
+  sizing;
+- whether the estates make it worse enough to be a real cost of the highway.
+  They are outside the city and the housing is inside it, so the honest answer
+  may be "almost not at all", which would be worth knowing before building it.
+
+---
+
+## 10. Education on the promotion *rate*
+
+### What the brief asked
+
+Feature E gave education a second job — `SKILL_YIELD` on the industrial term of
+the ledger — and explicitly ruled out touching `LEVEL_EDUCATION`, which gates
+how tall the city may build. It then asked, if there were a case for education
+affecting the promotion **rate** rather than the gate, for it to be written up
+here and not implemented. There is a case. It is not a good enough one.
+
+### The case for it
+
+`promoteRate` is `promotable(s, kind) / LEVEL_UP_SECONDS` with three gates in
+front of it, and the gates are all binary: occupancy over LEVEL_UP_OCCUPANCY,
+happiness over LEVEL_UP_HAPPINESS, education over `LEVEL_EDUCATION[level]`. So
+the whole of what education does to the skyline is decide *whether* a rung is
+open, and a city at 61% coverage climbs to the 0.60 rung at exactly the speed a
+city at 100% does. A rate term would say the obvious thing instead: a
+better-taught city builds up faster, not merely higher.
+
+It would also give the two education types something to do between rungs.
+LEVEL_EDUCATION's rungs are 0.35 / 0.60 / 0.85 (and 0 at the bottom), so a city
+sitting at 0.62 has bought coverage that buys it nothing at all until it reaches
+0.85 — a dead zone a third of the range wide.
+
+### Why it is not implemented
+
+**It double-counts.** Coverage already decides the rung. Multiplying the rate by
+the same coverage means the same number is read twice on the same decision, in
+the same direction, and the second reading is invisible: a player watching a
+promotion wave has no way to tell a fast wave from an early one. `DEMAND_TERMS`
+carries exactly this problem in its own comment — the transit term was cut from
+0.35 to 0.30 when commerce gained a transit term of its own, because "a depot
+that lifted commercial demand through both channels at full strength would be
+worth more than a depot is."
+
+**LEVEL_UP_SECONDS is a pacing constant, not a dial.** `promote` drains the
+bottom cohort first so the city climbs as a wave, and the wave's *shape* is what
+LEVEL_UP_SECONDS states — a district of 24 homes at about one building every
+twelve seconds. Multiplying the rate by up to 2x would make the wave twice as
+fast for a fully taught city and re-open a constant that the skyline's whole
+mixed-age look rests on.
+
+**The dead zone is the feature.** A rung you cannot yet reach is what makes the
+next school worth buying. Smoothing it into a rate would remove the one moment
+in the education curve that is legible: the tick where the city starts building
+towers.
+
+### If it were built anyway
+
+The cheapest honest form is a *floor-and-lift* on the rate rather than a
+multiplier on it: `promoteRate x (RATE_FLOOR + (1 - RATE_FLOOR) x coverage)`,
+with RATE_FLOOR near 0.8, so a fully taught city climbs a quarter faster than a
+barely taught one and LEVEL_UP_SECONDS keeps its meaning as the *fastest* wave
+rather than the only one. That bounds the change to something a pacing run can
+measure, and it is the only version worth putting through
+`tools/economy.calibrate.mjs`.

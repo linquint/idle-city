@@ -27,8 +27,12 @@ import {
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
   LEVEL_HOUSING,
+  SHOP_BONUS,
   SHOP_JOBS,
   SHOP_TRIPS,
+  INDUSTRY_BONUS,
+  DISTRICT_BONUS,
+  SKILL_YIELD,
   FREE_TRANSPORT_MOOD,
   FREE_TRANSPORT_REACH,
   TAX_STEPS,
@@ -116,6 +120,9 @@ import {
   promotionBlocker,
   taxStep,
   transitCoverage,
+  workforceSkill,
+  effectiveOf,
+  estateEarning,
   congestion,
   transitShare,
   zoneOf,
@@ -376,6 +383,15 @@ export class Hud {
     plots: el('plots'),
     districts: el('districts'),
     happiness: el('happiness'),
+    bonuses: el('bonuses'),
+    bonusShop: el('bonus-shop'),
+    bonusShopNote: el('bonus-shop-note'),
+    bonusIndustry: el('bonus-industry'),
+    bonusIndustryNote: el('bonus-industry-note'),
+    bonusSkill: el('bonus-skill'),
+    bonusSkillNote: el('bonus-skill-note'),
+    bonusDistrict: el('bonus-district'),
+    bonusDistrictNote: el('bonus-district-note'),
     mood: el('mood'),
     moodPct: el('mood-pct'),
     moodWhy: el('mood-why'),
@@ -1148,6 +1164,34 @@ export class Hud {
     );
     n.districts.textContent = `${s.districts} / ${MAX_DISTRICTS}`;
     n.happiness.textContent = pct(s.happiness);
+
+    // What multiplies the rent, spelled out. Three of these have always been in
+    // the ledger and none of them was ever on screen, which made the fourth —
+    // the workforce skill — impossible to introduce honestly: a player told
+    // "+30% industrial yield" on a school button has no way to find out what
+    // the industrial term was worth in the first place.
+    const trading = effectiveOf(s, 'shop');
+    const works = effectiveOf(s, 'industry') + estateEarning(s);
+    const skill = workforceSkill(s);
+    n.bonusShop.textContent = `+${(SHOP_BONUS * trading * 100).toFixed(0)}%`;
+    n.bonusShopNote.textContent = `${fmtInt(trading)} shop plots trading`;
+    n.bonusIndustry.textContent = `+${(INDUSTRY_BONUS * works * skill * 100).toFixed(0)}%`;
+    n.bonusIndustryNote.textContent = `${fmtInt(works)} works plots running`;
+    n.bonusSkill.textContent = `x${skill.toFixed(2)}`;
+    n.bonusSkillNote.textContent =
+      skill <= 1
+        ? 'no schooling yet'
+        : `${pct(educationCoverage(s))} taught, on industry only`;
+    n.bonusDistrict.textContent = `+${(DISTRICT_BONUS * (s.districts - 1) * 100).toFixed(0)}%`;
+    n.bonusDistrictNote.textContent =
+      s.districts === 1 ? 'one district' : `${s.districts} districts`;
+    n.bonuses.setAttribute(
+      'aria-label',
+      `Rent multipliers: commerce plus ${Math.round(SHOP_BONUS * trading * 100)} percent, ` +
+        `industry plus ${Math.round(INDUSTRY_BONUS * works * skill * 100)} percent ` +
+        `at a workforce skill of ${skill.toFixed(2)}, ` +
+        `districts plus ${Math.round(DISTRICT_BONUS * (s.districts - 1) * 100)} percent`,
+    );
   }
 
   /**
@@ -1557,7 +1601,19 @@ export class Hud {
       row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
       row.cost.textContent = fmt(serviceCost(s, service));
       row.button.disabled = !canBuildService(s, service);
-      row.button.title = serviceBlocker(s, service) ?? service.buildLabel;
+      // The two education types carry a second reason to buy them now: what the
+      // schooling is worth to the city's industry. On the tooltip rather than
+      // the face of the button, which is a price and a count and has no room —
+      // and quoted at the coverage the city *would* have, because "+30% at full
+      // coverage" is a promise and "+11% right now" is a fact.
+      const why = serviceBlocker(s, service);
+      row.button.title =
+        why ??
+        (service.key === 'school' || service.key === 'university'
+          ? `${service.buildLabel} — schooling is worth +${Math.round(
+              SKILL_YIELD * educationCoverage(s) * 100,
+            )}% industrial yield now, +${Math.round(SKILL_YIELD * 100)}% at full coverage`
+          : service.buildLabel);
     }
 
     // There is no single zoning any more, so the readout names the tallest

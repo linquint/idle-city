@@ -737,6 +737,43 @@ export const INDUSTRY_GROWTH = 1.14;
  */
 export const INDUSTRY_BONUS = 0.11;
 
+/**
+ * What a fully educated workforce adds to the city's industrial yield.
+ *
+ * Education's second job, and the whole difficulty is *where* it can go. It
+ * cannot go on the goods side: INDUSTRY_OUTPUT feeds `demandTargets.i`
+ * negatively — it is supply against the export tap — so a skill bonus that
+ * raised output would make an educated city stop wanting industry, and the next
+ * works would cost a surcharge for having built schools. Worse, DEMAND_TERMS
+ * already carries a +0.20 education term on industrial demand, so the two would
+ * be pulling in opposite directions through the same coverage.
+ *
+ * So it goes on the income side, and specifically on the industrial term inside
+ * `bonuses` at the `income` call site. See `workforceSkill` for why that call
+ * site rather than inside `bonuses` itself.
+ *
+ * Sized against the measurement rather than picked — see
+ * tools/education.calibrate.mjs. The industrial term is the *second* multiplier
+ * in the rent bracket everywhere on the map: at 12 districts of towers it
+ * carries 38.8% of the bracket against commerce's 61.1%, and the ordering holds
+ * at every size and every level. At 0.30 a fully taught city earns 11.6% more,
+ * and the industrial term climbs from 0.64 of the shop term to 0.83 of it — so
+ * it closes the gap without passing it, which is the bound the design asks for:
+ * commerce is the city's main multiplier and education must not quietly become
+ * a better one. 0.58 is where the two would meet; 0.80 overtakes outright, and
+ * the calibrator marks it.
+ *
+ * The lift is almost perfectly flat across the map — 11.1% at one district,
+ * 11.6% at forty-nine, and within half a point at every rung of the ladder —
+ * because it multiplies a term that is itself a stable share of the bracket.
+ * That is the right shape for a bonus that is bought once and kept.
+ *
+ * Worth building schools for, then, without being the reason to. Two schools
+ * and a university already pay for themselves through LEVEL_EDUCATION; this is
+ * what makes the third one worth staffing.
+ */
+export const SKILL_YIELD = 0.3;
+
 export const ANNEX_BASE = 60_000;
 export const ANNEX_GROWTH = 3.4;
 

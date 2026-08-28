@@ -100,6 +100,7 @@ import {
   SHOP_BONUS,
   SHOP_GROWTH,
   SHOP_JOBS,
+  SKILL_YIELD,
   SHOP_SUPPLY,
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
@@ -479,6 +480,31 @@ export const educationCoverage = (s: GameState): number => {
   for (const service of EDUCATION_SERVICES) reached += covered(s, service);
   return Math.min(1, reached / plots);
 };
+
+/**
+ * What the city's schooling is worth to its industry, as a multiplier.
+ *
+ * One expression, read at every call site that charges the industrial term, so
+ * the ledger, the inspector and the HUD cannot disagree about what a school is
+ * worth. No new save field and no new lag: education already lags, through the
+ * staffing ramp its coverage is multiplied by, so a school opened this instant
+ * is worth nothing yet and ramps in exactly as its coverage does.
+ *
+ * **Applied at the `income` call site rather than inside `bonuses` itself**, and
+ * the difference is `ledgerScale`: `bonuses` is shared with the upkeep model,
+ * where it keeps the wage bill a constant *share* of a ledger that climbs the
+ * level ladder twice. Folding the skill in there would raise the payroll by the
+ * same factor it raised the income, and the city would hand back most of what
+ * it had just been given — which is the one thing "it should be worth building
+ * schools for" rules out. So the skill is a net gain, and the deliberate
+ * consequence is that a fully taught city runs a slightly smaller upkeep share
+ * than an ignorant one. Bounded by SKILL_YIELD, so it is a few points and not a
+ * regime change.
+ *
+ * 1 at no coverage, so every constant in this file keeps the meaning it was
+ * measured with.
+ */
+export const workforceSkill = (s: GameState): number => 1 + SKILL_YIELD * educationCoverage(s);
 
 /** Buildings a zone promotes per second, with every gate open. */
 export const promoteRate = (s: GameState, kind: ZoneKind): number =>
@@ -2305,7 +2331,17 @@ export const income = (s: GameState): number => {
   // The estates are not in the cohort and cannot catch fire — they are outside
   // the city and outside the fire model — so they are added after the burning
   // share comes off rather than before it.
-  const industry = effectiveOf(s, 'industry') * (1 - alight(s, 'industry')) + estateEarning(s);
+  // The skill multiplies the industrial term and nothing else. It reaches the
+  // estates too, and that is a decision rather than an oversight: the estates
+  // *are* the city's industry — `estateEarning` already multiplies by
+  // `industryScale`, the mean level weight of city industry, because they are
+  // the same firms with a road between them — so a workforce that has been to
+  // school is the same workforce out past the highway. Excluding them would
+  // mean an educated city's industry got better everywhere except where it had
+  // most recently expanded, which is the opposite of the intended shape.
+  const industry =
+    (effectiveOf(s, 'industry') * (1 - alight(s, 'industry')) + estateEarning(s)) *
+    workforceSkill(s);
   return (
     (people *
       RENT *
@@ -2761,7 +2797,9 @@ export const buildingIncome = (
     const bonuses =
       1 +
       SHOP_BONUS * effectiveOf(s, 'shop') +
-      INDUSTRY_BONUS * effectiveOf(s, 'industry') +
+      // The same skill multiplier `income` charges, so the card and the ledger
+      // quote one number rather than two.
+      INDUSTRY_BONUS * effectiveOf(s, 'industry') * workforceSkill(s) +
       DISTRICT_BONUS * (s.districts - 1);
     const land =
       parcel === undefined
@@ -2769,7 +2807,8 @@ export const buildingIncome = (
         : parcelLandValue(s, parcel.plot, parcel.plots);
     return (LEVEL_HOUSING[level] ?? 0) * s.occupancyR * RENT * land * bonuses * mood;
   }
-  const share = kind === 'shop' ? SHOP_BONUS : INDUSTRY_BONUS;
+  const share =
+    kind === 'shop' ? SHOP_BONUS : INDUSTRY_BONUS * workforceSkill(s);
   return (
     residents(s) * RENT * share * (LEVEL_SCALE[level] ?? 1) * occupancyOf(s, kind) * mood
   );
