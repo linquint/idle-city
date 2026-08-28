@@ -71,6 +71,24 @@ export const ROAD_GAP_MAX = 7;
 export const TARGET_PLOTS = 144;
 
 /**
+ * Road cells a district carves out, and the reason congestion is a scalar.
+ *
+ * Derived, not chosen, and not choosable: the rejection sampler in `citygen`
+ * accepts only a plan with exactly TARGET_PLOTS buildable plots, and a plan on a
+ * DISTRICT_SPAN grid has `span^2` cells — so every district in every city has
+ * exactly this many road cells, and exactly three full row lines and three full
+ * column lines. Measured over all 49 districts of the default seed: 81 road
+ * cells each, 3 and 3 each, 18 distinct line *placements* between them.
+ *
+ * Placement varies; supply does not. That is what makes traffic a city-wide
+ * number rather than a map — see `congestion`, which multiplies this by the
+ * district count and stops there. Getting spatial congestion would mean
+ * changing the generator, which re-opens every per-district constant from
+ * SHOP_BASE to EXPORT_PER_DISTRICT.
+ */
+export const ROAD_CELLS_PER_DISTRICT = DISTRICT_SPAN * DISTRICT_SPAN - TARGET_PLOTS;
+
+/**
  * What one district must offer once every reservation has taken its share.
  *
  * Every building fronts a street, so only the road-adjacent plots of a
@@ -2214,6 +2232,153 @@ export const TRANSIT_LABOUR_DRAW = 0.30;
  */
 export const FREE_TRANSPORT_REACH = 0.33;
 export const FREE_TRANSPORT_MOOD = 0.05;
+
+// ------------------------------------------------------------------- traffic
+
+/**
+ * Trips one resident puts on the road in a second.
+ *
+ * Derived from the two shares the rest of the model is already built on rather
+ * than typed as a third: WORKING_SHARE is the share of residents who go to
+ * work and SPEND_PER_RESIDENT is the shopping trips they generate, so their sum
+ * is a resident's day. Typing a number here would be a third statement about
+ * what a resident does, free to drift from the two that decide the labour
+ * market and the high street.
+ *
+ * Driven by *residents* rather than by `min(workers, jobs)`, and the
+ * measurement is why. Jobs are flat per plot while residents are not, so a
+ * mature city is enormously worker-rich — 714,067 workers against 27,924 jobs
+ * at 49 districts of megastructures — and commuting per capita collapses as the
+ * city grows. Against matched pairs a finished city reads as having almost no
+ * traffic at all, which is the opposite of true: a resident with nowhere to
+ * commute to still shops, still runs errands, and is still on the road.
+ */
+export const TRIPS_PER_RESIDENT = WORKING_SHARE + SPEND_PER_RESIDENT;
+
+/**
+ * How hard density is discounted when trips are measured against road supply.
+ *
+ * The one constant in this file that exists purely to stop a signal pinning, and
+ * the same job `cityScale` does for demand. Trips against a fixed road supply
+ * span a 150x range over the level ladder — 1.14 trips per road cell at level 0
+ * against 170.28 at level 4, on a fully built city — which is exactly the
+ * failure DEMAND_SCALE's comment describes.
+ *
+ * Measured, trips per road cell divided by `cityScale ** p` on a fully built
+ * city at each level — see tools/traffic.calibrate.mjs, which prints this:
+ *
+ *     p       L0     L1     L2     L3     L4    L4/L0
+ *   0.50    1.14   2.29   4.79   9.92  19.83    17.3x
+ *   0.60    1.14   1.99   3.60   6.44  11.21     9.8x
+ *   0.75    1.14   1.62   2.34   3.37   4.76     4.2x
+ *   0.85    1.14   1.41   1.76   2.19   2.69     2.4x
+ *   1.00    1.14   1.14   1.14   1.14   1.14     1.0x
+ *
+ * The bottom row is worth understanding before choosing anything above it: at
+ * p = 1 the ladder is *exactly* flat, and not approximately. Population is
+ * `housing plots x cityScale x LEVEL_HOUSING[0]` by construction, so trips
+ * driven by residents are exactly proportional to `cityScale` and dividing by
+ * it removes density completely. That makes p a clean design dial — how much
+ * of a city's density it is charged for — running from "all of it" at 0 to
+ * "none of it" at 1, with no perverse region anywhere in between.
+ *
+ * ---
+ *
+ * **This corrects the table the brief for this feature carried**, which read
+ * 1.15 / 1.62 / 1.94 / 1.88 / 2.37 at p = 0.75 and concluded that full
+ * normalisation *inverts* the sign — that towers would reduce congestion. That
+ * table was computed with trips as `min(workers, jobs) + shopping`, which is
+ * the matched-pairs definition the same brief then says not to use: the two
+ * agree at level 0, where jobs are plentiful, and diverge as the city grows
+ * worker-rich. Under residents-driven trips there is no inverting region to
+ * avoid, and p = 0.75 charges a tower for rather more of its density than the
+ * brief's "roughly double" expected — 4.2x end to end rather than 2.1x.
+ *
+ * 0.75 is kept because it is what was chosen and because it is defensible on
+ * its own terms: a tower puts three hundred people on one plot fronting the same
+ * street, and charging that four times over is closer to true than twice. What
+ * it costs is the top of the ladder, which sits near the clamp — see
+ * CONGESTION_SCALE. 0.85 is the value that reproduces the brief's stated intent
+ * (2.4x, and a top-of-ladder city reading 0.77 rather than 0.99) and is a
+ * one-character change if the pacing wants it.
+ */
+export const CONGESTION_DENSITY_EXPONENT = 0.75;
+
+/**
+ * What counts as a jammed city, in density-adjusted trips per road cell.
+ *
+ * The divisor that turns the table above into a number in [0, 1]. Set so a
+ * mid-ladder, transit-free city reads about half and the top of the ladder
+ * stops just short of the clamp. Measured, transit-free, at every district
+ * count (the reading does not vary with size — road supply and residents grow
+ * together):
+ *
+ *     L0     L1     L2     L3     L4
+ *   0.24   0.34   0.49   0.70   0.99
+ *
+ * So a city that has never opened a depot goes from "a bit slow" to jammed as
+ * it climbs, which is the pressure the feature exists to apply, and a fully
+ * covered one reads 0.50 at the top of the ladder against 0.30 with the fares
+ * waived. Nothing clamps, but the top of the ladder is close enough to 1 that a
+ * larger CONGESTION_DENSITY_EXPONENT would have to come with a larger divisor
+ * here — see the exponent's note.
+ */
+export const CONGESTION_SCALE = 4.8;
+
+/**
+ * Share of a city's trips a fully covered transit network takes off the road.
+ *
+ * The lever, and the point of the whole feature. TRANSIT carries `weight: 0` in
+ * SERVICES — the four happiness weights sum to exactly 1 and a fifth would
+ * re-open a calibration that has held for three cycles — so a depot has never
+ * had a mood story. Congestion gives it one without touching those weights,
+ * because it lands in the modifier bracket beside the tax step and LANDMARK_MOOD.
+ *
+ * Set from the ceiling rather than picked. `test/services.test.ts` asserts that
+ * a city which has bought everything the land allows reaches at least 0.95
+ * happiness at every size, and that promise predates this feature: neglect is
+ * supposed to read as a ceiling on what a city can become, not as a tax on
+ * playing well. At 0.5 a maxed 49-district city at the top of the ladder still
+ * sat at 0.30 congestion with every depot open, which is -0.042 of mood and
+ * 0.93 — so the ceiling would have moved, and a constant that quietly lowers
+ * the best a city can ever feel is a constant that has re-opened someone else's
+ * calibration.
+ *
+ * 0.70 is what keeps it: fully covered reads 0.30 jammed at the very top of the
+ * ladder, which is -0.042 and lands at 0.958. Everything below the top is
+ * better than that. Measured, transit-free against fully covered against fares
+ * waived, on a 12-district city — see tools/traffic.calibrate.mjs.
+ */
+export const TRANSIT_ROAD_SHARE = 0.7;
+
+/**
+ * How much more of the city rides when the fares are waived.
+ *
+ * The second half of what free transport buys, and distinct from
+ * FREE_TRANSPORT_REACH: that one makes the same depots *reach* a third further,
+ * which is a statement about coverage, and this is a statement about the people
+ * already covered choosing the bus over the car.
+ *
+ * A fully covered city with the fares waived takes 0.70 x 1.35 = 94.5% of its
+ * trips off the road, so it reads about 5% jammed at the very top of the ladder
+ * and nothing at all below it. That is the brief's "a fully covered city loses
+ * nothing", and it is deliberately 94.5% rather than a round 100: a city with
+ * no cars on it at all would be a claim, and the last twentieth is the freight
+ * and the people who will drive whatever is running.
+ */
+export const FREE_TRANSPORT_RIDERSHIP = 0.35;
+
+/**
+ * Happiness lost to a completely jammed city.
+ *
+ * Sized against the punitive tax rate's -0.14, which is the largest modifier
+ * already in the bracket: sitting in traffic all day should cost a city about
+ * what taxing it to the hilt does, and a fully covered network should give
+ * essentially all of it back. A modifier rather than a fifth weight, for the
+ * reason LANDMARK_MOOD and FREE_TRANSPORT_MOOD are both modifiers — the four
+ * weights sum to 1 and go on doing so.
+ */
+export const CONGESTION_MOOD = 0.14;
 
 // ---------------------------------------------------------------------- port
 

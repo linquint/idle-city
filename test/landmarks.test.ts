@@ -9,6 +9,7 @@ import {
 } from '../src/sim/config';
 import {
   canBuildLandmark,
+  congestion,
   happinessTarget,
   homeCapacity,
   housingPlots,
@@ -186,10 +187,17 @@ describe('landmarks and happiness', () => {
     const weights = HAPPINESS_SERVICES.reduce((sum, s) => sum + s.weight, 0) + RECREATION_WEIGHT;
     expect(weights).toBeCloseTo(1, 12);
 
-    const bare = city(4, { parks: 0 });
+    // The fixture carries a hospital so neither reading is against the floor:
+    // a city with no services at all now sits at 0 once the traffic modifier is
+    // taken off, and a difference measured against a clamp is not a difference.
+    const bare = city(4, { parks: 0, hospitals: 40, hospitalStaff: 1 });
     const marked = { ...bare, museums: 4, stadiums: 4 };
     const share = landmarkCoverage(marked);
     expect(share).toBeGreaterThan(0);
+    // Both sides carry the same traffic — a museum houses nobody, so it puts
+    // nothing on the road — which is what makes this a clean statement about
+    // the landmark term on its own.
+    expect(congestion(marked)).toBe(congestion(bare));
     expect(happinessTarget(marked)).toBeCloseTo(
       happinessTarget(bare) + LANDMARK_MOOD * share,
       12,
@@ -207,7 +215,18 @@ describe('landmarks and happiness', () => {
   });
 
   it('is worth nothing to a city that has already earned 1.00', () => {
-    const full = city(4, { ...served(), parks: 99 });
+    // Buses included, or the city has not earned 1.00: congestion is a modifier
+    // in the same bracket as this one, so a covered city with no transit is
+    // held under the ceiling by its own traffic rather than by anything a
+    // landmark could fix. See CONGESTION_MOOD.
+    const full = city(4, {
+      ...served(),
+      parks: 99,
+      depots: 40,
+      depotStaff: 1,
+      cityHall: true,
+      freeTransport: true,
+    });
     expect(happinessTarget(full)).toBeCloseTo(1, 12);
     expect(happinessTarget({ ...full, museums: 4, stadiums: 4 })).toBeCloseTo(1, 12);
   });

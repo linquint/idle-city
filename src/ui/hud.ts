@@ -20,6 +20,7 @@ import {
   CELL,
   LANDMARKS,
   LANDMARK_MOOD,
+  CONGESTION_MOOD,
   HAPPINESS_MIN_BUILD,
   PLOTS_PER_PARK,
   LEVEL_EDUCATION,
@@ -115,6 +116,8 @@ import {
   promotionBlocker,
   taxStep,
   transitCoverage,
+  congestion,
+  transitShare,
   zoneOf,
   priceModifier,
   housingPlots,
@@ -454,6 +457,8 @@ export class Hud {
     transit: el('transit'),
     transitFares: el('transit-fares'),
     transitLabour: el('transit-labour'),
+    transitCongestion: el('transit-congestion'),
+    transitCongestionMood: el('transit-congestion-mood'),
     landmarkShare: el('landmark-share'),
     landmarkMood: el('landmark-mood'),
     portBerths: el('port-berths'),
@@ -1304,7 +1309,8 @@ export class Hud {
 
     // Transport gets a block of its own for the same reason education does: it
     // answers a different question from happiness. What it says is what the
-    // network earns and what it reaches, which are its two jobs.
+    // network earns, what it reaches, and — since congestion arrived — what the
+    // streets are like, which is the third thing a depot is for.
     const fares = fareIncome(s);
     const spare = labourReach(s);
     n.transitFares.textContent = s.freeTransport ? 'free' : `${fmt(fares)}/s`;
@@ -1312,10 +1318,22 @@ export class Hud {
       spare < 1
         ? 'no spare labour reached'
         : `reaches ${fmtInt(spare)} spare workers`;
+    // The number and what it costs, in the units every other modifier in this
+    // HUD is stated in — see the tax and landmark rows, which both say "points
+    // of mood" against the same happiness target.
+    const jam = congestion(s);
+    const carried = transitShare(s);
+    n.transitCongestion.textContent = pct(jam);
+    n.transitCongestionMood.textContent =
+      jam <= 0
+        ? 'no effect on mood'
+        : `−${(CONGESTION_MOOD * jam * 100).toFixed(1)} points of mood`;
     n.transit.setAttribute(
       'aria-label',
       `Transport: ${s.depots} depots covering ${Math.round(transitCoverage(s) * 100)} percent, ` +
-        (s.freeTransport ? 'fares free' : `${Math.round(fares * 10) / 10} per second in fares`),
+        (s.freeTransport ? 'fares free' : `${Math.round(fares * 10) / 10} per second in fares`) +
+        `. Traffic ${Math.round(jam * 100)} percent, with ${Math.round(carried * 100)} percent of ` +
+        'trips on the network.',
     );
 
     // Education gets its own panel because it answers a different question: not
