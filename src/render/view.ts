@@ -53,6 +53,19 @@ export class View {
    * reproduce, which is the failure this whole layer is arranged to avoid.
    */
   private selected: BuildingRef | null = null;
+  /**
+   * The last state `sync` was handed, so a mode change between two syncs has
+   * numbers to read. A reference, never a copy — the view is a read-only
+   * subscriber and holding a copy is exactly what would make it wrong.
+   */
+  private lastState: Readonly<GameState> | null = null;
+  /**
+   * Told when the overlay changes, so the HUD's picker can follow the Z key.
+   *
+   * Same shape as `onSelect`: the view owns the state and announces it, and the
+   * HUD is a subscriber. Nothing flows the other way except a request.
+   */
+  onZoneMode: ((mode: ZoneMode) => void) | null = null;
   /** Reused across clicks. A raycast must not allocate, per frame or otherwise. */
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
@@ -169,20 +182,47 @@ export class View {
       return;
     }
     if (event.key !== 'z' && event.key !== 'Z') return;
-    this.toggleZones();
+    // Shift walks the list backwards. With seven modes on one key, a player who
+    // has gone one too far should not have to go round again — and the HUD
+    // picker is the other half of the same answer.
+    this.toggleZones(event.shiftKey);
   };
 
   /**
-   * The zone overlay, stepped off -> plan -> demand. Building colours are
-   * rebuilt once here rather than every frame; the pads themselves are rebuilt
-   * by the next `sync`, which keeps the view from having to hold on to a copy
-   * of the simulation's counts.
+   * The overlay, stepped through ZONE_MODES. Building colours are rebuilt once
+   * here rather than every frame; the pads themselves are rebuilt by the next
+   * `sync`, which keeps the view from having to hold on to a copy of the
+   * simulation's counts.
    */
-  toggleZones(): ZoneMode {
-    const mode = this.zones.cycle();
-    // Buildings only ever say which zone they stand in; demand is a property of
-    // the *unbuilt* land, so both overlay modes tint them the same way.
-    this.buildings.setZoneOverlay(mode !== 'off');
+  toggleZones(back = false): ZoneMode {
+    return this.applyZones(this.zones.cycle(back));
+  }
+
+  /** Jumps to one mode. What the HUD's picker calls. */
+  setZoneMode(mode: ZoneMode): ZoneMode {
+    return this.applyZones(this.zones.set(mode));
+  }
+
+  /** The overlay the view is showing, so the picker can mark it. */
+  get zoneMode(): ZoneMode {
+    return this.zones.current;
+  }
+
+  /** Pads drawn by the last overlay rebuild, for the dev report. */
+  get zoneInstances(): number {
+    return this.zones.instances;
+  }
+
+  /**
+   * Re-colours the buildings for a mode.
+   *
+   * Four of the six modes vary per building, so the overlay is a *source*
+   * rather than a colour — see `Zones.overlay`. The state has to be to hand for
+   * that, which is why the mode change is applied here and not inside `Zones`.
+   */
+  private applyZones(mode: ZoneMode): ZoneMode {
+    this.buildings.setZoneOverlay(this.lastState ? this.zones.overlay(this.lastState) : null);
+    this.onZoneMode?.(mode);
     return mode;
   }
 
@@ -218,7 +258,16 @@ export class View {
       this.select(null);
     }
     this.buildings.highlight(this.selected, state);
-    this.zones.sync(state);
+    // The state the overlay was last applied against, so a mode change made
+    // between two syncs has something to read. The view is a subscriber and
+    // holds no copy of the simulation's numbers — this is a reference to the
+    // one object it is handed, not a snapshot.
+    this.lastState = state;
+    // A rebuild of the pads is a rebuild of the buildings: the two halves of a
+    // mode read the same numbers and one stamp decides both.
+    if (this.zones.sync(state) && this.zones.enabled) {
+      this.buildings.setZoneOverlay(this.zones.overlay(state));
+    }
     this.courtyards.sync(state);
     this.parks.sync(state);
     // Before the traffic: the lorries route along the highway, so the road has

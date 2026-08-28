@@ -144,6 +144,7 @@ import {
 } from '../sim/economy';
 import { ESTATE_CELLS } from '../sim/estates';
 import type { BuildingRef } from '../render/buildings';
+import { ZONE_MODES, type ZoneMode } from '../render/zones';
 import type { AwayReport, Game } from '../sim/game';
 import {
   createPlacement,
@@ -162,6 +163,16 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
 
 export interface HudHooks {
   onReset: () => void;
+  /**
+   * Steps the map overlay to one mode, and reports what it settled on.
+   *
+   * The overlay is view state and stays in the view — nothing about it reaches
+   * `GameState` — so the HUD asks rather than deciding. The return is what the
+   * view actually chose, which is what the picker marks.
+   */
+  onZoneMode?: (mode: ZoneMode) => ZoneMode;
+  /** What the view is showing now, so the picker opens marked correctly. */
+  zoneMode?: () => ZoneMode;
   /** Dev-only time travel, wired to a button that only exists in dev builds. */
   onSkip?: (seconds: number) => void;
   /** Told when the card is dismissed, so the outline goes with it. */
@@ -409,6 +420,8 @@ export class Hud {
     graphs: el('graphs'),
     graphTiers: el('graph-tiers'),
     graphsNote: el('graphs-note'),
+    overlays: el('overlays'),
+    overlayNote: el('overlay-note'),
     education: el('education'),
     educationReach: el('education-reach'),
     educationNext: el('education-next'),
@@ -618,6 +631,12 @@ export class Hud {
   private awardsShown = '';
   /** What the awards tab label last said. Painted on every tick — see `paint`. */
   private awardsTabShown = '';
+  /** One chip per overlay mode, built once. See `buildOverlays`. */
+  private readonly overlayButtons = new Map<ZoneMode, HTMLButtonElement>();
+  /** The mode the picker is marking, so the note can be repainted live. */
+  private overlayShown: ZoneMode = 'off';
+  /** What that note last said, so an unchanged one is left alone. */
+  private overlayNoteShown = '';
   /**
    * Which tier the chart is showing. View state, and it stays in the view: the
    * ring the simulation keeps is the same whichever span is on screen.
@@ -715,6 +734,7 @@ export class Hud {
       n.taxSteps.append(button);
     }
 
+    this.buildOverlays();
     this.buildGraphs();
     this.buildAwards();
 
@@ -847,6 +867,9 @@ export class Hud {
     // reason to open the tab at all. Cheap: one integer compare and, on the
     // handful of ticks it changes, one string write.
     this.paintAwardsTab(s);
+    // The traffic overlay's number, which the map cannot carry — see
+    // `paintOverlayNote`. Cheap and guarded, like the tab label above it.
+    if (this.overlayShown !== 'off') this.paintOverlayNote();
 
     this.paintCard(s);
   }
@@ -931,6 +954,69 @@ export class Hud {
         // no consequence to report — the line is the whole of it.
         return { text: `Unlocked — ${event.name}`, tone: 'good' };
     }
+  }
+
+  /**
+   * Builds the overlay picker once, and keeps it marked.
+   *
+   * Rendered whether or not the view wired the hooks, because the markup is in
+   * `index.html` either way and an empty row of chips would be worse than none:
+   * with no hook the picker simply is not built.
+   */
+  private buildOverlays(): void {
+    if (!this.hooks.onZoneMode) return;
+    for (const mode of ZONE_MODES) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'overlay';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', 'false');
+      button.title = mode.note;
+      button.textContent = mode.label;
+      button.addEventListener('click', () => {
+        this.markOverlay(this.hooks.onZoneMode?.(mode.key) ?? mode.key);
+      });
+      this.overlayButtons.set(mode.key, button);
+      this.nodes.overlays.append(button);
+    }
+    this.markOverlay(this.hooks.zoneMode?.() ?? 'off');
+  }
+
+  /**
+   * Marks the mode the view is showing.
+   *
+   * Public because the Z key belongs to the view, not to this panel: the view
+   * cycles and tells the HUD what it landed on, so one control cannot get out
+   * of step with the other.
+   */
+  markOverlay(mode: ZoneMode): void {
+    for (const [key, button] of this.overlayButtons) {
+      button.setAttribute('aria-checked', String(key === mode));
+    }
+    this.overlayShown = mode;
+    this.paintOverlayNote();
+  }
+
+  /**
+   * The note under the picker.
+   *
+   * Repainted every tick rather than only on a mode change, because the traffic
+   * mode has to carry its *number*: congestion is a city-wide scalar, so the
+   * map can only show that the streets are tinted and not how badly — the
+   * reading itself has to be in words. Guarded on the string, like every other
+   * live region in this file.
+   */
+  private paintOverlayNote(): void {
+    const mode = this.overlayShown;
+    const entry = ZONE_MODES.find((one) => one.key === mode);
+    const text =
+      mode === 'off' ? ''
+      : mode === 'traffic'
+        ? `${pct(congestion(this.game.state))} jammed. ${entry?.note ?? ''}`
+        : (entry?.note ?? '');
+    if (text === this.overlayNoteShown) return;
+    this.overlayNoteShown = text;
+    this.nodes.overlayNote.textContent = text;
   }
 
   /**

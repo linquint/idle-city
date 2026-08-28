@@ -20,7 +20,16 @@
   <p>every purchase is a building</p>
 </header>
 
-<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z for the zoning plan, again for demand</p>
+<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z steps the overlay, Shift-Z steps back</p>
+
+<!-- The overlay picker. Out of the dock and next to the hint on purpose: it is
+     a control over the *map* rather than over the city, and it is the one
+     control a touch device cannot reach any other way — there is no Z key on a
+     phone. -->
+<div class="overlay-pick">
+  <div class="overlays" id="overlays" role="radiogroup" aria-label="Map overlay"></div>
+  <p class="overlay-note" id="overlay-note"></p>
+</div>
 
 <!-- One docked control in the bottom-left corner, with the selected building's
      card stacked above it. A wrapper rather than two fixed panels, because the

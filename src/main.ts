@@ -33,7 +33,15 @@ const hud = new Hud(game, layout, {
   // Dismissing the card is the same act as clearing the selection, so the
   // outline in the world goes with it rather than being left behind.
   onDeselect: () => view.select(null),
+  // The overlay is the view's, so the picker asks rather than deciding — and
+  // the view hands back what it settled on, which is what the chips mark.
+  onZoneMode: (mode) => view.setZoneMode(mode),
+  zoneMode: () => view.zoneMode,
 });
+
+// And the other direction: the Z key belongs to the view, so a cycle there has
+// to move the picker or the two controls would disagree about what is showing.
+view.onZoneMode = (mode) => hud.markOverlay(mode);
 
 // Selection is view state and stays there: the view owns what was clicked, the
 // HUD owns what is said about it, and neither writes it anywhere.

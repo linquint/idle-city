@@ -130,4 +130,14 @@ export const PALETTE = {
   demandHigh: 0x5fd08a,
   demandNeutral: 0x46536a,
   demandLow: 0xe0574b,
+  // The sequential ramp the quantity overlays share — land value, build order,
+  // traffic. Cold to warm rather than red to green, so it cannot be mistaken
+  // for the demand ramp above it: demand has a sign and diverges around a
+  // neutral, and these do not.
+  overlayLow: 0x2f5d8c,
+  overlayHigh: 0xf0a64b,
+  // A plot the mode being shown has nothing to say about — a shop under the
+  // land-value overlay, which is a statement about housing. Dim and neutral, so
+  // it reads as "not measured" rather than as "measured low".
+  overlayMute: 0x39435a,
 } as const;
