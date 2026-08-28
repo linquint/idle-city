@@ -1,5 +1,11 @@
 import { EventLog, EVENT_COVERAGE_LOST, type GameEvent } from '../core/events.ts';
 import { ACHIEVEMENTS, ACHIEVEMENT_TEST_SECONDS } from './achievements.ts';
+import {
+  HISTORY_COARSE_SECONDS,
+  HISTORY_FINE_SECONDS,
+  advance as advanceTier,
+  emptyHistory,
+} from './history.ts';
 import { districtLand } from './layout.ts';
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
@@ -89,6 +95,7 @@ import {
   recoverRate,
   abandonRate,
   recreationCoverage,
+  residents,
   housingPlots,
   resolvesAt,
   standingOf,
@@ -405,6 +412,12 @@ export class Game {
     // from one patch object would otherwise share it and unlock each other's
     // rows.
     this.inner.unlocked = { ...state.unlocked };
+    // And the chart, for the same reason again: two games spread from one patch
+    // would otherwise write into one another's rings.
+    this.inner.history = {
+      fine: { ...state.history.fine },
+      coarse: { ...state.history.coarse },
+    };
   }
 
   get state(): Readonly<GameState> {
@@ -484,6 +497,46 @@ export class Game {
     // after everything that could settle it, including the purchase
     // auto-development just made.
     this.checkAchievements(dt);
+    // And the chart, which reads the settled tick for the same reason. It is a
+    // pure readout — nothing in the loop above consults it — so it is last.
+    this.recordHistory(dt);
+  }
+
+  /**
+   * Banks `dt` into both tiers of the chart and samples whichever have come due.
+   *
+   * `residents` rather than `population`, and `income` rather than `netIncome`:
+   * the chart is about the city that exists, not the one its housing was built
+   * for, and about what the buildings take in before the wage bill — which is
+   * the line the Treasury tab calls gross and the one a player watching a graph
+   * of "income" means.
+   *
+   * Read once and handed to both tiers, because they are two views of the same
+   * instant and computing `income(s)` twice a minute for the sake of symmetry
+   * would be two walks of the cohorts for one number.
+   */
+  private recordHistory(dt: number): void {
+    const s = this.inner;
+    const fine = s.history.fine;
+    const coarse = s.history.coarse;
+    // Neither tier is due on the overwhelming majority of ticks, so the sample
+    // is built only once one of them is — `income` and `residents` are cohort
+    // walks and this runs ten times a second.
+    if (
+      fine.clock + dt < HISTORY_FINE_SECONDS &&
+      coarse.clock + dt < HISTORY_COARSE_SECONDS
+    ) {
+      fine.clock += Math.max(0, dt);
+      coarse.clock += Math.max(0, dt);
+      return;
+    }
+    const sample = {
+      population: residents(s),
+      income: income(s),
+      happiness: s.happiness,
+    };
+    advanceTier(fine, dt, HISTORY_FINE_SECONDS, sample);
+    advanceTier(coarse, dt, HISTORY_COARSE_SECONDS, sample);
   }
 
   /**
@@ -1524,6 +1577,9 @@ export class Game {
     this.covering.clear();
     this.lit = true;
     this.achievementClock = 0;
+    // `createState` already handed the new state empty rings; this says so
+    // explicitly next to the other per-run counters rather than relying on it.
+    this.inner.history = emptyHistory();
   }
 
   /**

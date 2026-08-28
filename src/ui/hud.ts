@@ -1,5 +1,14 @@
 import { EventLog, type GameEvent } from '../core/events';
 import {
+  HISTORY_SAMPLES,
+  HISTORY_TIER_LABELS,
+  readTier,
+  tierLength,
+  tierOf,
+  type HistorySample,
+  type HistoryTierKey,
+} from '../sim/history';
+import {
   ACHIEVEMENT_COUNT,
   ACHIEVEMENT_GROUPS,
   achievementReadings,
@@ -165,6 +174,7 @@ const TAB_KEYS = [
   'landmarks',
   'trade',
   'estates',
+  'graphs',
   'awards',
 ] as const;
 type TabKey = (typeof TAB_KEYS)[number];
@@ -222,6 +232,105 @@ const ZONE_LIFT_NAMES: Record<ZoneKind, string> = {
   industry: 'Industrial',
 };
 
+/** The three series the Graphs tab draws. */
+type GraphKey = 'population' | 'income' | 'happiness';
+
+/**
+ * What each series is called, how it is read out of a sample, and what shape its
+ * y-axis is.
+ *
+ * Population and income are logarithmic and have to be: income spans 54/s at the
+ * opening to 9.04e9/s at 49 districts of megastructures, so a linear axis over a
+ * whole game would draw the first eight orders of magnitude as a flat line along
+ * the bottom. Happiness is a share of one and is drawn against 0..1 fixed, so the
+ * height of the line means the same thing on every chart rather than being
+ * rescaled to whatever range the city happened to sit in.
+ */
+const GRAPH_SERIES: readonly {
+  key: GraphKey;
+  label: string;
+  log: boolean;
+  read: (sample: HistorySample) => number;
+  format: (value: number) => string;
+}[] = [
+  {
+    key: 'population',
+    label: 'Residents',
+    log: true,
+    read: (sample) => sample.population,
+    format: (value) => fmtInt(value),
+  },
+  {
+    key: 'income',
+    label: 'Income',
+    log: true,
+    read: (sample) => sample.income,
+    format: (value) => `${fmt(value)}/s`,
+  },
+  {
+    key: 'happiness',
+    label: 'Happiness',
+    log: false,
+    read: (sample) => sample.happiness,
+    format: (value) => pct(value),
+  },
+];
+
+/** Padding at the top and bottom of a plot, in the 100-unit user space. */
+const GRAPH_INSET = 6;
+
+/**
+ * One series as an SVG path, in a fixed 100 x 100 user space.
+ *
+ * The viewBox is stretched to whatever width the dock is, which is why the
+ * stroke carries `vector-effect`. Time runs left to right with the oldest sample
+ * at x = 0 and the newest at x = 100 whether the ring holds five samples or a
+ * hundred and twenty: a chart that grew in from the left would redraw its whole
+ * x-axis every minute for the first two hours.
+ *
+ * A log axis is taken over the *decades the data actually spans*, padded by one
+ * so a flat series is a line through the middle rather than a line pinned to an
+ * edge. Zero and anything negative are dropped to the floor of the range, which
+ * is the honest reading: a city with no residents has no point on a log axis.
+ *
+ * The plot is inset by GRAPH_INSET at the top and bottom, because the stroke is
+ * centred on the path and a series sitting at either extreme — happiness at 100%
+ * is the everyday case — would otherwise be drawn half outside the box and come
+ * out looking like a hairline.
+ */
+function graphPath(values: readonly number[], log: boolean): string {
+  if (values.length === 0) return '';
+  let lo: number;
+  let hi: number;
+  if (log) {
+    const positive = values.filter((v) => v > 0);
+    // Nothing to plot yet: one flat line along the bottom says "not yet" better
+    // than an empty box does.
+    lo = positive.length > 0 ? Math.log10(Math.min(...positive)) : 0;
+    hi = positive.length > 0 ? Math.log10(Math.max(...positive)) : 0;
+    if (hi - lo < 1) {
+      const mid = (hi + lo) / 2;
+      lo = mid - 0.5;
+      hi = mid + 0.5;
+    }
+  } else {
+    lo = 0;
+    hi = 1;
+  }
+  const span = hi - lo || 1;
+  const step = values.length > 1 ? 100 / (values.length - 1) : 0;
+  let d = '';
+  for (let i = 0; i < values.length; i++) {
+    const raw = values[i] ?? 0;
+    const at = log ? (raw > 0 ? Math.log10(raw) : lo) : raw;
+    const y = 100 - GRAPH_INSET - ((at - lo) / span) * (100 - GRAPH_INSET * 2);
+    // Two decimal places is a tenth of a pixel at any width the dock reaches,
+    // and it keeps the path string short enough to compare cheaply.
+    d += `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(2)} ${Math.max(0, Math.min(100, y)).toFixed(2)}`;
+  }
+  return d;
+}
+
 /** The highest level anything in a cohort has reached. 0 for an empty city. */
 function topLevel(levels: readonly number[]): number {
   for (let l = LEVELS - 1; l > 0; l--) if ((levels[l] ?? 0) > 0) return l;
@@ -278,6 +387,9 @@ export class Hud {
     demandINum: el('demand-i-num'),
     services: el('services'),
     awardsList: el('awards-list'),
+    graphs: el('graphs'),
+    graphTiers: el('graph-tiers'),
+    graphsNote: el('graphs-note'),
     education: el('education'),
     educationReach: el('education-reach'),
     educationNext: el('education-next'),
@@ -485,6 +597,18 @@ export class Hud {
   private awardsShown = '';
   /** What the awards tab label last said. Painted on every tick — see `paint`. */
   private awardsTabShown = '';
+  /**
+   * Which tier the chart is showing. View state, and it stays in the view: the
+   * ring the simulation keeps is the same whichever span is on screen.
+   */
+  private graphTier: HistoryTierKey = 'fine';
+  /** One block per series, built once. Same reasoning as `awardRows`. */
+  private readonly graphRows = new Map<
+    GraphKey,
+    { block: HTMLElement; now: HTMLElement; path: SVGPathElement }
+  >();
+  /** What the chart last drew, so an unchanged panel is left alone. */
+  private graphsShown = '';
 
   constructor(
     private readonly game: Game,
@@ -570,6 +694,7 @@ export class Hud {
       n.taxSteps.append(button);
     }
 
+    this.buildGraphs();
     this.buildAwards();
 
     n.occupancyMark.style.left = `${ANNEX_MIN_OCCUPANCY * 100}%`;
@@ -694,6 +819,7 @@ export class Hud {
     else if (this.open === 'landmarks') this.paintLandmarks(s);
     else if (this.open === 'trade') this.paintTrade(s);
     else if (this.open === 'estates') this.paintEstates(s);
+    else if (this.open === 'graphs') this.paintGraphs(s);
     else this.paintAwards(s);
 
     // The one label painted whatever tab is open, because the count is the
@@ -784,6 +910,107 @@ export class Hud {
         // no consequence to report — the line is the whole of it.
         return { text: `Unlocked — ${event.name}`, tone: 'good' };
     }
+  }
+
+  /**
+   * Builds the three charts and the span toggle once.
+   *
+   * SVG rather than a canvas, and no library at all: three polylines over a
+   * hundred and twenty points is a `d` attribute, and a chart package would be a
+   * dependency and a build step for something the DOM already draws. Only the
+   * path and the current value are written on a paint.
+   */
+  private buildGraphs(): void {
+    const n = this.nodes;
+    for (const key of ['fine', 'coarse'] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'step';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(key === this.graphTier));
+      button.textContent = HISTORY_TIER_LABELS[key];
+      button.addEventListener('click', () => {
+        this.graphTier = key;
+        for (const other of n.graphTiers.children) {
+          other.setAttribute('aria-checked', String(other === button));
+        }
+        // The panel is keyed on the tier, so the guard has to be cleared or the
+        // toggle would change the label and leave the old span on screen.
+        this.graphsShown = '';
+        this.paint();
+      });
+      n.graphTiers.append(button);
+    }
+
+    for (const series of GRAPH_SERIES) {
+      const block = document.createElement('div');
+      block.className = `graph ${series.key === 'happiness' ? 'mood' : ''}`.trim();
+      const head = document.createElement('div');
+      head.className = 'graph-head';
+      const label = document.createElement('span');
+      label.className = 'k';
+      label.textContent = series.label;
+      const now = document.createElement('span');
+      now.className = 'now';
+      head.append(label, now);
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 100 100');
+      // The aspect ratio is deliberately not preserved: the plot is stretched to
+      // the dock's width, which is what makes one x-axis span the panel at any
+      // size. `vector-effect` on the stroke is what keeps that from thickening
+      // the line — see the stylesheet.
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', `${series.label} over time`);
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('class', 'line');
+      svg.append(path);
+
+      block.append(head, svg);
+      this.nodes.graphs.append(block);
+      this.graphRows.set(series.key, { block, now, path });
+    }
+  }
+
+  /**
+   * The graphs panel: three series over the span the toggle selects.
+   *
+   * Read out of the save's ring rather than out of a buffer the HUD keeps, which
+   * is the whole point of the feature: a city that was away for six hours comes
+   * back with six hours of chart rather than with an empty one. The current value
+   * is the *live* reading rather than the last sample, because a sample can be a
+   * minute old and the number next to a chart should agree with the dock.
+   */
+  private paintGraphs(s: Readonly<GameState>): void {
+    const tier = tierOf(s, this.graphTier);
+    const held = tierLength(tier);
+    // Keyed on the tier and on how much of it is filled plus the head, which is
+    // exactly what changes when a sample lands. Cheaper than decoding 120
+    // samples ten times a second to find out nothing moved.
+    const shown = `${this.graphTier}:${held}:${tier.head}:${Math.floor(s.elapsed)}`;
+    if (shown === this.graphsShown) return;
+    this.graphsShown = shown;
+
+    const samples = readTier(tier);
+    for (const series of GRAPH_SERIES) {
+      const row = this.graphRows.get(series.key);
+      if (!row) continue;
+      row.path.setAttribute('d', graphPath(samples.map(series.read), series.log));
+      row.block.classList.toggle('empty', samples.length === 0);
+      row.now.textContent = series.format(
+        series.key === 'population' ? residents(s)
+        : series.key === 'income' ? income(s)
+        : s.happiness,
+      );
+    }
+
+    this.nodes.graphsNote.textContent =
+      held === 0
+        ? 'Nothing charted yet — the first point lands a minute in.'
+        : held < HISTORY_SAMPLES
+          ? `${held} of ${HISTORY_SAMPLES} points, oldest on the left.`
+          : `The last ${HISTORY_TIER_LABELS[this.graphTier]}, oldest on the left.`;
   }
 
   /**

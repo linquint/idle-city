@@ -1,4 +1,5 @@
 import { ACHIEVEMENTS } from './achievements';
+import { emptyHistory, migrateHistory } from './history';
 import {
   LEVELS,
   MAX_ACTIVE_FIRES,
@@ -39,7 +40,7 @@ import {
   openZoning,
 } from './state';
 
-export const SAVE_KEY = 'idle-city/save/v11';
+export const SAVE_KEY = 'idle-city/save/v12';
 
 /**
  * Keys this game has written in the past, newest first.
@@ -49,6 +50,7 @@ export const SAVE_KEY = 'idle-city/save/v11';
  * the older keys and lets `migrate` bring whatever it finds forward.
  */
 const LEGACY_SAVE_KEYS = [
+  'idle-city/save/v11',
   'idle-city/save/v10',
   'idle-city/save/v9',
   'idle-city/save/v8',
@@ -434,6 +436,18 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     autoDevelop: r['autoDevelop'] === true,
     // Filled in below, once the table is there to check the keys against.
     unlocked: {},
+    /**
+     * The chart, rebuilt from whatever arrived or dropped entirely.
+     *
+     * A save older than v12 has none, which is exactly the state a city that has
+     * never been charted is in: the rings open empty and fill from now. There is
+     * nothing to reconstruct — the series is a record of what was watched, and
+     * an older save watched nothing.
+     *
+     * `migrateHistory` degrades rather than throwing, so a corrupt or
+     * wrong-length ring costs the chart and nothing else.
+     */
+    history: version >= 12 ? migrateHistory(r['history']) : emptyHistory(),
     savedAt: num(r['savedAt'], now),
   };
 

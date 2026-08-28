@@ -402,6 +402,48 @@ button.tab[aria-selected='true'] {
 }
 .svc.covered .covers { color: var(--signal); }
 
+/* The graphs.
+
+   Three stacked sparklines sharing an x-axis, drawn as inline SVG because a
+   chart library would be a dependency for three polylines. Each one is a header
+   row on .svc's metrics and a fixed-height plot under it, so a panel that is
+   half readout and half picture still reads as one list. */
+.graphs { display: block; }
+.graph:not(:first-child) { margin-top: 10px; }
+.graph-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+.graph-head .k { flex: 1 1 auto; }
+.graph-head .now {
+  font-variant-numeric: tabular-nums;
+  color: var(--concrete);
+}
+.graph svg {
+  display: block;
+  width: 100%;
+  height: 42px;
+  background: #1c2739;
+}
+.graph .line {
+  fill: none;
+  stroke: var(--signal);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  /* The plot is drawn in a 100x100 user space and stretched to the panel's
+     width, so an untouched stroke would be scaled with it and come out a
+     different weight on every screen. */
+  vector-effect: non-scaling-stroke;
+}
+.graph.mood .line { stroke: var(--sodium); }
+/* A series with nothing in it yet: the axis is still worth drawing, so the
+   empty state is a caption rather than a blank panel. */
+.graph.empty svg { opacity: 0.35; }
+
 /* The awards list.
 
    Built on .svc's metrics rather than beside them, for the reason the demand
