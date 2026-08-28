@@ -22,7 +22,8 @@
     "power:calibrate": "node tools/power.calibrate.mjs",
     "traffic:calibrate": "node tools/traffic.calibrate.mjs",
     "education:calibrate": "node tools/education.calibrate.mjs",
-    "pedestrians:calibrate": "node --experimental-transform-types tools/pedestrians.calibrate.mjs"
+    "pedestrians:calibrate": "node --experimental-transform-types tools/pedestrians.calibrate.mjs",
+    "lod:calibrate": "node --experimental-transform-types tools/lod.calibrate.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

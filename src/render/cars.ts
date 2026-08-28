@@ -1,23 +1,23 @@
 import * as THREE from 'three';
-import { mixSeed, rng } from '../core/rng';
-import { CELL, SEED } from '../sim/config';
-import { congestion, landmarkCoverage, residents } from '../sim/economy';
+import { mixSeed, rng } from '../core/rng.ts';
+import { CELL, SEED } from '../sim/config.ts';
+import { congestion, landmarkCoverage, residents } from '../sim/economy.ts';
 import {
   DISTRICT_WIDTH,
   worldX,
   worldZ,
   type CityLayout,
   type District,
-} from '../sim/layout';
-import type { GameState } from '../sim/state';
-import { Glow } from './glow';
-import { ROAD_H, ROAD_W } from './ground';
-import { GrowableInstancedMesh } from './growable';
-import { bandLane, spurLane, type Lane } from './highway';
-import { PALETTE } from './palette';
+} from '../sim/layout.ts';
+import type { GameState } from '../sim/state.ts';
+import { Glow } from './glow.ts';
+import { ROAD_H, ROAD_W } from './ground.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { bandLane, spurLane, type Lane } from './highway.ts';
+import { PALETTE } from './palette.ts';
 // The district's street graph, which the pavements read as well. Moved out of
 // this file rather than exported from it: a street belongs to neither fleet.
-import { roadLines, type RoadLines } from './streets';
+import { roadLines, type RoadLines } from './streets.ts';
 
 /**
  * Traffic, and nothing else.

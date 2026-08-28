@@ -20,13 +20,22 @@
   <p>every purchase is a building</p>
 </header>
 
-<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z steps the overlay, Shift-Z steps back</p>
+<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z steps the overlay, Shift-Z steps back<br>V goes down to street level</p>
 
 <!-- The overlay picker. Out of the dock and next to the hint on purpose: it is
      a control over the *map* rather than over the city, and it is the one
      control a touch device cannot reach any other way — there is no Z key on a
      phone. -->
 <div class="overlay-pick">
+  <!-- Street level, on the same shelf as the overlay chips and for the same
+       reason: it is a control over the *camera* rather than over the city, and
+       there is no V key on a phone. Its own row above the overlays, because it
+       is a different question — the overlays are a radio group and this is a
+       switch, and putting a switch in a radiogroup lies to a screen reader. -->
+  <div class="camera-pick">
+    <button type="button" class="overlay" id="street-view" aria-pressed="false"
+      title="Drop the camera to street level. V.">Street level</button>
+  </div>
   <div class="overlays" id="overlays" role="radiogroup" aria-label="Map overlay"></div>
   <p class="overlay-note" id="overlay-note"></p>
 </div>

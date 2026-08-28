@@ -1,21 +1,21 @@
 import * as THREE from 'three';
-import { cityCentre, cityRadius, CityLayout } from '../sim/layout';
-import { countOf } from '../sim/economy';
-import type { GameState } from '../sim/state';
-import { Buildings, type BuildingRef } from './buildings';
-import { CameraRig } from './cameraRig';
-import { Cars } from './cars';
-import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight';
-import { Fires } from './fires';
-import { Estates } from './estates';
-import { Ground } from './ground';
-import { Highway, highwayReach } from './highway';
-import { Pedestrians } from './pedestrians';
-import { Port, portReach } from './port';
-import { Ships } from './ships';
-import { Water } from './water';
-import { World } from './world';
-import { Courtyards, Parks, Zones, type ZoneMode } from './zones';
+import { cityCentre, cityRadius, CityLayout } from '../sim/layout.ts';
+import { countOf } from '../sim/economy.ts';
+import type { GameState } from '../sim/state.ts';
+import { Buildings, type BuildingRef } from './buildings.ts';
+import { CameraRig } from './cameraRig.ts';
+import { Cars } from './cars.ts';
+import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight.ts';
+import { Fires } from './fires.ts';
+import { Estates } from './estates.ts';
+import { Ground } from './ground.ts';
+import { Highway, highwayReach } from './highway.ts';
+import { Pedestrians } from './pedestrians.ts';
+import { Port, portReach } from './port.ts';
+import { Ships } from './ships.ts';
+import { Water } from './water.ts';
+import { World } from './world.ts';
+import { Courtyards, Parks, Zones, type ZoneMode } from './zones.ts';
 
 /**
  * The view layer, entire.
@@ -73,6 +73,11 @@ export class View {
    * HUD is a subscriber. Nothing flows the other way except a request.
    */
   onZoneMode: ((mode: ZoneMode) => void) | null = null;
+  /**
+   * Told when the camera goes to street level or comes back, so the HUD can say
+   * so. Same shape as `onZoneMode`: the view owns the state and announces it.
+   */
+  onStreet: ((street: boolean) => void) | null = null;
   /** Reused across clicks. A raycast must not allocate, per frame or otherwise. */
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
@@ -189,12 +194,36 @@ export class View {
       this.select(null);
       return;
     }
+    // Street level, and back. Its own key rather than a zoom past MIN_RADIUS:
+    // the orbit camera is the play camera and has to behave exactly as it did.
+    if (event.key === 'v' || event.key === 'V') {
+      this.toggleStreet();
+      return;
+    }
     if (event.key !== 'z' && event.key !== 'Z') return;
     // Shift walks the list backwards. With seven modes on one key, a player who
     // has gone one too far should not have to go round again — and the HUD
     // picker is the other half of the same answer.
     this.toggleZones(event.shiftKey);
   };
+
+  /**
+   * Goes to street level, or comes back up. Returns where it ended up.
+   *
+   * The rig owns the move; this owns telling the HUD, exactly as `toggleZones`
+   * does. Nothing about the mode reaches the simulation — it is a camera, and a
+   * camera is the most view-only thing in the project.
+   */
+  toggleStreet(): boolean {
+    this.rig.setStreet(!this.rig.street);
+    this.onStreet?.(this.rig.street);
+    return this.rig.street;
+  }
+
+  /** Whether the camera is at street level. */
+  get street(): boolean {
+    return this.rig.street;
+  }
 
   /**
    * The overlay, stepped through ZONE_MODES. Building colours are rebuilt once
@@ -295,6 +324,21 @@ export class View {
     this.rig.update(dt);
     this.world.focusShadows(this.rig.target);
     this.world.updateFog(this.rig.distance);
+
+    // What the buildings are dressed for. It answers "no" on nearly every
+    // frame — the mask only moves when the camera has walked half a district or
+    // crossed the engage distance — and a repack is 2.5 ms on the largest city,
+    // so it must not be asked for more often than that. See `DetailMask`.
+    if (
+      this.buildings.setDetail(
+        this.rig.target.x,
+        this.rig.target.z,
+        this.rig.distance,
+        this.shownDistricts,
+      )
+    ) {
+      this.buildings.repack(this.elapsed);
+    }
 
     // Both of these are O(instances currently in flight), so calling them every
     // frame costs nothing once the city has settled.

@@ -13,7 +13,7 @@ import {
   type CityLayout,
   type District,
 } from '../sim/layout.ts';
-import { cityRadius } from '../sim/layout.ts';
+import { cityCentre, cityRadius } from '../sim/layout.ts';
 import { GrowableInstancedMesh } from './growable.ts';
 import { PALETTE } from './palette.ts';
 
@@ -194,14 +194,14 @@ export class Ground {
       new THREE.BoxGeometry(DISTRICT_WIDTH, LAND_H, DISTRICT_WIDTH),
       new THREE.MeshLambertMaterial({ color: PALETTE.land }),
       4,
-      { receiveShadow: true },
+      { receiveShadow: true, name: 'ground:land' },
     );
     this.asphalt = new GrowableInstancedMesh(
       scene,
       new THREE.BoxGeometry(1, ROAD_H, 1),
       new THREE.MeshLambertMaterial({ color: PALETTE.asphalt }),
       256,
-      { receiveShadow: true },
+      { receiveShadow: true, name: 'ground:asphalt' },
     );
     // The kerb throws a hairline shadow, which is most of what sells the street.
     this.pavement = new GrowableInstancedMesh(
@@ -209,7 +209,7 @@ export class Ground {
       new THREE.BoxGeometry(1, PAVE_H, 1),
       new THREE.MeshLambertMaterial({ color: PALETTE.kerb }),
       1024,
-      { castShadow: true, receiveShadow: true },
+      { castShadow: true, receiveShadow: true, name: 'ground:pavement' },
     );
   }
 
@@ -225,6 +225,7 @@ export class Ground {
       return;
     }
     this.layout.ensureFixed(districts);
+    this.fitBounds(districts);
 
     for (let i = this.ranges.length; i < districts; i++) {
       const district = this.layout.districts[i] as District;
@@ -286,6 +287,25 @@ export class Ground {
     this.rising = moving;
     this.flush();
     return moving;
+  }
+
+  /**
+   * States what the street grid covers, so the three meshes can be
+   * frustum-culled — the pavement is the largest instance buffer in the whole
+   * scene (9,092 instances at 49 districts, a quarter of every triangle
+   * submitted), which is what makes it worth stating.
+   *
+   * The floor is -LIFT rather than 0: a district that has just been annexed is
+   * still rising, and bounds that stopped at grade would cull the land tile on
+   * exactly the frames it is being revealed. See `GrowableInstancedMesh.setBounds`
+   * for why they are stated rather than derived.
+   */
+  private fitBounds(districts: number): void {
+    const centre = cityCentre(districts);
+    const reach = cityRadius(districts) + DISTRICT_WIDTH / 2;
+    for (const mesh of [this.land, this.asphalt, this.pavement]) {
+      mesh.setBounds(centre.x, centre.z, reach, PAVE_H, -LIFT - LAND_H);
+    }
   }
 
   private flush(): void {

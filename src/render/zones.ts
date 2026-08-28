@@ -1,21 +1,24 @@
 import * as THREE from 'three';
-import { hash01 } from '../core/rng';
-import { ZONE } from '../sim/citygen';
-import { CELL, CIVIC_SERVICES, HAPPINESS_SERVICES } from '../sim/config';
-import { congestion, covered, serviceCount, zoneOf } from '../sim/economy';
+import { hash01 } from '../core/rng.ts';
+import { ZONE } from '../sim/citygen.ts';
+import { CELL, CIVIC_SERVICES, HAPPINESS_SERVICES } from '../sim/config.ts';
+import { congestion, covered, serviceCount, zoneOf } from '../sim/economy.ts';
 import {
   BUILDABLE_PARKS_PER_DISTRICT as PARKS_PER_DISTRICT,
+  DISTRICT_WIDTH,
+  cityCentre,
+  cityRadius,
   createPlacement,
   housingCentrality,
   worldX,
   worldZ,
   type CityLayout,
   type Coord,
-} from '../sim/layout';
-import type { GameState, ZoneKind } from '../sim/state';
-import { ROAD_H } from './ground';
-import { GrowableInstancedMesh } from './growable';
-import { PALETTE } from './palette';
+} from '../sim/layout.ts';
+import type { GameState, ZoneKind } from '../sim/state.ts';
+import { ROAD_H } from './ground.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { PALETTE } from './palette.ts';
 
 /** A gutter under the pad so plots read as plots rather than as a colour wash. */
 const PAD = CELL - 0.8;
@@ -62,6 +65,21 @@ const quantise = (d: number): number => Math.round(d * DEMAND_STEPS);
  * Always on, unlike the zoning overlay, and rebuilt only when a count it draws
  * from actually moves.
  */
+/**
+ * States what a ground-level layer covers, so its meshes can be frustum-culled.
+ *
+ * One helper rather than three copies of the same trig: everything here stands
+ * on the city's own land, so the extent is the city's — which the simulation
+ * states in `cityRadius` and which moves only when a district is annexed. See
+ * `GrowableInstancedMesh.setBounds` for why bounds are stated rather than
+ * derived from the instance buffers.
+ */
+function fitToCity(districts: number, top: number, ...meshes: GrowableInstancedMesh[]): void {
+  const centre = cityCentre(districts);
+  const reach = cityRadius(districts) + DISTRICT_WIDTH / 2;
+  for (const mesh of meshes) mesh.setBounds(centre.x, centre.z, reach, top);
+}
+
 export class Courtyards {
   private readonly pads: GrowableInstancedMesh;
   private readonly dummy = new THREE.Object3D();
@@ -79,7 +97,7 @@ export class Courtyards {
       new THREE.BoxGeometry(PAD, PAD_H, PAD),
       new THREE.MeshLambertMaterial({ color: PALETTE.courtyard }),
       256,
-      { receiveShadow: true },
+      { receiveShadow: true, name: 'zone:courtyard' },
     );
   }
 
@@ -95,6 +113,7 @@ export class Courtyards {
     if (stamp === this.stamp) return;
     this.stamp = stamp;
     this.layout.ensure(state);
+    fitToCity(state.districts, PAD_Y + PAD_H, this.pads);
 
     const courtyards = this.layout.courtyards;
     // Parks are the front of the courtyard list, so the plots still standing
@@ -176,7 +195,12 @@ class ParkTrees {
   static readonly PER_PARK = 4;
   /** Kept inside the pad, so no canopy overhangs the kerb. */
   static readonly SPREAD = PAD / 2 - 0.55;
+  /** Trunk and canopy, at the top of the height jitter. What TREE_TOP is. */
+  static readonly TALLEST = (0.55 + 1.15) * 1.28;
 }
+
+/** The highest a park reaches, which is what its meshes are culled against. */
+const TREE_TOP = PAD_Y + ParkTrees.TALLEST;
 
 export class Parks {
   private readonly pads: GrowableInstancedMesh;
@@ -195,21 +219,21 @@ export class Parks {
       new THREE.BoxGeometry(PAD, PAD_H, PAD),
       new THREE.MeshLambertMaterial({ color: PALETTE.park }),
       64,
-      { receiveShadow: true },
+      { receiveShadow: true, name: 'zone:park' },
     );
     this.trunks = new GrowableInstancedMesh(
       scene,
       new THREE.BoxGeometry(0.16, 0.55, 0.16),
       new THREE.MeshLambertMaterial({ color: PALETTE.trunk }),
       256,
-      { castShadow: true },
+      { castShadow: true, name: 'zone:trunk' },
     );
     this.canopies = new GrowableInstancedMesh(
       scene,
       new THREE.ConeGeometry(0.52, 1.15, 6),
       new THREE.MeshLambertMaterial({ color: PALETTE.canopy }),
       256,
-      { castShadow: true },
+      { castShadow: true, name: 'zone:canopy' },
     );
   }
 
@@ -218,6 +242,9 @@ export class Parks {
     if (stamp === this.stamp) return;
     this.stamp = stamp;
     this.layout.ensure(state);
+    // A canopy is a cone standing on a trunk; TREE_TOP is where the tallest of
+    // them reaches, which is what the pads and the trees share as a ceiling.
+    fitToCity(state.districts, TREE_TOP, this.pads, this.trunks, this.canopies);
 
     const n = Math.min(state.parks, state.districts * PARKS_PER_DISTRICT);
     this.pads.ensure(n);
@@ -415,6 +442,7 @@ export class Zones {
       new THREE.BoxGeometry(PAD, PAD_H, PAD),
       new THREE.MeshBasicMaterial({ color: 0xffffff }),
       256,
+      { name: 'overlay:pads' },
     );
     this.pads.mesh.visible = false;
     this.streets = new GrowableInstancedMesh(
@@ -424,6 +452,7 @@ export class Zones {
       new THREE.BoxGeometry(CELL, PAD_H, CELL),
       new THREE.MeshBasicMaterial({ color: 0xffffff }),
       256,
+      { name: 'overlay:streets' },
     );
     this.streets.mesh.visible = false;
   }
@@ -637,6 +666,7 @@ export class Zones {
     if (stamp === this.stamp) return false;
     this.stamp = stamp;
     this.layout.ensure(state);
+    fitToCity(state.districts, ROAD_PAD_Y + PAD_H, this.pads, this.streets);
     this.streets.count = 0;
 
     const residential = this.layout.zoneCells(ZONE.residential);
@@ -696,6 +726,7 @@ export class Zones {
     if (stamp === this.roadStamp) return false;
     this.roadStamp = stamp;
     this.layout.ensure(state);
+    fitToCity(state.districts, ROAD_PAD_Y + PAD_H, this.pads, this.streets);
     this.pads.count = 0;
 
     let n = 0;

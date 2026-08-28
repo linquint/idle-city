@@ -37,11 +37,15 @@ const hud = new Hud(game, layout, {
   // the view hands back what it settled on, which is what the chips mark.
   onZoneMode: (mode) => view.setZoneMode(mode),
   zoneMode: () => view.zoneMode,
+  // The camera is the view's in exactly the way the overlay is.
+  onStreet: () => view.toggleStreet(),
+  street: () => view.street,
 });
 
 // And the other direction: the Z key belongs to the view, so a cycle there has
 // to move the picker or the two controls would disagree about what is showing.
 view.onZoneMode = (mode) => hud.markOverlay(mode);
+view.onStreet = (street) => hud.markStreet(street);
 
 // Selection is view state and stays there: the view owns what was clicked, the
 // HUD owns what is said about it, and neither writes it anywhere.

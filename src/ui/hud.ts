@@ -176,6 +176,14 @@ export interface HudHooks {
   onZoneMode?: (mode: ZoneMode) => ZoneMode;
   /** What the view is showing now, so the picker opens marked correctly. */
   zoneMode?: () => ZoneMode;
+  /**
+   * Drops the camera to street level, or brings it back, and reports where it
+   * ended up. Same contract as `onZoneMode`: the camera is view state and the
+   * HUD asks rather than deciding.
+   */
+  onStreet?: () => boolean;
+  /** Whether the camera is at street level, so the switch opens marked right. */
+  street?: () => boolean;
   /** Dev-only time travel, wired to a button that only exists in dev builds. */
   onSkip?: (seconds: number) => void;
   /** Told when the card is dismissed, so the outline goes with it. */
@@ -463,6 +471,7 @@ export class Hud {
     graphsNote: el('graphs-note'),
     overlays: el('overlays'),
     overlayNote: el('overlay-note'),
+    streetView: el('street-view'),
     corner: el('corner'),
     sheetGrip: el<HTMLButtonElement>('sheet-grip'),
     education: el('education'),
@@ -784,6 +793,7 @@ export class Hud {
 
     this.wireSheet();
     this.buildOverlays();
+    this.buildStreetView();
     this.buildGraphs();
     this.buildAwards();
 
@@ -1095,6 +1105,34 @@ export class Hud {
       this.nodes.overlays.append(button);
     }
     this.markOverlay(this.hooks.zoneMode?.() ?? 'off');
+  }
+
+  /**
+   * Wires the street-level switch, if the view offered one.
+   *
+   * A switch rather than a chip in the radio group above it: the overlays are
+   * one-of-seven and this is on-or-off, and a screen reader told otherwise
+   * would announce it as one of eight overlays.
+   */
+  private buildStreetView(): void {
+    const button = this.nodes.streetView;
+    if (!this.hooks.onStreet) {
+      button.hidden = true;
+      return;
+    }
+    button.addEventListener('click', () => this.markStreet(this.hooks.onStreet?.() ?? false));
+    this.markStreet(this.hooks.street?.() ?? false);
+  }
+
+  /**
+   * Marks whether the camera is at street level.
+   *
+   * Public for the reason `markOverlay` is: the V key belongs to the view, so
+   * the view reports what it did and the switch follows rather than the two
+   * disagreeing.
+   */
+  markStreet(street: boolean): void {
+    this.nodes.streetView.setAttribute('aria-pressed', String(street));
   }
 
   /**

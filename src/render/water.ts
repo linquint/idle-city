@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CELL } from '../sim/config';
+import { CELL } from '../sim/config.ts';
 import {
   COAST_DISTANCE,
   COAST_WAVE,
@@ -8,9 +8,9 @@ import {
   WATERS,
   type Lake,
   type Shore,
-} from '../sim/water';
-import { GRASS_REACH, GRASS_Y } from './ground';
-import { PALETTE } from './palette';
+} from '../sim/water.ts';
+import { GRASS_REACH, GRASS_Y } from './ground.ts';
+import { PALETTE } from './palette.ts';
 
 /**
  * The sea, the river and the lakes: one geometry, one material, one draw call.

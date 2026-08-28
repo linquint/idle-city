@@ -428,6 +428,19 @@ button.tab[aria-selected='true'] {
   gap: 4px;
   pointer-events: auto;
 }
+/* The camera switch sits above the overlay chips and wears their styling, so
+   the shelf reads as one row of map controls rather than as two widgets. */
+.camera-pick {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+  pointer-events: auto;
+}
+button.overlay[aria-pressed='true'] {
+  border-color: var(--sodium);
+  color: var(--concrete);
+  background: rgba(240, 166, 75, 0.14);
+}
 button.overlay {
   width: auto;
   margin: 0;

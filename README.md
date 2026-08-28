@@ -45,12 +45,13 @@ than annotates — a constructor parameter property is the one that catches peop
 out. The calibrators run these modules straight through Node's type-stripping
 loader, so anything it refuses stops `npm run economy:calibrate` at the import.
 
-A few modules in `render/` are loaded by a calibrator too — `pedestrians.ts` and
-what it reaches, because its instance ceiling is a *renderer* measurement and had
-to be priced somewhere. Those carry `.ts` extensions on their relative imports,
-same as `sim/` does, and their calibrator runs under
-`--experimental-transform-types` rather than the plain interpreter, which is what
-lets the render layer keep the parameter properties it uses everywhere.
+`render/` is loaded by two calibrators as well — the pedestrian ceiling and the
+draw-call budget are *renderer* measurements and had to be priced somewhere — so
+every module in it carries `.ts` extensions on its relative imports, same as
+`sim/` does. Those two tools run under `--experimental-transform-types` rather
+than the plain interpreter, which is what lets the render layer keep the
+parameter properties it uses everywhere. `ui/` is not loaded by anything and
+does not follow the rule.
 
 `src/sim` is a plain object and some functions over it. It has no DOM, no
 timers, no renderer — which is why the whole simulation is unit-testable in
@@ -237,6 +238,29 @@ box.
 - The shadow map covers a fixed span that follows the camera's focus and snaps
   to a texel grid, so shadow density stays constant as the city spreads and
   shadows do not crawl when the camera drifts.
+- **V** drops the camera to street level and brings it back. It is a mode on the
+  same orbit rig rather than a second camera — a different set of clamps for the
+  same three numbers, so the transition is the existing damping and the play
+  camera is untouched. Two invariants hold it up, both from clamps rather than
+  from per-frame tests: the pitch stays strictly under a right angle, so the eye
+  is always above its own target and therefore above ground; and the target is
+  snapped to a road cell on the way in and slid along the frontage after that,
+  so a spring arm that shortens on contact with a block always has a street to
+  shorten onto.
+- Frustum culling is on for the static layers and the bounds are *stated* rather
+  than derived: `cityRadius` is what the simulation already says, and asking
+  three to rediscover it by walking nine thousand instance matrices every frame
+  anything grows is paying a great deal for something already known. Measured, it
+  rejects nothing — a mesh holding one (zone, level) across every district
+  straddles the map — and it is on because it is correct and costs 51 sphere
+  tests a frame.
+- Where the street camera *does* pay is detail. Past 150 units from the focus a
+  district's buildings keep their roofs and lose their dressing, which at 49
+  districts is 69% of the part bank and 21% of every triangle in the scene. The
+  test is per district (49 boxes, not 4,000 buildings) and it only engages when
+  the camera is within 120 units of what it is looking at: the wide shot wants
+  every band and beacon it has, and a mask that fought it would be dimming the
+  city to save work nobody was doing.
 - Fog depths are measured from the camera, so they track the orbit distance as
   well as the size of the city.
 - Road cells work out their own orientation from whether their neighbours are

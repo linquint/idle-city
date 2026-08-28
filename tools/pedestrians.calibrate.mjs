@@ -54,18 +54,9 @@ import {
   pedestrianFleet,
   walkingTrips,
 } from '../src/render/pedestrians.ts';
+import { MAX_CARS } from '../src/render/cars.ts';
 
 const SIZES = [1, 10, 49];
-
-/**
- * MAX_CARS, restated rather than imported.
- *
- * `src/render/cars.ts` reaches `glow.ts` and `highway.ts`, neither of which
- * carries `.ts` extensions on its imports, so plain Node cannot resolve the
- * module and the one number wanted from it is not worth converting three files
- * for. It is here only as the row the pedestrian ceiling is compared against.
- */
-const MAX_CARS_CEILING = 160;
 
 /** One frame at 60 Hz, in milliseconds. What the ceiling is a share of. */
 const FRAME_60HZ = 1000 / 60;
@@ -208,7 +199,7 @@ function loopCost(n, bob, rot) {
 
 console.log('what one walker costs a frame\n');
 console.log('  instances      plain     + bob     + rot   + both       chosen us/instance');
-for (const n of [MAX_CARS_CEILING, 320, MAX_PEDESTRIANS, 960, 1440, 2000]) {
+for (const n of [MAX_CARS, 320, MAX_PEDESTRIANS, 960, 1440, 2000]) {
   const plain = loopCost(n, false, false);
   const bob = loopCost(n, true, false);
   const rot = loopCost(n, false, true);
@@ -225,13 +216,13 @@ console.log('  loop. Read the "+ both" column against "+ bob" for what that is w
 console.log('');
 {
   const chosen = loopCost(MAX_PEDESTRIANS, true, false);
-  const cars = loopCost(MAX_CARS_CEILING, true, true);
+  const cars = loopCost(MAX_CARS, true, true);
   console.log(
     `  MAX_PEDESTRIANS ${MAX_PEDESTRIANS}  ${chosen.toFixed(4)} ms/frame` +
       `  (${((chosen / FRAME_60HZ) * 100).toFixed(2)}% of a 60 Hz frame)`,
   );
   console.log(
-    `  MAX_CARS        ${MAX_CARS_CEILING}  ${cars.toFixed(4)} ms/frame, the same loop with the rotation in` +
+    `  MAX_CARS        ${MAX_CARS}  ${cars.toFixed(4)} ms/frame, the same loop with the rotation in` +
       `  (${((cars / FRAME_60HZ) * 100).toFixed(2)}%)`,
   );
 }

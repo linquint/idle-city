@@ -1,23 +1,23 @@
 import * as THREE from 'three';
-import { CELL, CIVIC_SERVICES, LEVELS, MAX_ACTIVE_FIRES } from '../sim/config';
+import { CELL, CIVIC_SERVICES, LEVELS, MAX_ACTIVE_FIRES } from '../sim/config.ts';
 
 /** Where fire stations sit in the 2x2 site interleave. See `civicSiteFor`. */
 const FIRE_SITE_OFFSET = CIVIC_SERVICES.findIndex((service) => service.key === 'fire');
-import { ZONE } from '../sim/citygen';
-import { levelAt } from '../sim/economy';
+import { ZONE } from '../sim/citygen.ts';
+import { levelAt } from '../sim/economy.ts';
 import {
   createPlacement,
   worldX,
   worldZ,
   type CityLayout,
   type Placement,
-} from '../sim/layout';
-import type { Fire, GameState } from '../sim/state';
-import { roofline } from './buildings';
-import { Glow } from './glow';
-import { ROAD_H } from './ground';
-import { GrowableInstancedMesh } from './growable';
-import { PALETTE } from './palette';
+} from '../sim/layout.ts';
+import type { Fire, GameState } from '../sim/state.ts';
+import { roofline } from './buildings.ts';
+import { Glow } from './glow.ts';
+import { ROAD_H } from './ground.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { PALETTE } from './palette.ts';
 
 /**
  * Flames, and the trucks that answer them.

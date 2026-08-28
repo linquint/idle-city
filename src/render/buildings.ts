@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { hash01, mixSeed } from '../core/rng';
+import { hash01, mixSeed } from '../core/rng.ts';
 import {
   CELL,
   CIVIC_SERVICES,
@@ -9,8 +9,8 @@ import {
   SERVICES,
   type Landmark,
   type Service,
-} from '../sim/config';
-import { ZONE, type Zone } from '../sim/citygen';
+} from '../sim/config.ts';
+import { ZONE, type Zone } from '../sim/citygen.ts';
 import {
   cohortStart,
   cohortTotal,
@@ -19,22 +19,26 @@ import {
   levelsOf,
   mergedOf,
   zoneOf,
-} from '../sim/economy';
+} from '../sim/economy.ts';
 import {
+  DISTRICT_WIDTH,
   EMPTY_ZONING,
   type Zoning,
+  cityCentre,
+  cityRadius,
   createPlacement,
+  districtCoord,
   worldX,
   worldZ,
   type CityLayout,
   type Coord,
-} from '../sim/layout';
-import type { GameState, LevelCohort, ZoneKind } from '../sim/state';
-import { Glow } from './glow';
-import { GrowableInstancedMesh, SlotRanges } from './growable';
-import { GrowthSchedule } from './growth';
-import { PALETTE } from './palette';
-import type { OverlaySource } from './zones';
+} from '../sim/layout.ts';
+import type { GameState, LevelCohort, ZoneKind } from '../sim/state.ts';
+import { Glow } from './glow.ts';
+import { GrowableInstancedMesh, SlotRanges } from './growable.ts';
+import { GrowthSchedule } from './growth.ts';
+import { PALETTE } from './palette.ts';
+import type { OverlaySource } from './zones.ts';
 
 const GROW_SECONDS = 0.55;
 const GROW_SECONDS_REDUCED = 0.12;
@@ -441,6 +445,11 @@ class PartBank {
     for (const glow of this.glows) glow.setNight(night);
   }
 
+  /** States what the bank covers, so its nine meshes can be frustum-culled. */
+  setBounds(x: number, z: number, reach: number, top: number): void {
+    for (const mesh of this.meshes) mesh?.setBounds(x, z, reach, top);
+  }
+
   /** Starts a rebuild. Every part's instance list is written from scratch. */
   begin(): void {
     this.counts.fill(0);
@@ -613,12 +622,19 @@ class ZoneLayer {
     private readonly layout: CityLayout,
     duration: number,
     capacity: number,
+    /** Shared with every zone, because the part bank they pack into is shared. */
+    private readonly detail: DetailMask,
   ) {
     this.growth = new GrowthSchedule(duration);
     this.bodies = Array.from(
       { length: LEVELS },
       (_, level) => new BodyMeshes(scene, kind, level, capacity),
     );
+  }
+
+  /** States what this zone's bodies cover, so they can be frustum-culled. */
+  setBounds(x: number, z: number, reach: number, top: number): void {
+    for (const body of this.bodies) body.mesh.setBounds(x, z, reach, top);
   }
 
   /** How many buildings this layer is drawing. The append path's `from`. */
@@ -785,6 +801,10 @@ class ZoneLayer {
       this.kind,
       slot,
       level,
+      // Whether the building wears anything but its roof. A district the camera
+      // is nowhere near keeps its silhouette and loses its dressing — see
+      // `DetailMask`, which is what decides it.
+      this.detail.dressed(at.x, at.z),
       at.x,
       at.z,
       at.alongX,
@@ -852,6 +872,156 @@ class ZoneLayer {
   }
 }
 
+// -------------------------------------------------------------- detail level
+
+/**
+ * How close the camera has to be to what it is looking at before the dressing
+ * is worth culling at all.
+ *
+ * The street camera is what made this a real question and the wide shot is what
+ * bounds it. Measured (tools/lod.calibrate.mjs, at 49 districts with housing at
+ * level 4): the dressing is 9,564 instances and 114,768 triangles, 30% of
+ * everything the scene submits. From the street camera 17 of the 49 districts
+ * are inside the frustum, so two thirds of that is work nobody can see. From
+ * the orbit camera at its framing distance, all 49 are — there is nothing to
+ * cull and this must not try.
+ *
+ * So the gate is the camera's own distance rather than a screen-space size.
+ * Under 120 units the player is standing in a district and "far" means off the
+ * edge of the frame; over it they are looking at the city, every band and
+ * beacon in it is part of the picture, and the whole mechanism switches off. It
+ * is not a subtle rule and it does not need to be: the two views want opposite
+ * things and the distance is exactly what tells them apart.
+ */
+const DETAIL_ENGAGE = 120;
+
+/**
+ * How far from the focus a district still wears its dressing.
+ *
+ * Measured from the nearest face of the district's own tile rather than its
+ * centre, so a district the focus is standing at the edge of is dressed whether
+ * or not its centre is in range. 150 against the street camera's 17-district
+ * frustum keeps about twenty dressed, which is the frustum plus a ring — the
+ * margin is what stops a turn on the spot from popping the dressing in.
+ */
+const DETAIL_RADIUS = 150;
+
+/**
+ * How far the focus must move before the mask is rebuilt.
+ *
+ * A repack is 2.5 ms on the largest city — a sixth of a 60 Hz frame — so this
+ * cannot be free-running. 30 units is half a district: walking a street at the
+ * rig's own pan speed, that is a repack every few seconds rather than every
+ * frame, and the DETAIL_RADIUS margin above is what makes the lag invisible.
+ */
+const DETAIL_HYSTERESIS = 30;
+
+/**
+ * Half the side of the grid the district mask is written into.
+ *
+ * `districtCoord` spirals out and steps over water, so a district's coordinate
+ * is not bounded by the ring it is in — but it is bounded by the map, and 32
+ * districts from the origin is five times the furthest MAX_DISTRICTS reaches.
+ * Anything outside is read as dressed, which over-draws rather than under-draws.
+ */
+const MASK_HALF = 32;
+const MASK_SIDE = MASK_HALF * 2;
+
+/**
+ * Which districts wear their buildings' dressing.
+ *
+ * The per-district test the brief asks for, and the reason it is per district
+ * is arithmetic: 49 box tests against 4,000 building tests, and the answer is
+ * the same because a building cannot be in two districts. What it produces is a
+ * grid rather than a list, so the lookup a building does is a divide and an
+ * array read.
+ *
+ * Distance rather than the frustum, deliberately. The frustum turns with the
+ * camera and a repack costs milliseconds, so a frustum mask would repack on
+ * every mouse drag; distance changes only when the camera *moves*, which is
+ * what hysteresis can be applied to.
+ */
+class DetailMask {
+  private readonly grid = new Uint8Array(MASK_SIDE * MASK_SIDE);
+  /** True when nothing is culled, which is the state the wide shot is in. */
+  private all = true;
+  private atX = NaN;
+  private atZ = NaN;
+  private districts = -1;
+
+  /** Whether the city is currently fully dressed. For the tests and the tools. */
+  get dressingAll(): boolean {
+    return this.all;
+  }
+
+  /**
+   * Points the mask at a focus. Returns true when what it says has changed and
+   * the part bank therefore has to be repacked.
+   */
+  aim(focusX: number, focusZ: number, distance: number, districts: number): boolean {
+    if (distance > DETAIL_ENGAGE || districts <= 0) {
+      if (this.all) return false;
+      this.all = true;
+      this.districts = -1;
+      return true;
+    }
+    const moved = Math.hypot(focusX - this.atX, focusZ - this.atZ);
+    if (!this.all && districts === this.districts && moved < DETAIL_HYSTERESIS) return false;
+
+    this.all = false;
+    this.atX = focusX;
+    this.atZ = focusZ;
+    this.districts = districts;
+    this.grid.fill(0);
+    const half = DISTRICT_WIDTH / 2;
+    for (let i = 0; i < districts; i++) {
+      const at = districtCoord(i);
+      // Distance from the focus to the nearest point of the district's tile.
+      const dx = Math.max(0, Math.abs(focusX - at.x * DISTRICT_WIDTH) - half);
+      const dz = Math.max(0, Math.abs(focusZ - at.z * DISTRICT_WIDTH) - half);
+      if (dx * dx + dz * dz > DETAIL_RADIUS * DETAIL_RADIUS) continue;
+      const gx = at.x + MASK_HALF;
+      const gz = at.z + MASK_HALF;
+      if (gx < 0 || gx >= MASK_SIDE || gz < 0 || gz >= MASK_SIDE) continue;
+      this.grid[gz * MASK_SIDE + gx] = 1;
+    }
+    return true;
+  }
+
+  /** Whether the building standing at (x, z) wears anything but its roof. */
+  dressed(x: number, z: number): boolean {
+    if (this.all) return true;
+    const gx = Math.round(x / DISTRICT_WIDTH) + MASK_HALF;
+    const gz = Math.round(z / DISTRICT_WIDTH) + MASK_HALF;
+    if (gx < 0 || gx >= MASK_SIDE || gz < 0 || gz >= MASK_SIDE) return true;
+    return this.grid[gz * MASK_SIDE + gx] === 1;
+  }
+}
+
+/**
+ * The highest anything the ladder can build reaches, in world units.
+ *
+ * Derived rather than stated, so a taller rung cannot quietly outgrow the
+ * bounding sphere it is culled against — that failure mode is a tower that
+ * vanishes when the camera looks up at it. The tallest is the housing slab at
+ * level 4: 27 x 1.12 (its style) x 1.24 (the top of its jitter), plus its mast
+ * and a roof.
+ */
+const MAX_BUILDING_TOP = (() => {
+  let top = 0;
+  for (const kind of ['home', 'shop', 'industry'] as const) {
+    for (const shape of ZONE_SHAPES[kind]) {
+      for (const style of ZONE_STYLES[kind]) {
+        const height = shape.height * style.height * HEIGHT_JITTER_MAX;
+        // A stack is a share of the body height and is the tallest thing above
+        // it; the roof and the beacon's clearance sit on top of that.
+        top = Math.max(top, height * (1 + style.stack) + 1.15 + 0.5);
+      }
+    }
+  }
+  return top;
+})();
+
 /**
  * One reusable placement. `place` fills it rather than returning a fresh object,
  * because a rebuild asks for one per building and `update` asks for one per
@@ -914,12 +1084,15 @@ function putPart(
  * bank is packed per part and an animation frame must not repack it.
  *
  * A ruin wears the flattest roof in the bank and nothing else at all: it keeps
- * its plot and loses everything else, lit bands included.
+ * its plot and loses everything else, lit bands included. `dressed` is false
+ * takes the same branch for a different reason — see `DetailMask`.
  */
 function writeParts(
   kind: ZoneKind,
   slot: number,
   level: number,
+  /** False past the detail radius: roof only, which is the whole silhouette. */
+  dressed: boolean,
   x: number,
   z: number,
   alongX: boolean,
@@ -936,6 +1109,11 @@ function writeParts(
   const base = slot * PART_SLOTS;
   const style = styleOf(kind, slot);
   const ruin = level < 0;
+  // A ruin and a building past the detail radius want exactly the same thing —
+  // the roof and nothing else — so they take the same branch. The roof is not
+  // dressing: it is the top of the silhouette, and a city of headless boxes is
+  // a different city rather than a cheaper one.
+  const bare = ruin || !dressed;
 
   // 1. The roof. Every building has one, ruins included.
   const roof = roofOf(kind, level, style);
@@ -947,7 +1125,7 @@ function writeParts(
 
   // 2. An awning: a skirt overhanging the whole footprint at street level. What
   //    makes a parade of shops read as a parade rather than as one long block.
-  if (!ruin && style.awning > 0) {
+  if (!bare && style.awning > 0) {
     const reach = style.awning * footW;
     dummy.position.set(x, height * 0.32 * scale, z);
     dummy.scale.set((footW + reach) * scale, 0.22 * scale, (footD + reach) * scale);
@@ -959,7 +1137,7 @@ function writeParts(
   //    and for commerce a thin board turned onto the long axis instead, so a
   //    merged shop wears one long sign rather than two short ones.
   const nudge = variety(slot, 0xc1) < 0.5 ? -1 : 1;
-  if (!ruin && style.stack > 0) {
+  if (!bare && style.stack > 0) {
     const tall = style.stack * height;
     if (kind === 'shop') {
       const board = (alongX ? footW : footD) * (0.5 + variety(slot, 0x7b) * 0.35);
@@ -977,7 +1155,7 @@ function writeParts(
   } else if (place) partAt[base + PS.stack] = -1;
 
   // 4. A setback: a stepped upper block, narrower than the body it stands on.
-  if (!ruin && style.setback > 0) {
+  if (!bare && style.setback > 0) {
     const step = style.setback * height;
     dummy.position.set(x, (height + rise + step / 2) * scale, z);
     dummy.scale.set(footW * 0.72 * scale, step * scale, footD * 0.72 * scale);
@@ -987,7 +1165,7 @@ function writeParts(
   // 5. Plant: equipment on the far end of the roof from the stack, so a merged
   //    building reads as one long thing with kit down its length rather than as
   //    two shorter ones touching.
-  if (!ruin && style.plant > 0) {
+  if (!bare && style.plant > 0) {
     const wide = style.plant * footW * 0.34;
     const tall = wide * (0.5 + variety(slot, 0xa3) * 0.9);
     dummy.position.set(
@@ -1004,7 +1182,7 @@ function writeParts(
   //    orange square and swamps the district, where a band glows from street
   //    level and still reads as a dark roof from above.
   for (let b = 0; b < BANDS_MAX; b++) {
-    if (!ruin && b < style.bands) {
+    if (!bare && b < style.bands) {
       const up = (b + 1) / (style.bands + 1);
       dummy.position.set(x, height * up * scale, z);
       dummy.scale.set((footW + 0.08) * scale, 0.3 * scale, (footD + 0.08) * scale);
@@ -1013,7 +1191,7 @@ function writeParts(
   }
 
   // 7. The warning light the tall levels carry, which is what sells their scale.
-  if (!ruin && shapeOf(kind, level).beacon) {
+  if (!bare && shapeOf(kind, level).beacon) {
     dummy.position.set(x, (height + rise + 0.35) * scale, z);
     dummy.scale.setScalar(0.34 * scale);
     putPart(bank, PART.beacon, base + PS.beacon, partAt, dummy, null, place);
@@ -1170,6 +1348,13 @@ class CivicMeshes {
 
   setNight(night: number): void {
     this.glow?.setNight(night);
+  }
+
+  /** States what this set covers, so its three meshes can be frustum-culled. */
+  setBounds(x: number, z: number, reach: number, top: number): void {
+    this.body.setBounds(x, z, reach, top);
+    this.roof.setBounds(x, z, reach, top);
+    this.mark.setBounds(x, z, reach, top);
   }
 
   setOverlay(hex: number | null): void {
@@ -1486,6 +1671,14 @@ export class Buildings {
   private readonly outline: Outline;
   /** Reused across clicks: `intersectObjects` fills it rather than returning one. */
   private readonly hits: THREE.Intersection[] = [];
+  /**
+   * Which districts are dressed. One object shared by all three zones, because
+   * the part bank they pack into is shared and a mask that disagreed between
+   * them would renumber one zone's instances out from under another's.
+   */
+  private readonly detail = new DetailMask();
+  /** The city the meshes' bounds were stated for. See `fitBounds`. */
+  private shownDistricts = -1;
 
   constructor(
     scene: THREE.Scene,
@@ -1494,9 +1687,9 @@ export class Buildings {
     const duration = prefersReducedMotion() ? GROW_SECONDS_REDUCED : GROW_SECONDS;
     this.parts = new PartBank(scene, 128);
     this.zones = [
-      new ZoneLayer(scene, 'home', ZONE.residential, layout, duration, 64),
-      new ZoneLayer(scene, 'shop', ZONE.commercial, layout, duration, 32),
-      new ZoneLayer(scene, 'industry', ZONE.industrial, layout, duration, 24),
+      new ZoneLayer(scene, 'home', ZONE.residential, layout, duration, 64, this.detail),
+      new ZoneLayer(scene, 'shop', ZONE.commercial, layout, duration, 32, this.detail),
+      new ZoneLayer(scene, 'industry', ZONE.industrial, layout, duration, 24, this.detail),
     ];
     this.outline = new Outline(scene);
     for (const zone of this.zones) zone.register(this.ranges);
@@ -1565,6 +1758,10 @@ export class Buildings {
   /** Brings the scene in line with the simulation. Cheap when nothing changed. */
   sync(state: Readonly<GameState>, now: number): void {
     this.layout.ensure(state);
+    if (state.districts !== this.shownDistricts) {
+      this.shownDistricts = state.districts;
+      this.fitBounds(state.districts);
+    }
 
     // One decision for the whole city, because the detail parts are one bank.
     // A purchase appends to it and disturbs nothing already in it, so it can be
@@ -1580,14 +1777,11 @@ export class Buildings {
     }
 
     if (rebuild) {
-      this.parts.begin();
       for (const zone of this.zones) {
         zone.stage(state, now);
         zone.adopt(state);
-        zone.writeAll(this.parts, this.dummy, this.tint, now);
-        zone.register(this.ranges);
       }
-      this.parts.end();
+      this.repack(now);
     } else if (appending) {
       for (const zone of this.zones) {
         const grew = zone.changed(state) ? zone.appended(state) : 0;
@@ -1612,6 +1806,80 @@ export class Buildings {
       }
       set.shown = count;
     }
+  }
+
+  /**
+   * States what every mesh in the layer covers, so the frustum test can be on.
+   *
+   * The city's own extent, which the simulation already knows: `cityRadius`
+   * moves only when land is annexed, so this runs once a district rather than
+   * once a frame. See `GrowableInstancedMesh.setBounds` for why it is stated
+   * rather than derived from the instance buffers.
+   *
+   * One sphere for the whole layer, and it is worth being blunt about what that
+   * buys: nothing, today. A body mesh holds one (zone, level) across every
+   * district, so a sphere around the city is a sphere around every one of them,
+   * and measured at 1, 10 and 49 districts from both cameras
+   * (tools/lod.calibrate.mjs) the per-object test rejects **0 of 51** draw
+   * calls. Tight per-mesh bounds would reject up to 14 at one district from the
+   * street camera — and would cost three's own O(instances) recomputation every
+   * frame anything moved, nine thousand matrix decompositions on the pavement
+   * mesh alone, to save fourteen draw calls. That is not a trade.
+   *
+   * So the flag is on because it is *correct* and costs 51 sphere tests a
+   * frame, and because a stale justification for having it off was worse than
+   * either. Where the street camera actually pays is `DetailMask`, which takes
+   * 69% of the dressing off a city it cannot see.
+   */
+  private fitBounds(districts: number): void {
+    const centre = cityCentre(districts);
+    // A margin of one plot: a building stands on a plot at the district's edge
+    // and its own jitter can reach past the tile's nominal corner.
+    const reach = cityRadius(districts) + CELL;
+    for (const zone of this.zones) {
+      zone.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
+    }
+    this.parts.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
+    for (const set of this.civic) set.meshes.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
+  }
+
+  /**
+   * Points the detail mask at what the camera is looking at.
+   *
+   * Returns true when the answer moved, which is the caller's cue to repack —
+   * it is not done here, because a repack is 2.5 ms on the largest city and the
+   * caller is the one that knows what else the frame is already doing.
+   */
+  setDetail(focusX: number, focusZ: number, distance: number, districts: number): boolean {
+    return this.detail.aim(focusX, focusZ, distance, districts);
+  }
+
+  /** Whether the city is currently fully dressed. For the tests and the tools. */
+  get dressingAll(): boolean {
+    return this.detail.dressingAll;
+  }
+
+  /**
+   * Rewrites every zone's instances against the state already adopted.
+   *
+   * Split out of `sync` because the *detail level* is a second reason to
+   * rewrite and it has nothing to do with the counts having moved: the city can
+   * be exactly the city it was and still need its dressing repacked, because
+   * the camera walked somewhere else. Nothing here re-reads the state, and
+   * nothing here re-stages an animation — a repack must not replay a growth
+   * that already played.
+   *
+   * The bank is packed per part rather than per building, so this has to be all
+   * three zones or none: dropping one zone's dressing renumbers the instances
+   * every other zone's `partAt` points at.
+   */
+  repack(now: number): void {
+    this.parts.begin();
+    for (const zone of this.zones) {
+      zone.writeAll(this.parts, this.dummy, this.tint, now);
+      zone.register(this.ranges);
+    }
+    this.parts.end();
   }
 
   private writeCivic(

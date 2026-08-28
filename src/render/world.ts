@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { SkyReading } from './daylight';
-import { PALETTE } from './palette';
+import type { SkyReading } from './daylight.ts';
+import { PALETTE } from './palette.ts';
 
 const SHADOW_SPAN = 150;
 
