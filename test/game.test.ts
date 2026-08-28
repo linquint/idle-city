@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CATCHUP_MAX_ABANDONED,
   CATCHUP_MAX_ANNEXES,
+  CATCHUP_MAX_LOSSES,
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
   MAX_DISTRICTS,
@@ -18,9 +20,11 @@ import {
   shopCapacity,
 } from '../src/sim/economy';
 import { createState, type GameState } from '../src/sim/state';
-import { built, cohort, housed, trading } from './levels';
+import { AWAY_EVENT_BUFFER } from '../src/core/events';
+import { built, cohort, housed, housedOn, making, trading, zoning } from './levels';
 
 const at = (patch: Partial<GameState> = {}): Game => new Game({ ...createState(0), ...patch });
+const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 
 /**
  * A city with every amenity, built fresh each call.
@@ -380,5 +384,121 @@ describe('pacing', () => {
     expect(quarterHour.state.homes + quarterHour.state.shops).toBeLessThan(
       plotCapacity(quarterHour.state),
     );
+  });
+});
+
+/**
+ * The away timeline: what an absence consisted of, above what it added up to.
+ *
+ * The totals were always the whole report, and a total is what something added
+ * up to rather than what happened. "You lost two buildings" and "at +6h40m two
+ * homes burned down" are different reports, and the second explains the first.
+ */
+describe('the away timeline', () => {
+  const busy = (): GameState =>
+    state({
+      ...zoning(6),
+      ...housedOn(90),
+      ...trading(60),
+      ...making(20),
+      ...served(),
+      cash: 5e6,
+      autoDevelop: true,
+      cityHall: true,
+    });
+
+  it('records an absence, where the ticker stays silent', () => {
+    const game = new Game(busy());
+    const report = game.catchUp(3_600);
+    expect(report.timeline.length).toBeGreaterThan(0);
+    // And the ticker heard nothing at all — see `Game.recording`, which argues
+    // it: a sixteen-entry ring drained every frame cannot carry an absence, and
+    // replaying it under the sheet would say the same facts twice.
+    expect(game.drainEvents()).toHaveLength(0);
+  });
+
+  it('stamps the origin the offsets are read against', () => {
+    const game = new Game(state({ ...busy(), elapsed: 50_000 }));
+    const report = game.catchUp(3_600);
+    expect(report.startedAt).toBe(50_000);
+    for (const event of report.timeline) {
+      // Inside the absence, both ends. An event outside it would be one the
+      // log failed to clear from a previous catch-up.
+      expect(event.at).toBeGreaterThanOrEqual(report.startedAt - 1e-6);
+      expect(event.at).toBeLessThanOrEqual(report.startedAt + report.seconds + 1e-6);
+    }
+  });
+
+  it('is bounded across a twelve-hour absence, and says what it dropped', () => {
+    const game = new Game(busy());
+    const report = game.catchUp(OFFLINE_CAP_SECONDS);
+    expect(report.timeline.length).toBeLessThanOrEqual(AWAY_EVENT_BUFFER);
+    // Measured: a mid-size auto-developing city produces 117 distinct entries
+    // over twelve hours against a ring of 64, so the bound genuinely bites and
+    // the count of what it lost is what keeps the sheet honest.
+    expect(report.dropped).toBeGreaterThan(0);
+    expect(report.timeline.length + report.dropped).toBeGreaterThan(AWAY_EVENT_BUFFER);
+  });
+
+  it('agrees with the totals about what happened', () => {
+    // The timeline is what happened and the totals are what it added up to, so
+    // the two have to be describing one absence. Fires are the cleanest test:
+    // every one is counted in both places and nothing merges them away.
+    const game = new Game(state({ ...busy(), autoDevelop: false }));
+    const report = game.catchUp(3_600);
+    let started = 0;
+    let out = 0;
+    let lost = 0;
+    for (const event of report.timeline) {
+      if (event.kind === 'fire-started') started += event.count;
+      if (event.kind === 'fire-out') out += event.count;
+      if (event.kind === 'fire-lost') lost += event.count;
+    }
+    // Only when nothing was dropped — a truncated log is a partial account by
+    // construction, which is what `dropped` reports.
+    if (report.dropped === 0) {
+      expect(started).toBe(report.firesStarted);
+      expect(out).toBe(report.firesExtinguished);
+      expect(lost).toBe(report.firesLost);
+    }
+    expect(started).toBeLessThanOrEqual(report.firesStarted);
+  });
+
+  it('starts each absence over rather than accumulating', () => {
+    const game = new Game(busy());
+    const first = game.catchUp(3_600);
+    expect(first.timeline.length).toBeGreaterThan(0);
+    const second = game.catchUp(60);
+    // A timeline is a byproduct of *one* catch-up call. Two absences in a
+    // session are two reports, not one growing one.
+    expect(second.timeline.length).toBeLessThan(first.timeline.length + 1);
+    expect(second.dropped).toBe(0);
+    for (const event of second.timeline) {
+      expect(event.at).toBeGreaterThanOrEqual(second.startedAt - 1e-6);
+    }
+  });
+
+  it('never reaches the save', () => {
+    const game = new Game(busy());
+    const report = game.catchUp(3_600);
+    expect(report.timeline.length).toBeGreaterThan(0);
+    const saved = JSON.stringify(game.state);
+    expect(saved).not.toContain('timeline');
+    expect(saved).not.toContain('level-up');
+    // And the state carries no field for it at all.
+    expect(Object.keys(game.state)).not.toContain('timeline');
+  });
+
+  it('leaves the catch-up guards exactly where they were', () => {
+    // The timeline reports what the guards let happen, not what an unguarded
+    // run would have. Same assertion the guards already carry, restated here
+    // because the timeline is the thing that would tempt someone to lift them.
+    const game = new Game(
+      state({ ...housedOn(90), ...trading(60), ...zoning(6), happiness: 0, occupancyR: 0, cash: 0 }),
+    );
+    const report = game.catchUp(OFFLINE_CAP_SECONDS);
+    expect(report.abandoned).toBeLessThanOrEqual(CATCHUP_MAX_ABANDONED);
+    expect(report.firesLost).toBeLessThanOrEqual(CATCHUP_MAX_LOSSES);
+    expect(report.districts).toBeLessThanOrEqual(CATCHUP_MAX_ANNEXES);
   });
 });

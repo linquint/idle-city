@@ -966,7 +966,62 @@ button.step[aria-checked='true'] {
   letter-spacing: 0.02em;
   color: var(--concrete);
 }
-.sheet-rows { margin: 0 0 18px; }
+/* The timeline: what happened, in the order it happened, above the totals it
+   adds up to. Numbers are the offset into the absence rather than an absolute
+   simulated clock — "+2h14m" against the sheet's own "6h 12m" headline. */
+.sheet-timeline {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  max-height: 34dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sheet-timeline li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dashed rgba(37, 52, 75, 0.8);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.sheet-timeline li:last-child { border-bottom: 0; }
+.sheet-timeline .at {
+  flex: none;
+  width: 54px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.sheet-timeline .what { flex: 1 1 auto; color: var(--concrete); }
+.sheet-timeline li.bad .what { color: #f0b4ae; }
+.sheet-timeline li.warn .what { color: #f3cf9d; }
+.sheet-timeline li.good .what { color: var(--signal); }
+.sheet-timeline:empty { display: none; }
+
+.sheet-more {
+  margin: 0 0 14px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.sheet-more:empty { display: none; }
+
+/* The totals, folded away. They are still the ledger identity — earned less
+   spent less wages is the change in the treasury — and still one click from
+   the timeline that explains them. */
+.sheet-totals { margin: 0 0 18px; }
+.sheet-totals > summary {
+  cursor: pointer;
+  padding: 6px 0;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.sheet-totals > summary:hover { color: var(--concrete); }
+.sheet-totals[open] > summary { margin-bottom: 4px; }
+
+.sheet-rows { margin: 0; }
 .sheet-rows div {
   display: flex;
   justify-content: space-between;

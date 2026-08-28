@@ -1,4 +1,10 @@
-import { EventLog, EVENT_COVERAGE_LOST, type GameEvent } from '../core/events.ts';
+import {
+  AWAY_COALESCE_SECONDS,
+  AWAY_EVENT_BUFFER,
+  EventLog,
+  EVENT_COVERAGE_LOST,
+  type GameEvent,
+} from '../core/events.ts';
 import { ACHIEVEMENTS, ACHIEVEMENT_TEST_SECONDS } from './achievements.ts';
 import {
   HISTORY_COARSE_SECONDS,
@@ -210,6 +216,43 @@ export interface AwayReport {
   seconds: number;
   /** Seconds that were dropped because the cap bit. */
   forfeited: number;
+  /**
+   * `elapsed` at the moment the absence started.
+   *
+   * The origin the timeline is read against. A `GameEvent` carries an absolute
+   * `at` — it is `GameState.elapsed`, the only clock the simulation has — so
+   * turning one into "+2h14m into the absence" needs the other end of the
+   * interval, and this is it.
+   */
+  startedAt: number;
+  /**
+   * What happened, in the order it happened.
+   *
+   * The half of the report the totals cannot carry. A total is what an absence
+   * *added up to*; this is what it consisted of, and the two answer different
+   * questions — "you lost two buildings" against "at +6h40m two homes burned
+   * down while the fire station was unstaffed".
+   *
+   * Bounded by AWAY_EVENT_BUFFER and coalesced at AWAY_COALESCE_SECONDS, so a
+   * twelve-hour absence is a readable list rather than a log. Never saved: it
+   * is a byproduct of one `catchUp` call and dies with the sheet.
+   */
+  timeline: readonly GameEvent[];
+  /**
+   * Entries the away log ran out of room for, oldest first.
+   *
+   * Measured, and the reason this field exists rather than a comment claiming
+   * the bound is headroom: a twelve-hour absence of a *mid-size* city produces
+   * 117 distinct entries at AWAY_COALESCE_SECONDS and a large one 132, against
+   * a ring of 64. Widening the window barely helps — 30 minutes still leaves 70
+   * and 82 — because what dominates is `level-up`, which has fifteen distinct
+   * (zone, level) subjects and genuinely does happen all day.
+   *
+   * So the ring truncates for any city with something going on, and the sheet
+   * has to say so. Showing the newest sixty-four and nothing else would be
+   * claiming that was the whole absence.
+   */
+  dropped: number;
   earned: number;
   /**
    * Cash auto-development handed straight back out. Reported because it is the
@@ -362,6 +405,28 @@ export class Game {
    */
   private readonly log = new EventLog();
   /**
+   * The second log, and the one an absence is reported through.
+   *
+   * The ticker is silent for the length of a `catchUp` and that is right — see
+   * `recording`, which argues it at length. What that reasoning was right about
+   * is the *ticker*: a sixteen-entry ring drained every frame cannot carry
+   * twelve hours, and replaying it under the away sheet would say the same
+   * facts twice and push the live events out.
+   *
+   * It was wrong about the *sheet*. The sheet is modal, has the player's whole
+   * attention, and lists twenty totals — and a total is what added up, not what
+   * happened. "You earned 4.2M and lost two buildings" and "at +2h14m the grid
+   * went short, at +6h40m two homes burned down" are different reports, and the
+   * second one is the one that explains the first.
+   *
+   * So: the same class, the same merge rule, and a bound and a window of its
+   * own. `Game.recording` still gates the ticker; this records regardless and
+   * is cleared at the top of every `catchUp`.
+   */
+  private readonly awayLog = new EventLog(AWAY_EVENT_BUFFER, AWAY_COALESCE_SECONDS);
+  /** Whether the away log is recording. True only inside a `catchUp`. */
+  private away = false;
+  /**
    * Whether events are being recorded at all.
    *
    * Off for the length of a `catchUp` call, and that is the one interesting
@@ -435,9 +500,17 @@ export class Game {
     return this.log.drain();
   }
 
-  /** The one place an event is recorded, so `catchUp` can silence all of them. */
+  /**
+   * The one place an event is recorded, so `catchUp` can silence the ticker.
+   *
+   * Two logs, and exactly one of them is recording at any moment: the ticker
+   * while the player is watching, the away log while they are not. Written as
+   * two independent tests rather than an if/else so that a future third
+   * consumer does not have to reopen the question.
+   */
   private emit(event: GameEvent): void {
     if (this.recording) this.log.push(event);
+    if (this.away) this.awayLog.push(event);
   }
 
   /**
@@ -1725,6 +1798,7 @@ export class Game {
     const wanted = Math.max(0, seconds);
     const credited = Math.min(wanted, OFFLINE_CAP_SECONDS);
     const before = {
+      elapsed: this.inner.elapsed,
       cash: this.inner.cash,
       homes: this.inner.homes,
       shops: this.inner.shops,
@@ -1750,6 +1824,11 @@ export class Game {
     // Silent for the length of this call. See `recording` for why the away
     // sheet is the better place for an absence to be reported.
     this.recording = false;
+    // Cleared rather than appended to: a timeline is a byproduct of *one*
+    // catch-up call and dies with the sheet that showed it. Two absences in one
+    // session are two reports.
+    this.awayLog.clear();
+    this.away = true;
     this.lossesLeft = CATCHUP_MAX_LOSSES;
     // The same guard for decay. However long the absence, the city comes back
     // at most CATCHUP_MAX_ABANDONED plots darker than it was left.
@@ -1766,6 +1845,7 @@ export class Game {
     const dt = credited / steps;
     for (let i = 0; i < steps; i++) this.step(dt);
     this.recording = true;
+    this.away = false;
     this.rearm();
     this.lossesLeft = Number.POSITIVE_INFINITY;
     this.abandonsLeft = Number.POSITIVE_INFINITY;
@@ -1776,6 +1856,12 @@ export class Game {
     return {
       seconds: credited,
       forfeited: wanted - credited,
+      startedAt: before.elapsed,
+      // A live view of the log's own array, in the order things happened. Not
+      // saved, not read back, and gone the moment the next catch-up clears it —
+      // exactly what every other event in this game is.
+      timeline: this.awayLog.entries,
+      dropped: this.awayLog.dropped,
       // What auto-development spent was earned first, so from the player's side
       // it is all collections. This is the actual outgoing, not a replay of the
       // cost curve — cost now depends on the demand at the moment of purchase.

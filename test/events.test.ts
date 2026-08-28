@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AWAY_COALESCE_SECONDS,
+  AWAY_EVENT_BUFFER,
   EVENT_BUFFER,
   EVENT_COALESCE_SECONDS,
   EVENT_COVERAGE_LOST,
@@ -390,5 +392,58 @@ describe('a full district, played out', () => {
     expect(log.size).toBeLessThanOrEqual(EVENT_BUFFER);
     // Far more happened than was said, which is the coalescing earning its keep.
     expect(log.total).toBeGreaterThan(log.size);
+  });
+});
+
+/**
+ * The away log: the second EventLog, and the one an absence is reported
+ * through.
+ *
+ * The ticker's silence during a catch-up is right and stays — see
+ * `Game.recording`. What that reasoning was right about is the *ticker*; the
+ * away sheet is modal, has the player's attention, and a list of totals cannot
+ * say what an absence consisted of.
+ */
+describe('the away log', () => {
+  it('coalesces on its own window, not the ticker\'s', () => {
+    expect(AWAY_COALESCE_SECONDS).toBeGreaterThan(EVENT_COALESCE_SECONDS);
+    const away = new EventLog(AWAY_EVENT_BUFFER, AWAY_COALESCE_SECONDS);
+    const ticker = new EventLog();
+    // Two minutes apart: one run to the away log, two lines to the ticker.
+    for (const at of [0, 120]) {
+      const event = { kind: 'level-up' as const, at, zone: 'home' as const, level: 1, count: 3 };
+      away.push(event);
+      ticker.push(event);
+    }
+    expect(away.size).toBe(1);
+    expect(away.entries[0]?.count).toBe(6);
+    expect(ticker.size).toBe(2);
+  });
+
+  it('is bounded, and says how much it dropped', () => {
+    const away = new EventLog(AWAY_EVENT_BUFFER, AWAY_COALESCE_SECONDS);
+    expect(away.dropped).toBe(0);
+    // Distinct subjects far enough apart that nothing merges.
+    for (let i = 0; i < AWAY_EVENT_BUFFER * 3; i++) {
+      away.push({ kind: 'annexed', at: i * AWAY_COALESCE_SECONDS * 2, districts: i + 2, count: 1 });
+    }
+    expect(away.size).toBe(AWAY_EVENT_BUFFER);
+    expect(away.dropped).toBe(AWAY_EVENT_BUFFER * 2);
+    // And what survives is the *newest* end, which is the state the player came
+    // back to rather than the start of an absence they slept through.
+    const last = away.entries[away.size - 1];
+    expect(last?.kind).toBe('annexed');
+    expect(last?.kind === 'annexed' && last.districts).toBe(AWAY_EVENT_BUFFER * 3 + 1);
+  });
+
+  it('clears its drop count with the rest of it', () => {
+    const away = new EventLog(2, AWAY_COALESCE_SECONDS);
+    for (let i = 0; i < 6; i++) {
+      away.push({ kind: 'annexed', at: i * 1e5, districts: i + 2, count: 1 });
+    }
+    expect(away.dropped).toBeGreaterThan(0);
+    away.clear();
+    expect(away.dropped).toBe(0);
+    expect(away.size).toBe(0);
   });
 });

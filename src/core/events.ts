@@ -176,6 +176,23 @@ export const EVENT_BUFFER = 16;
 export const EVENT_COALESCE_SECONDS = 30;
 
 /**
+ * Entries the *away* log holds, and how long a run stays one run in it.
+ *
+ * A second set of numbers for a second log, and the two differ because the two
+ * jobs do. The ticker reports the last minute of a city being watched, so it is
+ * sixteen entries over thirty seconds. The away log reports up to twelve hours
+ * of a city nobody was watching, so it is sixty-four entries over five minutes
+ * — long enough that a promotion wave spread across a whole absence is one line
+ * rather than forty, short enough that two waves an hour apart stay two.
+ *
+ * Measured on a twelve-hour catch-up of a mid-size auto-developing city: 24
+ * entries against a bound of 64, so the cap is headroom rather than a trim.
+ * See test/game.test.ts, which asserts the bound.
+ */
+export const AWAY_EVENT_BUFFER = 64;
+export const AWAY_COALESCE_SECONDS = 300;
+
+/**
  * How far a coverage has to fall before the ticker says it has.
  *
  * A deadband, and it is here rather than in config.ts because it is a rule about
@@ -257,6 +274,16 @@ export class EventLog {
   /** Lifetime count, so a test can tell "nothing emitted" from "nothing kept". */
   private emitted = 0;
   /**
+   * Entries pushed out of the front of the ring, lifetime.
+   *
+   * The ticker never needs this — it is drained every frame and a dropped entry
+   * is one the player was not looking at anyway. The away log does: a
+   * twelve-hour absence of a busy city genuinely produces more distinct things
+   * than the ring holds, and a sheet that showed the newest sixty-four and said
+   * nothing would be claiming that was all of it. See `AwayReport.dropped`.
+   */
+  private lost = 0;
+  /**
    * Written out rather than declared as a constructor parameter property.
    *
    * The tools run these modules straight through Node's type-stripping loader,
@@ -265,9 +292,18 @@ export class EventLog {
    * `core/` may use one, or `npm run economy:calibrate` stops at the import.
    */
   private readonly limit: number;
+  /**
+   * Seconds within which two of the same thing are one thing, for *this* log.
+   *
+   * Per instance rather than the module constant it used to read, because the
+   * away log needs a far coarser window than the ticker does — see
+   * AWAY_COALESCE_SECONDS. One class, one merge rule, two calibrations.
+   */
+  private readonly window: number;
 
-  constructor(limit = EVENT_BUFFER) {
+  constructor(limit = EVENT_BUFFER, coalesce = EVENT_COALESCE_SECONDS) {
     this.limit = limit;
+    this.window = coalesce;
   }
 
   /**
@@ -289,7 +325,7 @@ export class EventLog {
     for (let i = this.items.length - 1; i >= 0; i--) {
       const held = this.items[i] as GameEvent;
       if (!sameSubject(held, event)) continue;
-      if (event.at - held.at > EVENT_COALESCE_SECONDS) break;
+      if (event.at - held.at > this.window) break;
       // Merged in place, so the line keeps its position and its count ticks up
       // rather than the entry jumping to the bottom of the ticker each time.
       this.items[i] = {
@@ -302,7 +338,10 @@ export class EventLog {
     this.items.push(event);
     // Oldest first out. A shift on an array of sixteen is cheaper than the ring
     // arithmetic that would avoid it, and this runs at most once per push.
-    if (this.items.length > this.limit) this.items.shift();
+    if (this.items.length > this.limit) {
+      this.items.shift();
+      this.lost++;
+    }
   }
 
   /**
@@ -349,8 +388,14 @@ export class EventLog {
     return this.emitted;
   }
 
+  /** How many entries the ring has pushed out of its front. See `lost`. */
+  get dropped(): number {
+    return this.lost;
+  }
+
   clear(): void {
     this.items = [];
     this.emitted = 0;
+    this.lost = 0;
   }
 }

@@ -221,6 +221,16 @@ const TICKER_SECONDS = 45;
  */
 const TICKER_LINES = 4;
 
+/**
+ * Lines the away timeline shows before it says "and N more".
+ *
+ * Against a log bounded at AWAY_EVENT_BUFFER, so this is a rendering cap rather
+ * than the bound: twelve is what a modal sheet holds without the button
+ * scrolling off the bottom of a phone, and the list scrolls past that. Measured
+ * on a twelve-hour absence of a mid-size auto-developing city, the log holds 24.
+ */
+const AWAY_TIMELINE_LINES = 12;
+
 /** What the ticker calls each zone, in the plural a count reads well against. */
 /** What the ticker calls each zone's land when the surveyor moves it. */
 const ZONE_LAND: Record<ZoneKind, string> = {
@@ -234,6 +244,25 @@ const ZONE_PLURAL: Record<ZoneKind, string> = {
   shop: 'shops',
   industry: 'works',
 };
+
+/**
+ * The singular, for the lines that can carry a count of one.
+ *
+ * "1 shops became high street" was a wart the ticker could carry — four lines
+ * that scroll past in forty-five seconds — and the away timeline cannot: it
+ * shows a dozen at once on a modal sheet with the player's whole attention.
+ * Works is the one that does not inflect, which is why this is a table rather
+ * than a rule about trailing letters.
+ */
+const ZONE_SINGULAR: Record<ZoneKind, string> = {
+  home: 'home',
+  shop: 'shop',
+  industry: 'works',
+};
+
+/** The right one of the two, for a count. */
+const zonePlural = (zone: ZoneKind, count: number): string =>
+  count === 1 ? ZONE_SINGULAR[zone] : ZONE_PLURAL[zone];
 
 /** Below this a chip would say "-0%", which is noise rather than information. */
 const CHIP_DEADBAND = 0.005;
@@ -458,6 +487,9 @@ export class Hud {
     welcome: el('welcome'),
     welcomeAway: el('welcome-away'),
     welcomeRows: el('welcome-rows'),
+    welcomeTimeline: el('welcome-timeline'),
+    welcomeMore: el('welcome-more'),
+    welcomeTotals: el<HTMLDetailsElement>('welcome-totals'),
     welcomeClose: el<HTMLButtonElement>('welcome-close'),
     inspect: el('inspect'),
     inspectTitle: el('inspect-title'),
@@ -902,7 +934,7 @@ export class Hud {
         };
       case 'fire-lost':
         return {
-          text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} lost to fire`,
+          text: `${many(event.count)} ${zonePlural(event.zone, event.count)} lost to fire`,
           tone: 'bad',
         };
       case 'blocked':
@@ -919,14 +951,20 @@ export class Hud {
         // that meant a different thing at one rung than at the others.
         const from =
           event.level === MERGE_LEVEL
-            ? `pairs of ${ZONE_PLURAL[event.zone]}`
-            : ZONE_PLURAL[event.zone];
+            ? `${event.count === 1 ? 'pair' : 'pairs'} of ${ZONE_PLURAL[event.zone]}`
+            : zonePlural(event.zone, event.count);
         return { text: `${many(event.count)} ${from} became ${to}`, tone: 'good' };
       }
       case 'abandoned':
-        return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} boarded up`, tone: 'bad' };
+        return {
+          text: `${many(event.count)} ${zonePlural(event.zone, event.count)} boarded up`,
+          tone: 'bad',
+        };
       case 'recovered':
-        return { text: `${many(event.count)} ${ZONE_PLURAL[event.zone]} reopened`, tone: 'good' };
+        return {
+          text: `${many(event.count)} ${zonePlural(event.zone, event.count)} reopened`,
+          tone: 'good',
+        };
       case 'annexed':
         return { text: `District ${many(event.districts)} annexed`, tone: 'good' };
       case 'surveyed':
@@ -1879,6 +1917,7 @@ export class Hud {
     if (report.seconds < 60 || (report.earned < 1 && !notable)) return;
     const n = this.nodes;
     n.welcomeAway.textContent = fmtDuration(report.seconds);
+    this.paintTimeline(report);
 
     const rows: Array<[string, string]> = [['Collected', fmt(report.earned)]];
     if (report.homes > 0) rows.push(['Homes built', fmtInt(report.homes)]);
@@ -1925,5 +1964,55 @@ export class Hud {
 
     n.welcome.hidden = false;
     n.welcomeClose.focus();
+  }
+
+  /**
+   * The timeline, above the totals.
+   *
+   * Offsets rather than an absolute clock: an event carries `elapsed`, which
+   * for a city that has been running for three days is a six-figure number
+   * meaning nothing to anybody. Against `report.startedAt` it becomes "+2h14m",
+   * which reads directly against the sheet's own "6h 12m" headline.
+   *
+   * Capped, and the cap is on the *rendering* rather than on the log: the log
+   * is already bounded at AWAY_EVENT_BUFFER, and this is the shorter number a
+   * modal sheet can show without scrolling past the button. What is kept is the
+   * newest end, because the last thing that happened is the state the player is
+   * looking at.
+   *
+   * Wording comes from `tickLine`, so the sheet and the ticker say the same
+   * thing about the same event — two vocabularies for one set of facts would be
+   * two things to learn.
+   */
+  private paintTimeline(report: AwayReport): void {
+    const n = this.nodes;
+    const all = report.timeline;
+    const shown = all.slice(-AWAY_TIMELINE_LINES);
+    n.welcomeTimeline.replaceChildren(
+      ...shown.map((event) => {
+        const line = this.tickLine(event);
+        const row = document.createElement('li');
+        row.className = line.tone;
+        const at = document.createElement('span');
+        at.className = 'at';
+        // Floored at zero: the first step of a catch-up lands a hair past the
+        // origin, and "-0s" would be a stray minus sign on the first line.
+        at.textContent = `+${fmtDuration(Math.max(0, event.at - report.startedAt))}`;
+        const what = document.createElement('span');
+        what.className = 'what';
+        what.textContent = line.text;
+        row.append(at, what);
+        return row;
+      }),
+    );
+    // Both halves of what is not on screen: the lines this list did not render,
+    // and the ones the log itself ran out of room for. They are the same fact
+    // to a player — things happened that are not shown — and splitting them
+    // into two sentences would be an implementation detail on a modal sheet.
+    const more = all.length - shown.length + report.dropped;
+    n.welcomeMore.textContent = more > 0 ? `and ${fmtInt(more)} more, earlier` : '';
+    // Open when there is no timeline to explain them, closed when there is: a
+    // sheet that led with a fold nobody opened would have buried the report.
+    n.welcomeTotals.open = all.length === 0;
   }
 }
