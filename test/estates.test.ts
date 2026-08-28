@@ -11,6 +11,7 @@ import {
   INDUSTRIAL_OUTPUT,
   JOBS_PER_ESTATE_PLOT,
   JOBS_PER_INDUSTRIAL,
+  LEVELS,
   MAX_DISTRICTS,
 } from '../src/sim/config';
 import {
@@ -253,16 +254,18 @@ describe('what an estate is worth', () => {
     // is a place in the sweep where none of the three signals is on a bound —
     // see tools/estates.calibrate.mjs. A pinned signal says nothing.
     //
-    // This row used to read tower housing, and TRADE_LADDER moved it. The goods
-    // gap is a *difference* of two laddered terms — a district draws 180 and
-    // supplies 117, so it is 65% covered — and scaling both sides scales the
-    // shortfall the city was already carrying. Measured at 14 districts, built
-    // out to frontage: industrial demand runs +1.00 / +1.00 / +1.00 / +0.69 /
-    // +0.34 up the ladder where it ran +1.00 / +0.71 / +0.16 / +0.04 / +0.01
-    // before, so the first rung with headroom is now the fourth. The guard on
-    // the line below is what caught the move rather than letting the assertion
-    // quietly pass against a saturated signal.
-    const bare = works(3, HIGHWAY_MIN_DISTRICTS);
+    // This row used to read tower housing, then arcologies, and TRADE_LADDER
+    // moved it both times. The goods gap is a *difference* of two laddered
+    // terms — a district draws 180 and supplies 117, so it is 65% covered — and
+    // scaling both sides scales the shortfall the city was already carrying.
+    // Measured at 14 districts, built out to frontage: industrial demand runs
+    // +1.00 / +1.00 / +1.00 / +1.00 / +0.70 up the ladder, against
+    // +1.00 / +1.00 / +1.00 / +0.69 / +0.34 at the previous exponent and
+    // +1.00 / +0.71 / +0.16 / +0.04 / +0.01 before there was one, so the first
+    // rung with headroom is now the top one. The guard on the line below is
+    // what caught the move rather than letting the assertion quietly pass
+    // against a saturated signal.
+    const bare = works(LEVELS - 1, HIGHWAY_MIN_DISTRICTS);
     expect(Math.abs(demandTargets(bare).i)).toBeLessThan(1);
     const built = { ...bare, estates: 8 };
     const before = demandTargets(bare);

@@ -391,6 +391,26 @@ describe('the price curve, derived from the allotment', () => {
     }
   });
 
+  it('keeps the two pool zones in step however many districts the city takes', () => {
+    // The failure this exists for, and the one the two tests above cannot see
+    // because each of them looks at one zone at a time. Housing and commerce
+    // used to fill a district for 23.2x and 363.7x — the same 1.14 a plot over
+    // 24 plots against 45 — so the price of a shop against a house ran away as
+    // `16 ** districts` whatever the city or the surveyor did about it. On the
+    // save this was reported from, eight districts in, that was a house at 228M
+    // against a shop at 626B, with the demand panel reading C +100%: the city
+    // asking for the one thing its own price curve had put out of reach.
+    //
+    // Both zones fill a district for DISTRICT_FILL_MULTIPLE now, so a city that
+    // has filled the same share of each pays the ratio of the two bases for a
+    // shop over a house, at one district and at every district after it.
+    for (let districts = 1; districts <= 12; districts++) {
+      const s = city(districts);
+      const both = { ...s, ...built(homeCapacity(s), shopCapacity(s), 0) };
+      expect(shopCost(both) / homeCost(both)).toBeCloseTo(SHOP_BASE / HOME_BASE, 9);
+    }
+  });
+
   it('does not move a price when a district is annexed', () => {
     // What per-district growth buys over a city-wide allotment: a new district
     // appends a term whose numerator is zero, so nothing already priced moves.
