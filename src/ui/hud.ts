@@ -21,6 +21,9 @@ import {
   LANDMARKS,
   LANDMARK_MOOD,
   CONGESTION_MOOD,
+  CRIME_MOOD,
+  EDUCATION_SERVICES,
+  GARBAGE_MOOD,
   HAPPINESS_MIN_BUILD,
   PLOTS_PER_PARK,
   LEVEL_EDUCATION,
@@ -76,6 +79,8 @@ import {
   canAscend,
   cityHallBlocker,
   cityRank,
+  crime,
+  garbage,
   legacyGain,
   legacyMultiplier,
   nextRank,
@@ -554,6 +559,10 @@ export class Hud {
     transitFares: el('transit-fares'),
     transitLabour: el('transit-labour'),
     transitCongestion: el('transit-congestion'),
+    crimeRate: el('crime-rate'),
+    crimeMood: el('crime-mood'),
+    garbageRate: el('garbage-rate'),
+    garbageMood: el('garbage-mood'),
     transitCongestionMood: el('transit-congestion-mood'),
     landmarkShare: el('landmark-share'),
     landmarkMood: el('landmark-mood'),
@@ -1616,7 +1625,10 @@ export class Hud {
       row.built.textContent = fmtInt(built);
       row.covers.textContent = `covers ${fmtInt(covered)} of ${fmtInt(plots)}`;
       row.row.classList.toggle('covered', reach >= 1);
-      (service.weight > 0 ? spoken : taught).push(
+      // Split by what the row is *about* rather than by its weight: police
+      // carry 0 since crime became a quantity, and a weight test would have
+      // read them into the education block. See the police row in SERVICES.
+      (EDUCATION_SERVICES.some((entry) => entry.key === service.key) ? taught : spoken).push(
         `${service.name} ${built}, covering ${Math.round(covered)} of ${Math.round(plots)} housing plots`,
       );
     }
@@ -1630,6 +1642,19 @@ export class Hud {
     n.parksRow.classList.toggle('covered', reach >= 1);
     spoken.push(
       `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of housing land`,
+    );
+    // Crime, under the stations that answer it. Stated as the rate and what it
+    // costs, in the units every other modifier in this HUD uses — see the
+    // Traffic row, which says the same two things about the same target.
+    const crimeAt = crime(s);
+    n.crimeRate.textContent = pct(crimeAt);
+    n.crimeMood.textContent =
+      crimeAt <= 0
+        ? 'no effect on mood'
+        : `−${(CRIME_MOOD * crimeAt * 100).toFixed(1)} points of mood`;
+    spoken.push(
+      `Crime ${Math.round(crimeAt * 100)} percent` +
+        (crimeAt > 0 ? `, costing ${(CRIME_MOOD * crimeAt * 100).toFixed(1)} points of mood` : ''),
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
@@ -1675,6 +1700,14 @@ export class Hud {
       jam <= 0
         ? 'no effect on mood'
         : `−${(CONGESTION_MOOD * jam * 100).toFixed(1)} points of mood`;
+    // And the bins, which the same depots empty. Fourth thing this block says a
+    // depot is for — see `garbageCollection`.
+    const bins = garbage(s);
+    n.garbageRate.textContent = pct(bins);
+    n.garbageMood.textContent =
+      bins <= 0
+        ? 'no effect on mood'
+        : `−${(GARBAGE_MOOD * bins * 100).toFixed(1)} points of mood`;
     n.transit.setAttribute(
       'aria-label',
       `Transport: ${s.depots} depots covering ${Math.round(transitCoverage(s) * 100)} percent, ` +

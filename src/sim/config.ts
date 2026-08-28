@@ -1505,9 +1505,29 @@ export interface Service {
  * site interleave cannot quietly reopen the ceiling.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 20, base: 130,    growth: 1.35, weight: 0.34, span: 2 },
-  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 26, base: 210,    growth: 1.35, weight: 0.26, span: 2 },
-  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 31, base: 320,    growth: 1.35, weight: 0.22, span: 2 },
+  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 20, base: 130,    growth: 1.35, weight: 0.46, span: 2 },
+  /**
+   * Police carry no happiness weight any more, and that is the whole of the
+   * crime re-calibration rather than a side effect of it.
+   *
+   * Crime used to be an abstraction: police coverage fed the mood directly, so
+   * "how safe is the city" was "how many police stations did you buy" and
+   * nothing else. `crime` makes it a quantity with sources — crowding and
+   * unemployment — that police *answer* rather than define. The two readings
+   * cannot both be charged for: the option of leaving this at 0.26 and adding
+   * crime as a modifier on top was measured and rejected, because it charges
+   * the same purchase twice and a city with no police pays for the shortfall
+   * and for the crime it causes.
+   *
+   * So the 0.26 moved. The other three were re-normalised to keep the sum at
+   * exactly 1 — 0.34/0.22/0.18 over 0.74 is 0.4595/0.2973/0.2432, and the
+   * table rounds them to 0.46/0.30/0.24, which sums to 1.00 exactly and is
+   * within half a point of the exact ratio everywhere. See CRIME_MOOD, which
+   * is 0.26: what a maximally pressured city with no police loses is exactly
+   * what this weight used to take off it.
+   */
+  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 26, base: 210,    growth: 1.35, weight: 0,    span: 2 },
+  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 31, base: 320,    growth: 1.35, weight: 0.30, span: 2 },
   /**
    * Schools take the fourth slot in the 2x2 interleave, and 15 is the only
    * integer that keeps LEVEL_EDUCATION's design intact at both ends of the map.
@@ -2174,15 +2194,19 @@ export const LANDMARK_MOOD = 0.12;
 export const PLOTS_PER_PARK = 6;
 
 /**
- * Recreation's share of happiness. With the three services above it sums to 1.
+ * Recreation's share of happiness. With the two services above it sums to 1.
  *
- * The smallest of the four, deliberately. A park is the cheapest of the
+ * The smallest of the three, deliberately. A park is the cheapest of the
  * amenities and its land is the interior of a block that nothing else can use,
  * so it should not be worth as much as a hospital — but a city that never
- * builds one is capped at 0.82, which is a visible ceiling rather than a
+ * builds one is capped at 0.76, which is a visible ceiling rather than a
  * punishment, and still miles clear of HAPPINESS_MIN_BUILD.
+ *
+ * Three rather than four since crime: police left the weighted sum and the
+ * 0.26 it carried was re-normalised across what was left — see the police row
+ * in SERVICES, which carries the arithmetic.
  */
-export const RECREATION_WEIGHT = 0.18;
+export const RECREATION_WEIGHT = 0.24;
 
 /**
  * Parks earn nothing and compound gently.
@@ -2739,6 +2763,123 @@ export const HIGHWAY_COST = ANNEX_BASE * ANNEX_GROWTH ** (HIGHWAY_MIN_DISTRICTS 
  * only curve that is still steep where the airport unlocks is the land's.
  */
 export const AIRPORT_BASE = ANNEX_BASE * ANNEX_GROWTH ** HIGHWAY_MIN_DISTRICTS;
+
+// ------------------------------------------------------------------- crime
+
+/**
+ * What a fully criminal city costs the mood.
+ *
+ * 0.26, which is exactly the weight police used to carry in SERVICES — see the
+ * police row, which carries the arithmetic. That is what makes this a
+ * *re-calibration* rather than a fifth term: a maximally pressured city with no
+ * police loses precisely what it lost before, and everything else about the
+ * change is that the loss now has a size that varies.
+ *
+ * The three modifiers it sits beside for scale: the punitive tax rate is -0.14,
+ * a fully jammed city is -0.14, and full landmark coverage is +0.12. Crime is
+ * the largest of them, which is right — it is carrying a whole service's worth
+ * of mood on its own.
+ *
+ * The ceiling is safe by construction, which is the property NOTES.md section 9
+ * says a modifier has to have: `crime` is pressure times *uncovered* police, so
+ * a city with its police stations built reads exactly zero however crowded and
+ * however idle it is. See `test/services.test.ts` -> "the happiness ceiling".
+ */
+export const CRIME_MOOD = 0.26;
+
+/**
+ * What crime is made of, before police answer any of it.
+ *
+ * Two sources, and they sum to 1 so a maximally crowded, wholly unemployed city
+ * reads exactly 1 and the constant above means what it says.
+ *
+ *   - **crowding.** People per housing plot, log-compressed — see
+ *     `crimeCrowding`. LEVEL_CAPACITY spans 4 to 1,200 a plot, so a linear read
+ *     would be a rounding error for the first three rungs of the ladder and the
+ *     term would only exist in a city of arcologies;
+ *   - **idleness.** Workers with no job to go to. The one source that is not a
+ *     function of size at all: a city can be small and idle, and this is what
+ *     makes the industrial and commercial zones a *safety* argument as well as
+ *     an income one.
+ *
+ * Weighted toward idleness, and deliberately. Crowding is something the player
+ * chooses by climbing the level ladder and cannot undo; unemployment is
+ * something they can zone their way out of this minute. A term the player can
+ * act on should be the larger half of one they cannot.
+ */
+export const CRIME_FROM_CROWDING = 0.4;
+export const CRIME_FROM_IDLENESS = 0.6;
+
+/**
+ * Residents per housing plot at which crowding reads 1.
+ *
+ * The middle rung of the ladder rather than the top, and derived from it: a
+ * city of towers is as crowded as crowding gets, and the two rungs above are
+ * about *height* rather than about how many people share a street. Taking the
+ * top rung instead would have left the term under a fifth of its range for the
+ * entire game a player actually plays.
+ */
+export const CRIME_CROWDING_FULL = LEVEL_CAPACITY[MERGE_LEVEL] ?? 70;
+
+// ----------------------------------------------------------------- garbage
+
+/**
+ * What a city nobody collects from costs the mood.
+ *
+ * Under crime and under congestion, and that is the ranking the three should
+ * have: an uncollected street is unpleasant, a jammed one wastes an hour a day
+ * and a dangerous one is a reason to leave. Small enough that the three
+ * together cannot take a covered city below the ceiling, because all three go
+ * to exactly zero when the buildings that answer them are built.
+ */
+export const GARBAGE_MOOD = 0.10;
+
+/**
+ * What the city puts out, per second, per thing that puts it out.
+ *
+ * Residents, trading premises and working industry — the three the brief names,
+ * and the three `income` already reads.
+ *
+ * The three coefficients are set so that no one source carries the term, and
+ * they had to be: `effectiveOf` is level-*weighted* where `activeOf` is
+ * level-*flat*, so the same coefficient on each would have made a mature city's
+ * rubbish 92% shops. Measured at 10 districts, they land within a factor of two
+ * of each other at towers — and the shape they give the ladder is worth having
+ * for itself: a village's rubbish is mostly industrial, because industry is
+ * flat per plot and everything else is small, and by the time the city is
+ * arcologies the people and the shops have taken it over.
+ *
+ * A rate and not a stock. A stock would have to be integrated, which means a
+ * fourth exception to "the save is counts" — and unlike the three that exist it
+ * would be bounded by nothing: `surveyedR` grows with districts, `unlocked`
+ * with a static table and `history` with a fixed ring, where a rubbish stock
+ * grows with time. The rate says the same thing about a settled city and says
+ * it without the save.
+ */
+export const GARBAGE_PER_RESIDENT = 0.09;
+export const GARBAGE_PER_SHOP = 0.2;
+export const GARBAGE_PER_WORKS = 12;
+
+/**
+ * Rubbish per housing plot at which the load reads 1, and the curve it is read
+ * on.
+ *
+ * A square root rather than a straight ratio, and the claim it makes is a
+ * physical one: what makes an uncollected street unpleasant is how much of it
+ * is covered, and a pile twice the size does not cover twice the pavement.
+ * Practically it is also the only shape with range at both ends — the three
+ * sources between them span 6.7 to 212 bags a plot across the level ladder, and
+ * a linear read against the top would be a rounding error for four fifths of a
+ * playthrough.
+ *
+ * Measured in tools/garbage.calibrate.mjs at 10 districts: 0.17 at detached
+ * houses, 0.20 at terraces, 0.29 at towers, 0.51 at megastructures and 0.98 at
+ * arcologies. Never clamped, which is the property the saturation is chosen
+ * for: a term pinned at 1 for the top two rungs would stop being a quantity
+ * exactly where the city gets interesting.
+ */
+export const GARBAGE_SATURATION = 220;
+export const GARBAGE_CURVE = 0.5;
 
 // --------------------------------------------------------------- ascension
 

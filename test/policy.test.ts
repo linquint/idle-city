@@ -37,6 +37,7 @@ import {
   taxStep,
   transitCoverage,
   upkeep,
+  garbage,
 } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { migrate } from '../src/sim/save';
@@ -153,14 +154,52 @@ describe('the tax rate', () => {
   it('buys income with mood rather than handing out both', () => {
     // The trade the control exists to offer, measured on a settled city: the
     // top step earns more per second and settles lower on the happiness bar.
-    const low = at(running({ taxRate: 0, happiness: 0.5 }));
-    const high = at(running({ taxRate: TAX_STEPS.length - 1, happiness: 0.5 }));
+    //
+    // Depots, and they are what "settled" means since rubbish became a mood
+    // term: `served()` covers everything a city can be *covered* by, and the
+    // depot is not one of those — it carries `weight: 0` — but it is what
+    // empties the bins. A city that has not bought one is carrying a penalty it
+    // has not paid to remove, which is a different experiment. See the case
+    // below, which is that one.
+    const settled = { depots: 4, depotStaff: 1 };
+    const low = at(running({ ...settled, taxRate: 0, happiness: 0.5 }));
+    const high = at(running({ ...settled, taxRate: TAX_STEPS.length - 1, happiness: 0.5 }));
     for (let i = 0; i < 20; i++) {
       low.catchUp(HAPPINESS_TAU);
       high.catchUp(HAPPINESS_TAU);
     }
     expect(high.state.happiness).toBeLessThan(low.state.happiness);
     expect(income(high.state)).toBeGreaterThan(income(low.state));
+  });
+
+  /**
+   * And the other side of it, which crime and rubbish made reachable: on a city
+   * that has *not* answered what is already costing it mood, the top rate is a
+   * trap rather than a trade.
+   *
+   * Not a regression, and not new in kind — income is quadratic in happiness
+   * (through `incomeMultiplier` once and through occupancy again), so pushing
+   * an already-low bar lower has always lost more than a linear 1.6x could
+   * win. What moved is where the threshold sits: an uncollected city carries
+   * about 0.055 of mood it could buy back for the price of a depot, and that is
+   * enough to put this fixture the other side of it.
+   */
+  it('is a trap on a city that has not bought its way out of what ails it', () => {
+    const low = at(running({ taxRate: 0, happiness: 0.5 }));
+    const high = at(running({ taxRate: TAX_STEPS.length - 1, happiness: 0.5 }));
+    for (let i = 0; i < 20; i++) {
+      low.catchUp(HAPPINESS_TAU);
+      high.catchUp(HAPPINESS_TAU);
+    }
+    expect(garbage(low.state)).toBeGreaterThan(0.3);
+    expect(high.state.happiness).toBeLessThan(low.state.happiness);
+    expect(income(high.state)).toBeLessThan(income(low.state));
+    // And a depot is what turns it back into a trade. One purchase, and the
+    // same rate that was losing money starts making it.
+    const fixed = at(running({ taxRate: TAX_STEPS.length - 1, happiness: 0.5, depots: 4, depotStaff: 1 }));
+    for (let i = 0; i < 20; i++) fixed.catchUp(HAPPINESS_TAU);
+    expect(garbage(fixed.state)).toBe(0);
+    expect(income(fixed.state)).toBeGreaterThan(income(low.state));
   });
 });
 

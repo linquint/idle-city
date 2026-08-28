@@ -255,6 +255,12 @@
       <div class="svc"><span class="k">Police</span>
         <span class="built" id="svc-police-built">0/0</span>
         <span class="covers" id="svc-police-covers">0 of 0</span></div>
+      <!-- Directly under the stations, because it is what they are for: police
+           carry no happiness weight any more and this row is where the purchase
+           pays off. Same shape as the Traffic row under the depots. -->
+      <div class="svc"><span class="k">Crime</span>
+        <span class="built" id="crime-rate">0%</span>
+        <span class="covers" id="crime-mood">no effect on mood</span></div>
       <div class="svc"><span class="k">Fire</span>
         <span class="built" id="svc-fire-built">0/0</span>
         <span class="covers" id="svc-fire-covers">0 of 0</span></div>
@@ -284,6 +290,13 @@
       <div class="svc"><span class="k">Traffic</span>
         <span class="built" id="transit-congestion">0%</span>
         <span class="covers" id="transit-congestion-mood">no effect on mood</span></div>
+      <!-- The depot is the municipal yard, so the bin lorries come out of it
+           too — see `garbageCollection`. Fourth thing a depot is for, and it is
+           in this block rather than in Services because this is where the
+           building that answers it lives. -->
+      <div class="svc"><span class="k">Rubbish</span>
+        <span class="built" id="garbage-rate">0%</span>
+        <span class="covers" id="garbage-mood">no effect on mood</span></div>
     </div>
 
     <p class="cap">Education</p>

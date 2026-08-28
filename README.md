@@ -561,6 +561,41 @@ Cash is only half of that gate — `activeDeveloped` has to reach
 `ANNEX_MIN_OCCUPANCY` first — which is why the multiplier can be as large as it
 is without deleting the opening hour.
 
+### Crime and rubbish are quantities, and police stopped being a weight
+
+Crime used to be an abstraction: police coverage fed the mood directly, so "how
+safe is the city" meant "how many police stations did you buy". It is a quantity
+now, with sources the city can act on — crowding, which is residents per housing
+plot, and idleness, which is the labour imbalance `demandTargets` already reads,
+normalised by `demandScale` because this game is structurally worker-rich and a
+naive jobs-over-workers ratio reads 96% at every size.
+
+That made the weight a decision rather than an addition, and it was taken the
+way the brief framed it. Police carried 0.26 in a weighted sum of four; charging
+that *and* a crime modifier would bill one purchase twice, and the calibrator
+prints what that costs — between 1.5 and 2 stations of mood for one station. So
+police dropped to `weight: 0`, crime carries the whole term at `CRIME_MOOD` 0.26,
+and the other three were re-normalised: 0.34 / 0.22 / 0.18 over 0.74 rounds to
+0.46 / 0.30 / 0.24, which still sums to exactly 1.
+
+Rubbish is the same machine. A rate rather than a stock, because a stock would
+have to be integrated and that is a fourth exception to "the save is counts"
+bounded by nothing. Residents, trading premises and working industry make it;
+the transit depot collects it, because the depot is the municipal yard and a
+council that runs its buses out of one runs its bin lorries out of it too.
+
+Neither has a geometry, and neither pretends to. `covered` is a plot count with
+nothing anywhere deciding which plots — the rule the coverage overlay already
+states — so a circle round a police station would put a number on screen the
+services panel does not have. The two new overlay modes say what `coverage`
+says: which plots the answer accounts for, oldest land first, with the rest
+shaded by how bad the city-wide reading is.
+
+The ceiling is safe by construction and measured to be: both are pressure times
+*uncovered* service, so a fully served city reads exactly zero on each, and the
+happiness ceiling comes out identical before and after to six decimal places at
+every district count and level. What moved is everything below it.
+
 ## Balance
 
 Every tunable is in `src/sim/config.ts`, and nothing else in that file imports

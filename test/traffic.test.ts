@@ -20,6 +20,7 @@ import {
   cityScale,
   congestion,
   congestionMood,
+  garbageMood,
   congestionWithDepot,
   happinessFix,
   happinessTarget,
@@ -269,11 +270,17 @@ describe('what it costs the mood', () => {
 
   it('lands in the same bracket as the tax step rather than in the weights', () => {
     // Two cities identical but for their traffic: the difference is exactly the
-    // modifier, with nothing rescaled underneath it.
+    // modifiers, with nothing rescaled underneath it.
+    //
+    // Modifier*s*, plural, because a depot answers rubbish as well as traffic
+    // now — see `garbageCollection`. That is the point of the assertion rather
+    // than a complication of it: what a purchase is worth is the sum of the
+    // modifiers it moves, and none of it comes out of the weighted half.
     const jammed = city(4, 1);
     const moving = { ...jammed, depots: 400, depotStaff: 1 };
+    const modifiers = (s: GameState): number => congestionMood(s) + garbageMood(s);
     expect(happinessTarget(moving) - happinessTarget(jammed)).toBeCloseTo(
-      congestionMood(moving) - congestionMood(jammed),
+      modifiers(moving) - modifiers(jammed),
       12,
     );
   });

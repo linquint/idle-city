@@ -11,6 +11,16 @@ import {
   AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   CITY_HALL_BASE,
+  CRIME_CROWDING_FULL,
+  CRIME_FROM_CROWDING,
+  CRIME_FROM_IDLENESS,
+  CRIME_MOOD,
+  GARBAGE_MOOD,
+  GARBAGE_PER_RESIDENT,
+  GARBAGE_PER_SHOP,
+  GARBAGE_PER_WORKS,
+  GARBAGE_CURVE,
+  GARBAGE_SATURATION,
   LEGACY_YIELD,
   RANKS,
   RANK_GATES,
@@ -810,8 +820,13 @@ export const rankBlocker = (s: GameState, gate: RankGate): string | null => {
  * consequence is stated rather than hidden: a legacy city runs a smaller upkeep
  * share than a first one, exactly as a taught city does. See `workforceSkill`,
  * which makes the same trade for the same reason.
+ *
+ * Takes the one field it reads rather than the whole state, which is the
+ * honest signature: it says in the type that a legacy is not a property of the
+ * city, and it lets a caller price a legacy the city does not have yet — which
+ * is exactly what the HUD's button and the calibrator's table both do.
  */
-export const legacyMultiplier = (s: GameState): number =>
+export const legacyMultiplier = (s: Pick<GameState, 'legacy'>): number =>
   1 + LEGACY_YIELD * Math.sqrt(Math.max(0, s.legacy));
 
 /**
@@ -1084,6 +1099,189 @@ export const congestionWithDepot = (s: GameState): number => {
  * `happinessTarget` sees one bracket of things added and this among them.
  */
 export const congestionMood = (s: GameState): number => -CONGESTION_MOOD * congestion(s);
+
+// --------------------------------------------------------------------- crime
+
+/** The police service, or undefined if the table is ever built without one. */
+export const POLICE = SERVICES.find((service) => service.key === 'police');
+
+/**
+ * How crowded the city's housing is, in [0, 1].
+ *
+ * Residents per housing plot against CRIME_CROWDING_FULL, which is the middle
+ * rung of the ladder. Measured across the five rungs of a built-out district:
+ * 0.05, 0.21, 0.92, 1.00, 1.00 — so crowding is nothing in a village of
+ * detached houses, is noticeable in a town of terraces and is the whole of what
+ * it can be once towers go up. That is the ramp the term wants: what is being
+ * measured is how many people share a street, and the two rungs above towers
+ * are about height rather than about that.
+ *
+ * Residents rather than `population`, unlike a rank: crowding is about the
+ * people who are actually there, and a half-empty tower is a half-crowded
+ * street. It is the one place in this file where the occupancy integrator
+ * *should* feed a reading.
+ */
+export const crimeCrowding = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 0;
+  return Math.min(1, residents(s) / plots / CRIME_CROWDING_FULL);
+};
+
+/**
+ * Share of the city's workforce with nowhere to go, in [0, 1].
+ *
+ * Against `demandScale` rather than against the workforce, and that is the one
+ * thing this could not be got wrong: this game is *structurally* worker-rich —
+ * jobs are per plot and workers are per resident, so a built-out level-4
+ * district has 14,573 workers against 2,646 jobs and `1 - jobs/workers` reads
+ * 96% at every city size. It would have been a level term wearing an
+ * unemployment label. `demandScale` is the imbalance the whole demand model is
+ * normalised by — DEMAND_SCALE times `cityScale` — so this is the same reading
+ * `demandTargets` takes for housing, with the sign the other way up.
+ *
+ * `workers` rather than `reachableWorkers`, and the difference is worth
+ * stating: a bus route delivers a worker to a job that exists, and it does not
+ * create one. Measuring idleness against the reachable force would have made
+ * opening a depot *raise* the reported unemployment, which is exactly backwards
+ * as a statement about what a depot is for.
+ *
+ * Zero for a city with nobody in it, so a fresh save is not idle — it is empty.
+ */
+export const unemployment = (s: GameState): number =>
+  Math.max(0, Math.min(1, (workers(s) - jobs(s)) / demandScale(s)));
+
+/**
+ * How much crime the city would have with no police at all, in [0, 1].
+ *
+ * The part police do not answer, and the whole of what makes this a quantity
+ * rather than an abstraction — see CRIME_FROM_CROWDING and CRIME_FROM_IDLENESS,
+ * which sum to 1 so a maximally crowded and wholly idle city reads exactly 1.
+ */
+export const crimePressure = (s: GameState): number =>
+  Math.min(
+    1,
+    CRIME_FROM_CROWDING * crimeCrowding(s) + CRIME_FROM_IDLENESS * unemployment(s),
+  );
+
+/**
+ * How much crime the city actually has, in [0, 1].
+ *
+ * Pressure times the share of the housing the police do *not* reach, and the
+ * multiplication is the load-bearing part in three directions at once:
+ *
+ *   - it is not `1 - policeCoverage`, which is the abstraction this feature
+ *     exists to remove. A quiet, employed village with no police station has
+ *     almost no crime, and a crowded idle city with the same coverage has a
+ *     great deal;
+ *   - it is answerable. Full police coverage takes it to exactly zero whatever
+ *     the pressure, which is what keeps the happiness ceiling reachable — see
+ *     CRIME_MOOD, and `test/services.test.ts` -> "the happiness ceiling";
+ *   - it has no geometry, and does not pretend to. `coverage` is a plot count
+ *     over the housing land, with nothing anywhere deciding *which* plots — the
+ *     rule `zones.ts` states about the coverage overlay — so this is a share of
+ *     the city rather than a map of it.
+ *
+ * Not scaled by `shortfallShare`, exactly as congestion is not, and the reason
+ * is the same one congestion gives: the grace is about a *service* a city is
+ * too small to have needed yet, and a city is never too small to have its own
+ * crime. It was tried the other way and measured out as unnecessary as well as
+ * inconsistent — `unemployment` is normalised by `demandScale`, so a
+ * one-house city reads 0.7% idle rather than the "wholly idle" a naive
+ * jobs-over-workers ratio would have given it, and its pressure comes out at
+ * 0.027. There was nothing to excuse.
+ */
+export const crime = (s: GameState): number => {
+  if (!POLICE) return 0;
+  return Math.max(0, crimePressure(s) * (1 - coverage(s, POLICE)));
+};
+
+/** What crime costs the happiness target, in points. Never positive. */
+export const crimeMood = (s: GameState): number => -CRIME_MOOD * crime(s);
+
+// ------------------------------------------------------------------- garbage
+
+/**
+ * What the city puts out each second, in bags.
+ *
+ * Residents, trading premises and working industry — the three the brief names
+ * and the three `income` already reads, so the rubbish a city makes and the
+ * money it makes are read off the same numbers. `effectiveOf` and `activeOf`
+ * rather than the raw counts, which is what makes a boarded-up shop stop
+ * putting bins out.
+ */
+export const garbageRate = (s: GameState): number =>
+  residents(s) * GARBAGE_PER_RESIDENT +
+  effectiveOf(s, 'shop') * GARBAGE_PER_SHOP +
+  activeOf(s, 'industry') * GARBAGE_PER_WORKS;
+
+/**
+ * How much rubbish there is to shift, per housing plot, in [0, 1].
+ *
+ * Per housing plot for the reason every coverage in this file is: it is the one
+ * denominator that is level-invariant, merge-invariant and occupancy-invariant,
+ * so a city that promotes every building does not suddenly read as cleaner.
+ * Read on a square root against GARBAGE_SATURATION — see that constant for the
+ * curve and the measured ramp.
+ */
+export const garbageLoad = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 0;
+  const per = garbageRate(s) / plots;
+  return Math.min(1, (per / GARBAGE_SATURATION) ** GARBAGE_CURVE);
+};
+
+/**
+ * Share of the city's rubbish somebody comes for, in [0, 1].
+ *
+ * The transit depot, and it is the depot because the depot is the municipal
+ * yard: it is where the city keeps the vehicles that go out on a round, and a
+ * council that runs its buses out of one runs its bin lorries out of it too.
+ * That gives the depot a second reason to exist and costs the balance nothing,
+ * because TRANSIT carries `weight: 0` — the building was already the least
+ * motivated of the five and this is the first happiness argument it has.
+ *
+ * A list of one rather than a single read, and that is the wiring the brief
+ * asks for: a recycling centre is blocked on land — there is no sixth
+ * CIVIC_SERVICES entry to be had, and `siteCapacity` divides by that list's
+ * length — so when the land question is answered, a second collector joins this
+ * sum and nothing else in the model moves.
+ *
+ * Plots-covered rather than a radius, and that is the trap avoided rather than
+ * a shortcut taken. `covered(s, service)` is a plot *count*; nothing anywhere
+ * decides which plots it is, so a circle drawn round a depot would put a number
+ * on screen the services panel does not have. See the comment on the coverage
+ * overlay in `zones.ts`, which states the same rule from the other side.
+ */
+export const GARBAGE_COLLECTORS: readonly ServiceKey[] = ['transit'];
+
+export const garbageCollection = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 1;
+  let reached = 0;
+  for (const key of GARBAGE_COLLECTORS) {
+    const service = SERVICES.find((entry) => entry.key === key);
+    if (service) reached += covered(s, service);
+  }
+  return Math.min(1, reached / plots);
+};
+
+/**
+ * How much rubbish is lying about, in [0, 1].
+ *
+ * Same shape as `crime`, and for the same reasons: the load has sources, the
+ * collection answers all of it, neither half pretends to a geometry the game
+ * does not have, and neither is excused by `shortfallShare` — a village makes
+ * its own rubbish whether or not it is big enough to have needed a depot.
+ *
+ * `Math.max(0, …)` on both so a covered city reads +0 rather than -0. A sign
+ * on a zero is invisible everywhere except in a test that asserts equality,
+ * and that is exactly where it would be found.
+ */
+export const garbage = (s: GameState): number =>
+  Math.max(0, garbageLoad(s) * (1 - garbageCollection(s)));
+
+/** What uncollected rubbish costs the happiness target, in points. */
+export const garbageMood = (s: GameState): number => -GARBAGE_MOOD * garbage(s);
 
 /**
  * Share of the city's housing land a service reaches, capped at all of it.
@@ -1439,7 +1637,7 @@ export function estateBlocker(s: GameState): string | null {
  * the two have in common and nothing more.
  */
 export interface HappinessTerm {
-  readonly key: ServiceKey | 'recreation' | 'congestion';
+  readonly key: ServiceKey | 'recreation' | 'congestion' | 'crime' | 'garbage';
   readonly coverLabel: string;
   readonly weight: number;
   /**
@@ -1485,10 +1683,16 @@ export const shortfallShare = (s: GameState): number =>
  * Every term happiness is made of, services first, then recreation, then the
  * one modifier the panel can name.
  *
- * The first four are the weights, and they sum to exactly 1. Congestion is
- * `modifier: true` and is not one of them — it is here so the panel has a row
- * for it and `bindingTerm` can pick it, which is the whole of what makes a depot
- * a mood purchase. See `HappinessTerm.modifier`.
+ * The first three are the weights, and they sum to exactly 1. Congestion,
+ * crime and rubbish are `modifier: true` and are not among them — they are here
+ * so the panel has a row for each and `bindingTerm` can pick one, which is the
+ * whole of what makes a depot and a police station mood purchases. See
+ * `HappinessTerm.modifier`.
+ *
+ * Police is no longer in the weighted half and is in the modifier half twice
+ * over: it answers crime, and the depot beside it answers both congestion and
+ * rubbish. That is the shape the re-calibration was for — a service is worth
+ * what the problem it solves costs, rather than worth a number in a table.
  */
 export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
   ...HAPPINESS_SERVICES.map((service) => ({
@@ -1510,6 +1714,20 @@ export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
     coverLabel: 'Roads clear',
     weight: CONGESTION_MOOD,
     coverage: 1 - congestion(s),
+    modifier: true,
+  },
+  {
+    key: 'crime' as const,
+    coverLabel: 'Streets safe',
+    weight: CRIME_MOOD,
+    coverage: 1 - crime(s),
+    modifier: true,
+  },
+  {
+    key: 'garbage' as const,
+    coverLabel: 'Bins emptied',
+    weight: GARBAGE_MOOD,
+    coverage: 1 - garbage(s),
     modifier: true,
   },
 ];
@@ -1549,11 +1767,21 @@ export const happinessTarget = (s: GameState): number => {
   // service a city is too small to have needed yet, and a city too small to
   // have needed a hospital has too few residents to jam its own streets, so the
   // term is already small there on its own.
+  //
+  // Crime and rubbish are the fifth and sixth, and the first two that replace a
+  // weight rather than sitting on top of one. Police used to carry 0.26 in the
+  // weighted sum; it carries nothing now and `crimeMood` carries it instead —
+  // see the police row in SERVICES for the arithmetic and for why charging both
+  // was rejected. Neither is scaled by `shortfallShare`, exactly as congestion
+  // is not: the grace is about a service a city has not needed yet, and a city
+  // is never too small to have its own crime or its own bins.
   const policy =
     taxStep(s).mood +
     (faresWaived(s) ? FREE_TRANSPORT_MOOD : 0) +
     LANDMARK_MOOD * landmarkCoverage(s) +
-    congestionMood(s);
+    congestionMood(s) +
+    crimeMood(s) +
+    garbageMood(s);
   return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
 
@@ -1624,15 +1852,39 @@ export const happinessFix = (s: GameState): HappinessFix | null => {
   // carries `weight: 0`, so it is not in HAPPINESS_SERVICES and the loop above
   // never sees it — but a jammed city has a purchase that fixes it, and a panel
   // that could not name that purchase would be naming a problem with no answer.
+  //
+  // It answers rubbish as well now, and the two lifts are summed rather than
+  // listed twice: one button cannot be two rows, and what the player wants to
+  // know is what pressing it is worth. See `garbageCollection` for why the
+  // depot is the yard the bin lorries come out of.
   if (TRANSIT && serviceCount(s, 'transit') < serviceAllowed(s, TRANSIT)) {
     const cost = serviceCost(s, TRANSIT);
+    const cleaner = { ...s, depots: s.depots + 1, depotStaff: 1 };
     options.push({
       label: TRANSIT.buildLabel,
       cost,
       affordable: s.cash >= cost,
       // Not scaled by `share`: congestion is a modifier and is not excused for
       // a small city — see `happinessTarget`.
-      lift: CONGESTION_MOOD * (congestion(s) - congestionWithDepot(s)),
+      lift:
+        CONGESTION_MOOD * (congestion(s) - congestionWithDepot(s)) +
+        GARBAGE_MOOD * (garbage(s) - garbage(cleaner)),
+    });
+  }
+
+  // And the police station, for exactly the reason the depot is here: police
+  // carry `weight: 0` since crime became a quantity, so the loop above never
+  // sees them either — and a city being robbed has a purchase that stops it.
+  if (POLICE && serviceCount(s, 'police') < serviceAllowed(s, POLICE)) {
+    const cost = serviceCost(s, POLICE);
+    // One more station at full staffing, which is the same marginal reading
+    // every other option in this list uses.
+    const safer = { ...s, police: s.police + 1, policeStaff: 1 };
+    options.push({
+      label: POLICE.buildLabel,
+      cost,
+      affordable: s.cash >= cost,
+      lift: CRIME_MOOD * (crime(s) - crime(safer)),
     });
   }
 
@@ -2163,8 +2415,8 @@ export interface DemandTargets {
   readonly i: number;
 }
 
-/** The police and hospital entries, looked up once. See TRANSIT for the pattern. */
-const POLICE = SERVICES.find((service) => service.key === 'police');
+/** The hospital entry, looked up once. See TRANSIT for the pattern; POLICE is
+ *  already exported above, because `crime` reads it. */
 const HOSPITAL = SERVICES.find((service) => service.key === 'hospital');
 
 /**

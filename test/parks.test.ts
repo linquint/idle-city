@@ -16,6 +16,8 @@ import {
 import {
   bindingTerm,
   congestionMood,
+  crimeMood,
+  garbageMood,
   canBuildPark,
   happinessTarget,
   happinessTerms,
@@ -231,27 +233,38 @@ describe('recreation coverage', () => {
 });
 
 describe('the happiness weights', () => {
-  it('sum to exactly 1 across the four terms', () => {
-    // Across the four that *are* happiness terms. Schools and universities are
+  it('sum to exactly 1 across the three terms', () => {
+    // Across the three that *are* happiness terms. Schools and universities are
     // services by every other measure — a site, a cost curve, a staffing ramp —
     // and deliberately carry no weight here: what they gate is how tall the city
     // may build. Adding them to this sum would re-open the calibration for
     // nothing. See LEVEL_EDUCATION.
+    //
+    // Three rather than four since crime. Police carried 0.26 and carry nothing
+    // now: `crime` is a quantity with sources that police *answer*, so charging
+    // the coverage as well would be charging one purchase twice. The 0.26 was
+    // re-normalised across what was left — see the police row in SERVICES.
     const services = SERVICES.reduce((sum, service) => sum + service.weight, 0);
     expect(services + RECREATION_WEIGHT).toBeCloseTo(1, 12);
-    expect(HAPPINESS_SERVICES).toHaveLength(3);
+    expect(HAPPINESS_SERVICES).toHaveLength(2);
+    expect(HAPPINESS_SERVICES.map((service) => service.key)).toEqual(['hospital', 'fire']);
     for (const service of EDUCATION_SERVICES) expect(service.weight).toBe(0);
+    for (const service of SERVICES) {
+      if (service.key === 'police') expect(service.weight).toBe(0);
+    }
     // The *weighted* terms, which is what the sum is a statement about.
-    // `happinessTerms` also carries congestion, which is a modifier on earned
-    // coverage rather than one of the weights — it is in the list so the panel
-    // can name it and `bindingTerm` can pick it, and it is flagged so a reader
-    // and this assertion can both tell the difference. See CONGESTION_MOOD.
+    // `happinessTerms` also carries three modifiers on earned coverage — they
+    // are in the list so the panel can name them and `bindingTerm` can pick
+    // one, and they are flagged so a reader and this assertion can both tell
+    // the difference. See CONGESTION_MOOD, CRIME_MOOD and GARBAGE_MOOD.
     const terms = happinessTerms(state());
     const weighted = terms.filter((term) => term.modifier !== true);
     expect(weighted).toHaveLength(HAPPINESS_SERVICES.length + 1);
     expect(weighted.reduce((sum, term) => sum + term.weight, 0)).toBeCloseTo(1, 12);
     expect(terms.filter((term) => term.modifier === true).map((term) => term.key)).toEqual([
       'congestion',
+      'crime',
+      'garbage',
     ]);
   });
 
@@ -261,25 +274,30 @@ describe('the happiness weights', () => {
    * HAPPINESS_MIN_BUILD every existing city would have its housing bricked on
    * load. 0.82 against 0.35 is not close.
    */
-  it('cap a park-less city at 0.82, well clear of the housing gate', () => {
-    // Measured against the earned coverage, which is the target with the
-    // traffic modifier added back. Congestion is a cost the city buys its way
-    // out of with depots and is not part of what the four weights are worth —
-    // the same reading `happinessTarget` itself takes, one bracket apart. See
-    // CONGESTION_MOOD.
-    const earned = (s: GameState): number => happinessTarget(s) - congestionMood(s);
+  it('cap a park-less city at 0.76, well clear of the housing gate', () => {
+    // Measured against the earned coverage, which is the target with the three
+    // modifiers added back. Each of them is a cost the city buys its way out of
+    // — depots for traffic and rubbish, police for crime — and none is part of
+    // what the weights are worth. The same reading `happinessTarget` itself
+    // takes, one bracket apart. See CONGESTION_MOOD, CRIME_MOOD, GARBAGE_MOOD.
+    const earned = (s: GameState): number =>
+      happinessTarget(s) - congestionMood(s) - crimeMood(s) - garbageMood(s);
     for (let level = 0; level < LEVELS; level++) {
       const best = state({ ...housed(19, level), parks: 0, ...served() });
-      expect(earned(best)).toBeLessThanOrEqual(0.82 + 1e-12);
+      expect(earned(best)).toBeLessThanOrEqual(1 - RECREATION_WEIGHT + 1e-12);
       expect(happinessTarget(best)).toBeGreaterThan(HAPPINESS_MIN_BUILD);
     }
-    // Exactly 0.82 when the three services are full and nothing is on fire.
-    expect(earned(state({ ...housed(19), parks: 0, ...served() }))).toBeCloseTo(0.82, 12);
+    // Exactly 0.76 when the two weighted services are full and nothing is
+    // on fire — which is 1 less recreation's own share.
+    expect(earned(state({ ...housed(19), parks: 0, ...served() }))).toBeCloseTo(0.76, 12);
+    expect(1 - RECREATION_WEIGHT).toBeCloseTo(0.76, 12);
   });
 
   it('reach 1 only once the parks are in as well', () => {
     const planted = state({ ...housed(19), parks: 4, ...served() });
-    expect(happinessTarget(planted) - congestionMood(planted)).toBeCloseTo(1, 12);
+    const earned = (s: GameState): number =>
+      happinessTarget(s) - congestionMood(s) - crimeMood(s) - garbageMood(s);
+    expect(earned(planted)).toBeCloseTo(1, 12);
     // And a city that has also bought its way out of the traffic reaches it for
     // real — which is the ceiling the game has always promised.
     const moving = state({ ...planted, depots: 40, depotStaff: 1, cityHall: true, freeTransport: true });
@@ -305,7 +323,12 @@ describe('the happiness weights', () => {
     expect(carried.state.happiness).toBeGreaterThan(HAPPINESS_MIN_BUILD);
     // Against the earned coverage, for the reason above: a v3 city has no
     // depots either, so what it settles at is 0.82 less its own traffic.
-    expect(carried.state.happiness - congestionMood(carried.state)).toBeCloseTo(0.82, 2);
+    expect(
+      carried.state.happiness -
+        congestionMood(carried.state) -
+        crimeMood(carried.state) -
+        garbageMood(carried.state),
+    ).toBeCloseTo(1 - RECREATION_WEIGHT, 2);
   });
 });
 
