@@ -11,6 +11,10 @@ import {
   AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   CITY_HALL_BASE,
+  RANKS,
+  RANK_GATES,
+  type CityRank,
+  type RankGate,
   CONGESTION_DENSITY_EXPONENT,
   CONGESTION_MOOD,
   CONGESTION_SCALE,
@@ -49,7 +53,6 @@ import {
   HAPPINESS_MIN_BUILD,
   HAPPINESS_TAU,
   HIGHWAY_COST,
-  HIGHWAY_MIN_DISTRICTS,
   HOME_BASE,
   HOME_GROWTH,
   INDUSTRIAL_OUTPUT,
@@ -735,6 +738,80 @@ export const population = (s: GameState): number => {
   return people;
 };
 
+// --------------------------------------------------------------------- rank
+
+/**
+ * What the city is, on the ladder in `RANKS`.
+ *
+ * Derived, never stored, and that is not an implementation detail: a stored
+ * rank would be one more thing an offline catch-up could get out of step with a
+ * watched session, and one more field a save from an older balance pass would
+ * carry a stale answer in. As a function of counts, a returning player opens on
+ * whatever rank their city now implies and the two paths agree by construction.
+ *
+ * The walk stops at the first rung the city fails, which is what makes the rank
+ * the *lower* of what the two thresholds say — both columns of `RANKS` climb,
+ * so a city that fails one rung fails every rung above it.
+ *
+ * `population` rather than `residents`: the housing stock is what the city has
+ * built, and a city that has just emptied out under a punitive tax has not been
+ * demoted. A rank read through the occupancy integrator would flicker.
+ */
+export const cityRank = (s: GameState): CityRank => {
+  const people = population(s);
+  let index = 0;
+  for (let i = 1; i < RANKS.length; i++) {
+    const rank = RANKS[i] as CityRank;
+    if (s.districts < rank.districts || people < rank.population) break;
+    index = i;
+  }
+  return RANKS[index] as CityRank;
+};
+
+/** The next rung, or null at the top. What the treasury strip counts toward. */
+export const nextRank = (s: GameState): CityRank | null =>
+  (RANKS[cityRank(s).index + 1] as CityRank | undefined) ?? null;
+
+/** Which rung a gated thing needs. A lookup, named so a caller reads as English. */
+export const rankAt = (gate: RankGate): number => RANK_GATES[gate];
+
+/** Whether the city has climbed far enough for one of the gated things. */
+export const rankAllows = (s: GameState, gate: RankGate): boolean =>
+  cityRank(s).index >= rankAt(gate);
+
+/**
+ * Why a rank gate is holding a button shut, phrased for the HUD.
+ *
+ * The existing voice, which is "Needs 14 districts" — so this is "Needs a town"
+ * and not "Rank 1 required". Null when the city has climbed far enough, so it
+ * composes with the other blockers by falling through.
+ */
+export const rankBlocker = (s: GameState, gate: RankGate): string | null => {
+  if (rankAllows(s, gate)) return null;
+  const needed = RANKS[rankAt(gate)] as CityRank | undefined;
+  return needed ? `Needs a ${needed.name.toLowerCase()}` : null;
+};
+
+/**
+ * How far the city is through the rung it is climbing, in [0, 1].
+ *
+ * The lesser of the two shares, because the rank is the lesser of the two
+ * thresholds — a city with the people and not the land is as far from the next
+ * rung as its land says. Null at the top of the ladder, where there is nothing
+ * to be a share of.
+ */
+export const rankProgress = (s: GameState): number | null => {
+  const next = nextRank(s);
+  if (!next) return null;
+  const from = RANKS[next.index - 1] as CityRank;
+  const share = (now: number, was: number, needs: number): number =>
+    needs <= was ? 1 : Math.max(0, Math.min(1, (now - was) / (needs - was)));
+  return Math.min(
+    share(s.districts, from.districts, next.districts),
+    share(population(s), from.population, next.population),
+  );
+};
+
 // ------------------------------------------------------------------ services
 
 export type ServiceKey = Service['key'];
@@ -1190,12 +1267,18 @@ export const terminalReadings = (s: GameState): readonly TerminalReading[] =>
 /**
  * Whether the city has reached the size at which it may build outside itself.
  *
- * A count rather than a share, because there is no land to measure — see
- * HIGHWAY_MIN_DISTRICTS. Separate from `canBuildHighway` so the panel can say
- * "not yet" and "not enough cash" as two different things.
+ * A rank now, and it *replaces* HIGHWAY_MIN_DISTRICTS rather than stacking on
+ * it: two gates on one button would be two numbers saying one thing. The
+ * constant stays because it is what HIGHWAY_COST and AIRPORT_BASE are priced
+ * from, and the rank that replaces it asks for the same 14 districts — see
+ * RANKS, whose Conurbation rung is set to exactly that so the timing the
+ * highway was calibrated at is the timing it keeps. What the rank adds is the
+ * population column, which at 14 districts is long since cleared.
+ *
+ * Separate from `canBuildHighway` so the panel can say "not yet" and "not
+ * enough cash" as two different things.
  */
-export const highwayAllowed = (s: GameState): boolean =>
-  s.districts >= HIGHWAY_MIN_DISTRICTS;
+export const highwayAllowed = (s: GameState): boolean => rankAllows(s, 'highway');
 
 export const highwayCost = (): number => HIGHWAY_COST;
 
@@ -1266,7 +1349,7 @@ export const estateJobs = (s: GameState): number => estateActive(s) * JOBS_PER_E
 
 export function highwayBlocker(s: GameState): string | null {
   if (s.highway) return 'Built';
-  return highwayAllowed(s) ? null : `Needs ${HIGHWAY_MIN_DISTRICTS} districts`;
+  return rankBlocker(s, 'highway');
 }
 
 /**
@@ -2560,11 +2643,12 @@ export const faresWaived = (s: GameState): boolean => s.cityHall && s.freeTransp
 export const cityHallCost = (): number => CITY_HALL_BASE;
 
 export const canBuildCityHall = (s: GameState): boolean =>
-  !s.cityHall && s.cash >= cityHallCost();
+  !s.cityHall && rankAllows(s, 'cityHall') && s.cash >= cityHallCost();
 
-/** Why the city hall button is off. Built, or a matter of money. */
+/** Why the city hall button is off. Built, too small a place, or money. */
 export function cityHallBlocker(s: GameState): string | null {
-  return s.cityHall ? 'Built' : null;
+  if (s.cityHall) return 'Built';
+  return rankBlocker(s, 'cityHall');
 }
 
 /**
@@ -2767,6 +2851,7 @@ export const canBuildPark = (s: GameState): boolean =>
  * to run ahead of. The site list is the only bound it has.
  */
 export const canBuildLandmark = (s: GameState, landmark: Landmark): boolean =>
+  rankAllows(s, landmark.key) &&
   landmarkCount(s, landmark.key) < landmarkSiteCapacity(s, landmark.key) &&
   s.cash >= landmarkCost(s, landmark);
 
@@ -2913,6 +2998,11 @@ export function promotionBlocker(
  * worth saying is the thing the player cannot fix with money.
  */
 export function landmarkBlocker(s: GameState, landmark: Landmark): string | null {
+  // The rank first: it is the answer the player can do least about in the next
+  // minute, and the blocker line says the most permanent thing first
+  // everywhere else in this file — see `promotionBlocker`.
+  const rank = rankBlocker(s, landmark.key);
+  if (rank) return rank;
   return landmarkCount(s, landmark.key) >= landmarkSiteCapacity(s, landmark.key)
     ? 'No sites left'
     : null;
@@ -2927,7 +3017,21 @@ export function parkBlocker(s: GameState): string | null {
   return s.parks >= parkCapacity(s) ? 'No courtyards left' : null;
 }
 
-/** Why a civic button is off. Land runs out before the population gate does. */
+/**
+ * Why a civic button is off. Land runs out before the population gate does.
+ *
+ * No rank on any of the six, and the university is the one that was tried and
+ * measured out. It looks like the archetypal late building — 7,200 to found,
+ * one 3x3 site a district, the second education rung — and it is nothing of the
+ * kind. `educationCoverage` is schools *plus* universities over the housing
+ * plots they stand among, and `siteCapacity` gives a five-district city six
+ * schools against 169 housing plots: 90 plots covered, 0.53. LEVEL_EDUCATION's
+ * second rung is 0.60. So the university is what a city needs to reach level 2
+ * housing at all, which arrives inside the first hour — and a rank on it is a
+ * deadlock rather than a gate, because the population a rank asks for is the
+ * population level 2 was going to provide. Measured in
+ * tools/ranks.calibrate.mjs, which prints the run that stalls.
+ */
 export function serviceBlocker(s: GameState, service: Service): string | null {
   if (serviceCount(s, service.key) >= siteCapacity(s, service.key)) return 'No sites left';
   if (serviceCount(s, service.key) >= serviceAllowed(s, service)) return 'Not needed yet';

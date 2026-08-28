@@ -73,6 +73,10 @@ import {
   canBuildPlant,
   canBuildTerminal,
   cityHallBlocker,
+  cityRank,
+  nextRank,
+  population,
+  rankProgress,
   cityHallCost,
   cruiseIncome,
   demandLift,
@@ -430,6 +434,7 @@ export class Hud {
   private readonly nodes = {
     cash: el('cash'),
     rate: el('rate'),
+    rank: el('rank'),
     ticker: el('ticker'),
     ledgerCash: el('ledger-cash'),
     ledgerGross: el('ledger-gross'),
@@ -694,6 +699,8 @@ export class Hud {
   private overlayShown: ZoneMode = 'off';
   /** What that note last said, so an unchanged one is left alone. */
   private overlayNoteShown = '';
+  /** What the rank strip last said, so a repaint a frame is a string compare. */
+  private rankShown = '';
   /**
    * Which tier the chart is showing. View state, and it stays in the view: the
    * ring the simulation keeps is the same whichever span is on screen.
@@ -909,6 +916,7 @@ export class Hud {
     // rather than as earning — see `netIncome`. What the buildings *earn* is a
     // separate row in the Treasury tab, where the difference is the point.
     n.rate.textContent = `${fmt(netIncome(s))}/s`;
+    this.paintRank(s);
 
     this.paintTicker(s);
 
@@ -1133,6 +1141,30 @@ export class Hud {
    */
   markStreet(street: boolean): void {
     this.nodes.streetView.setAttribute('aria-pressed', String(street));
+  }
+
+  /**
+   * The city's rank, and how far it is through the rung it is climbing.
+   *
+   * In the strip rather than in a tab, because the rank decides which buttons
+   * in the Build tab exist: a player reading "Needs a town" on a disabled
+   * button has to be able to find out what they are without going looking. The
+   * name is the label and the detail is the title, which is the split the rest
+   * of this HUD already uses for a blocker.
+   */
+  private paintRank(s: Readonly<GameState>): void {
+    const rank = cityRank(s);
+    const next = nextRank(s);
+    const label = next === null ? rank.name : `${rank.name} · ${pct(rankProgress(s) ?? 0)}`;
+    if (label === this.rankShown) return;
+    this.rankShown = label;
+    this.nodes.rank.textContent = label;
+    this.nodes.rank.title =
+      next === null
+        ? `${rank.name} — the top of the ladder`
+        : `${rank.name}. Next: ${next.name}, at ${fmtInt(next.districts)} district` +
+          `${next.districts === 1 ? '' : 's'} and ${fmtInt(next.population)} people` +
+          ` (${fmtInt(s.districts)} and ${fmtInt(population(s))} now)`;
   }
 
   /**

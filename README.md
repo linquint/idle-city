@@ -515,6 +515,29 @@ wages it does not earn. Auto-development answers to the same arithmetic: while
 the ledger is negative it will not buy anything that adds to the payroll, and it
 holds a minute of the shortfall back from everything else.
 
+### Rank gates what a city may build
+
+A city has a rank — village, town, city, conurbation, metropolis — and it is
+derived, never stored: a pure function of `s.districts` and `population(s)`, so
+an offline catch-up and a watched session agree by construction and a save from
+an older balance pass opens on whatever rank its counts now imply.
+
+Two thresholds a rung, and the city has to clear both. `LEVEL_HOUSING` spans 4
+to 2,400, so one district of arcologies holds 28,800 people — dense, and a dense
+village is still a village. The mirror case is forty-nine districts of bungalows,
+which is large and empty. The rank is the lower of what the two say.
+
+Four buttons are on the ladder: the city hall (town), the museum (town), the
+stadium (city) and the highway (conurbation). Every one of them bites — the
+calibrator prints how long each gate holds a button the price would otherwise
+have opened. The other candidates were examined and left alone, because a second
+gate on one button is two numbers saying one thing: the airport has the highway,
+port terminals have `hasCoast`, and power plants were rejected outright because a
+brownout caps occupancy and the grid is what lets a city reach a rank at all. The
+university looks like the archetypal late building and is the one that was
+measured out: it is what a city needs to clear the second education rung, which
+arrives inside the first hour, and a rank on it deadlocks the level ladder.
+
 ## Balance
 
 Every tunable is in `src/sim/config.ts`, and nothing else in that file imports

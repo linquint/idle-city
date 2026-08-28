@@ -4,6 +4,7 @@ import {
   LANDMARKS,
   LANDMARK_MOOD,
   MAX_DISTRICTS,
+  RANK_GATES,
   RECREATION_WEIGHT,
   type Landmark,
 } from '../src/sim/config';
@@ -27,7 +28,7 @@ import {
 } from '../src/sim/layout';
 import { rng } from '../src/core/rng';
 import { createState, type GameState } from '../src/sim/state';
-import { housedOn, served } from './levels';
+import { atRank, housedOn, served } from './levels';
 
 const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
 const at = (patch: Partial<GameState> = {}): Game => new Game(state(patch));
@@ -51,7 +52,9 @@ describe('landmark sites', () => {
   });
 
   it('refuses to build past the land, whatever the treasury says', () => {
-    const game = at({ districts: 3, cash: 1e12 });
+    // Big enough for both, because a landmark is on the rank ladder now: a
+    // museum wants a town and a stadium wants a city. See RANK_GATES.
+    const game = at({ ...atRank(RANK_GATES.stadium, 3), cash: 1e12 });
     for (const landmark of LANDMARKS) {
       for (let i = 0; i < 40; i++) game.buildLandmark(landmark);
       expect(landmarkCount(game.state, landmark.key)).toBe(
@@ -63,14 +66,14 @@ describe('landmark sites', () => {
   });
 
   it('compounds its price, and blocks on land rather than on cash', () => {
-    const poor = state({ districts: 9, cash: 0 });
+    const poor = state({ ...atRank(RANK_GATES.museum, 9), cash: 0 });
     expect(landmarkCost(poor, MUSEUM)).toBe(MUSEUM.base);
     // Same convention as `serviceBlocker`: the price is on the button and the
     // button is disabled, so the blocker names the thing money cannot fix.
     expect(landmarkBlocker(poor, MUSEUM)).toBeNull();
     expect(canBuildLandmark(poor, MUSEUM)).toBe(false);
     for (let n = 1; n < 9; n++) {
-      const s = state({ districts: 9, museums: n });
+      const s = state({ ...atRank(RANK_GATES.museum, 9), museums: n });
       expect(landmarkCost(s, MUSEUM)).toBeGreaterThan(landmarkCost({ ...s, museums: n - 1 }, MUSEUM));
     }
     // A stadium is the dear one at every count, which is what the 3x3 costs.

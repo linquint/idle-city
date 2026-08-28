@@ -2740,6 +2740,111 @@ export const HIGHWAY_COST = ANNEX_BASE * ANNEX_GROWTH ** (HIGHWAY_MIN_DISTRICTS 
  */
 export const AIRPORT_BASE = ANNEX_BASE * ANNEX_GROWTH ** HIGHWAY_MIN_DISTRICTS;
 
+// ------------------------------------------------------------------- ranks
+
+/**
+ * What the city is called, and what it has to be to be called it.
+ *
+ * A rank is derived and never stored — see `cityRank` — so an offline catch-up
+ * and a watched session agree by construction, and a save written under an
+ * older balance pass opens on whatever rank its counts now imply.
+ *
+ * Two thresholds a rung, and the city has to clear *both*. That is the whole of
+ * why it is not simply a population count: LEVEL_HOUSING spans 4 to 2,400, so
+ * one district of arcologies holds 28,800 people on 24 plots. It is dense, and
+ * a dense village is still a village. The mirror case is a sprawl of bungalows
+ * across half the map, which is large and empty. Neither is a metropolis, and
+ * requiring both is the shortest thing that says so.
+ */
+export interface CityRank {
+  /** Position on the ladder. What a gate is expressed in. */
+  readonly index: number;
+  /** What the treasury strip calls it, and what a blocker names. */
+  readonly name: string;
+  /** Districts the city must hold. */
+  readonly districts: number;
+  /** People its housing must be built for — `population`, not `residents`. */
+  readonly population: number;
+}
+
+/**
+ * The ladder.
+ *
+ * Every threshold is measured rather than round. `tools/ranks.calibrate.mjs`
+ * plays the game forward — `autoDevelop`'s own policy by hand until the city
+ * hall, the real thing after it — and prints the elapsed time at which each
+ * rung falls. The rule it enforces is the one the brief states: a rank that
+ * arrives in the first ninety seconds is not a rank.
+ *
+ *   Village       0:00   every city starts here
+ *   Town       1:27:51   the first district is full and climbing
+ *   City       1:57:22   three districts, and the ladder past terraces
+ *   Conurbation  never   see below
+ *   Metropolis   never
+ *
+ * The two upper rungs are "never" for a reason that predates them, and the
+ * calibrator prints it: an auto-developed run plateaus at 5 districts, because
+ * the level ladder houses everyone on a third of the land, housing demand goes
+ * negative and auto-development will not build into oversupply. Measured
+ * identically on master at 4b9dae6 — HIGHWAY_MIN_DISTRICTS was already out of
+ * an auto-developer's reach before any of this. So those two are measured
+ * against cities built out to their own frontage instead: at 14 districts a
+ * city of towers is a Conurbation, and Metropolis wants 28 districts of
+ * arcologies.
+ *
+ * The population column is `population`, not `residents`: a city that has just
+ * lost half its people to a bad tax rate has not been demoted to a town, and a
+ * rank that flickered with the occupancy integrator would be a rank that
+ * unlocked and re-locked a button while the player watched.
+ */
+export const RANKS: readonly CityRank[] = [
+  { index: 0, name: 'Village',     districts: 1,  population: 0 },
+  { index: 1, name: 'Town',        districts: 1,  population: 1_200 },
+  { index: 2, name: 'City',        districts: 3,  population: 12_000 },
+  { index: 3, name: 'Conurbation', districts: HIGHWAY_MIN_DISTRICTS, population: 60_000 },
+  { index: 4, name: 'Metropolis',  districts: 28, population: 400_000 },
+];
+
+/**
+ * What each gated thing needs, as a position on the ladder.
+ *
+ * Four entries, and every one of them bites — the calibrator prints how long
+ * each gate holds a button that the price would otherwise have opened: the city
+ * hall by 12:41, the museum by 7:52, the stadium by 33:33. A gate that opened
+ * before the price did would be decoration.
+ *
+ * The brief's other candidates were examined and left alone, because a second
+ * gate on the same button is two numbers saying one thing:
+ *
+ *   - the airport has the highway, and stands at the end of its spur;
+ *   - port terminals have `hasCoast`, which is the seed rather than
+ *     progression. A coastal city has already paid for its coast by annexing
+ *     toward it, and the terminal is what makes that pay;
+ *   - power plants were rejected outright rather than found already gated. A
+ *     brownout caps occupancy at POWER_FLOOR, so the grid is something a city
+ *     needs *before* it is big, and a rank on it would gate the thing that lets
+ *     a city reach the rank;
+ *   - the university looks like the archetypal late building and is measured
+ *     out. See `serviceBlocker`, which carries the numbers: it is what a city
+ *     needs to reach level 2 housing, and a rank on it deadlocks the ladder.
+ *
+ * The highway is the one that was *replaced* rather than left: it had
+ * HIGHWAY_MIN_DISTRICTS, the Conurbation rung is set to exactly that number,
+ * and `highwayAllowed` now reads the rank. The constant stays, because
+ * HIGHWAY_COST and AIRPORT_BASE are priced from it.
+ */
+export const RANK_GATES = {
+  /** Policy, and with it the tax rate, free transport and auto-development. */
+  cityHall: 1,
+  /** A village with a museum is a village with a museum. */
+  museum: 1,
+  stadium: 2,
+  /** Replaces HIGHWAY_MIN_DISTRICTS as the gate. See `highwayAllowed`. */
+  highway: 3,
+} as const;
+
+export type RankGate = keyof typeof RANK_GATES;
+
 /**
  * What the airport is worth, in cruise berths.
  *

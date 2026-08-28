@@ -1,4 +1,13 @@
-import { FRONTAGE_TARGET, LEVEL_FOOTPRINT, LEVELS, MAX_DISTRICTS, MERGE_LEVEL } from '../src/sim/config';
+import {
+  FRONTAGE_TARGET,
+  LEVELS,
+  LEVEL_FOOTPRINT,
+  LEVEL_HOUSING,
+  MAX_DISTRICTS,
+  MERGE_LEVEL,
+  RANKS,
+  type CityRank,
+} from '../src/sim/config';
 import { districtLand, type Zoning } from '../src/sim/layout';
 import { cohortOf, type GameState, type LevelCohort } from '../src/sim/state';
 
@@ -185,3 +194,28 @@ export const zoning = (districts: number): Partial<GameState> => {
     surveyedI: [...z.surveyedI],
   };
 };
+
+/**
+ * A city big enough to be the given rank, and no bigger.
+ *
+ * `cityRank` asks for two things at once — districts *and* the population the
+ * housing is built for — so a fixture that only set one of them would sit a
+ * rung below where its author thought it did, and the failure would show up as
+ * a disabled button in an unrelated test. This states both.
+ *
+ * The top of the level ladder rather than the bottom, and that is what keeps
+ * the fixture land-legal: an arcology holds 2,400 on two plots, so the top rung
+ * of the rank ladder is a few hundred plots rather than two hundred thousand —
+ * and a state whose housing does not fit its districts is one `migrate` will
+ * clamp out from under a round-trip test. What is being fixed is the rank, not
+ * the skyline; a test that cares which level the housing is at should say so
+ * with `housed` instead.
+ */
+export function atRank(index: number, districts?: number): Partial<GameState> {
+  const rank = RANKS[Math.max(0, Math.min(RANKS.length - 1, index))] as CityRank;
+  const homes = Math.ceil(rank.population / (LEVEL_HOUSING[LEVELS - 1] ?? 1));
+  return {
+    districts: Math.max(rank.districts, districts ?? 0),
+    ...(homes > 0 ? housed(homes, LEVELS - 1) : {}),
+  };
+}

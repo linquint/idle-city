@@ -12,6 +12,7 @@ import {
   TAX_NEUTRAL,
   TAX_STEPS,
   UPKEEP_RATE,
+  RANK_GATES,
 } from '../src/sim/config';
 import {
   cityHallBlocker,
@@ -40,7 +41,7 @@ import {
 import { Game } from '../src/sim/game';
 import { migrate } from '../src/sim/save';
 import { createState, type GameState } from '../src/sim/state';
-import { housed, making, served, trading } from './levels';
+import { atRank, housed, making, served, trading } from './levels';
 
 /**
  * A city with a city hall, unless a test says otherwise.
@@ -460,7 +461,9 @@ describe('the city hall', () => {
   });
 
   it('takes them the moment the hall is up', () => {
-    const game = at({ cityHall: false, cash: cityHallCost() });
+    // A town, because the hall is on the ladder now: a village has nobody to
+    // set policy for. See RANK_GATES.
+    const game = at({ ...atRank(RANK_GATES.cityHall), cityHall: false, cash: cityHallCost() });
     expect(game.buildCityHall()).toBe(true);
     expect(game.state.cash).toBeCloseTo(0, 9);
     game.setTaxRate(TAX_STEPS.length - 1);
@@ -473,7 +476,7 @@ describe('the city hall', () => {
   });
 
   it('is bought once and only once', () => {
-    const game = at({ cityHall: false, cash: cityHallCost() * 4 });
+    const game = at({ ...atRank(RANK_GATES.cityHall), cityHall: false, cash: cityHallCost() * 4 });
     expect(game.buildCityHall()).toBe(true);
     expect(game.buildCityHall()).toBe(false);
     expect(cityHallBlocker(game.state)).toBe('Built');

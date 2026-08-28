@@ -12,6 +12,9 @@ import {
   JOBS_PER_ESTATE_PLOT,
   JOBS_PER_INDUSTRIAL,
   MAX_DISTRICTS,
+  RANKS,
+  RANK_GATES,
+  type CityRank,
 } from '../src/sim/config';
 import {
   activeDeveloped,
@@ -64,7 +67,7 @@ import { Cars } from '../src/render/cars';
 import { Estates } from '../src/render/estates';
 import { bandLane, Highway, spurLane } from '../src/render/highway';
 import { CityLayout } from '../src/sim/layout';
-import { housedOn, making, trading } from './levels';
+import { atRank, housedOn, making, trading } from './levels';
 
 const city = (districts: number, patch: Partial<GameState> = {}): GameState =>
   Object.assign(createState(0), { districts, cash: 1e14, happiness: 1 }, patch);
@@ -135,14 +138,22 @@ describe('the estate band', () => {
 
 describe('what unlocks an estate', () => {
   it('wants the districts before it will sell the road', () => {
+    // The gate is a rank now and the rank's district column is
+    // HIGHWAY_MIN_DISTRICTS itself — see RANK_GATES, which replaced the bare
+    // count rather than stacking on it, so the road still unlocks at 14. What
+    // changed is what the button says, and it says the rank by name.
+    const conurbation = RANKS[RANK_GATES.highway] as CityRank;
+    expect(conurbation.districts).toBe(HIGHWAY_MIN_DISTRICTS);
     for (let n = 1; n < HIGHWAY_MIN_DISTRICTS; n++) {
       const s = city(n);
       expect(canBuildHighway(s)).toBe(false);
-      expect(highwayBlocker(s)).toBe(`Needs ${HIGHWAY_MIN_DISTRICTS} districts`);
+      expect(highwayBlocker(s)).toBe(`Needs a ${conurbation.name.toLowerCase()}`);
       expect(estateCapacity(s)).toBe(0);
       expect(estateBlocker(s)).toBe('No highway yet');
     }
-    const ready = city(HIGHWAY_MIN_DISTRICTS);
+    // And the population column, which at fourteen districts of built-out
+    // housing is long since cleared.
+    const ready = city(HIGHWAY_MIN_DISTRICTS, atRank(RANK_GATES.highway, HIGHWAY_MIN_DISTRICTS));
     expect(canBuildHighway(ready)).toBe(true);
     expect(highwayBlocker(ready)).toBeNull();
     // Still no parcels: the road is what the districts bought, not the land.
@@ -169,7 +180,9 @@ describe('what unlocks an estate', () => {
   });
 
   it('takes the cash for the road and for each parcel', () => {
-    const game = new Game(city(MAX_DISTRICTS));
+    // Housed as well as spread: the road's gate is a rank, and a rank asks for
+    // the people as well as the land — see RANKS.
+    const game = new Game(city(MAX_DISTRICTS, atRank(RANK_GATES.highway, MAX_DISTRICTS)));
     expect(game.buildEstate()).toBe(false);
     const before = game.state.cash;
     expect(game.buildHighway()).toBe(true);

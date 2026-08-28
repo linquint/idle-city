@@ -230,6 +230,18 @@ canvas {
   font-variant-numeric: tabular-nums;
   color: var(--sodium);
 }
+/* The rank. Set apart from the two numbers beside it — uppercase and dim rather
+   than a third figure — because it is a *name* and reading it as a quantity is
+   exactly the mistake the strip should not invite. */
+.dock-rank {
+  flex: 0 0 auto;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
 
 /* Seven of them now, and the dock is 300px wide: at 10px uppercase with the
    letter-spacing below, one row of seven wants about 400px, so the strip wraps
