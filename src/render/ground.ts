@@ -1,6 +1,10 @@
 import * as THREE from 'three';
-import { hash01, mixSeed } from '../core/rng';
-import { CELL, MAX_DISTRICTS, SEED } from '../sim/config';
+// Explicit .ts extensions, per the convention `tsconfig.json` documents: this
+// module carries the road cell's geometry, `src/render/pedestrians.ts` stands
+// people on the footway it defines, and `tools/pedestrians.calibrate.mjs` has
+// to load both without a build step.
+import { hash01, mixSeed } from '../core/rng.ts';
+import { CELL, MAX_DISTRICTS, SEED } from '../sim/config.ts';
 import {
   DISTRICT_WIDTH,
   isRoad,
@@ -8,10 +12,10 @@ import {
   worldZ,
   type CityLayout,
   type District,
-} from '../sim/layout';
-import { cityRadius } from '../sim/layout';
-import { GrowableInstancedMesh } from './growable';
-import { PALETTE } from './palette';
+} from '../sim/layout.ts';
+import { cityRadius } from '../sim/layout.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { PALETTE } from './palette.ts';
 
 /**
  * A road cell is a carriageway plus the footways that flank it. The footway
@@ -26,9 +30,18 @@ import { PALETTE } from './palette';
  */
 export const ROAD_W = 2.4;
 export const ROAD_H = 0.18;
-const FOOT_W = (CELL - ROAD_W) / 2;
-const FOOT_OFF = (CELL - FOOT_W) / 2;
-const PAVE_H = 0.3;
+/**
+ * The footway: how wide one is, how far its centre sits from the road's, and
+ * how high it stands.
+ *
+ * Exported because the pedestrians stand on it. A walker placed against a
+ * second opinion about where the kerb is would eventually be a walker in the
+ * gutter, which is the argument `routeHighway` already makes for taking its
+ * lane geometry from `highway.ts` rather than working it out again.
+ */
+export const FOOT_W = (CELL - ROAD_W) / 2;
+export const FOOT_OFF = (CELL - FOOT_W) / 2;
+export const PAVE_H = 0.3;
 const TUCK = 0.04;
 const LAND_H = 1.2;
 const MAX_FOOTWAYS_PER_CELL = 4;

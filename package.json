@@ -21,7 +21,8 @@
     "landvalue:calibrate": "node tools/landvalue.calibrate.mjs",
     "power:calibrate": "node tools/power.calibrate.mjs",
     "traffic:calibrate": "node tools/traffic.calibrate.mjs",
-    "education:calibrate": "node tools/education.calibrate.mjs"
+    "education:calibrate": "node tools/education.calibrate.mjs",
+    "pedestrians:calibrate": "node --experimental-transform-types tools/pedestrians.calibrate.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

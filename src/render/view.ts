@@ -10,6 +10,7 @@ import { Fires } from './fires';
 import { Estates } from './estates';
 import { Ground } from './ground';
 import { Highway, highwayReach } from './highway';
+import { Pedestrians } from './pedestrians';
 import { Port, portReach } from './port';
 import { Ships } from './ships';
 import { Water } from './water';
@@ -35,6 +36,12 @@ export class View {
   private readonly courtyards: Courtyards;
   private readonly parks: Parks;
   private readonly cars: Cars;
+  /**
+   * The other half of the trip count. `Cars` draws what is on the road and this
+   * draws what is not — see `walkingTrips`. Same lifecycle in every respect,
+   * because it is the same kind of thing: a readout with nothing stored.
+   */
+  private readonly walkers: Pedestrians;
   private readonly fires: Fires;
   private readonly port: Port;
   private readonly ships: Ships;
@@ -92,6 +99,7 @@ export class View {
     this.courtyards = new Courtyards(this.world.scene, layout);
     this.parks = new Parks(this.world.scene, layout);
     this.cars = new Cars(this.world.scene, layout, !reducedMotion);
+    this.walkers = new Pedestrians(this.world.scene, layout, !reducedMotion);
     this.fires = new Fires(this.world.scene, layout, !reducedMotion);
     this.port = new Port(this.world.scene);
     this.ships = new Ships(this.world.scene, !reducedMotion);
@@ -275,6 +283,7 @@ export class View {
     this.highway.sync(state);
     this.estates.sync(state);
     this.cars.sync(state);
+    this.walkers.sync(state);
     this.fires.sync(state);
     this.port.sync(state);
     this.ships.sync(state);
@@ -294,6 +303,9 @@ export class View {
     // After `focusShadows`, so traffic is culled against the focus the rest of
     // the frame was drawn from rather than against last frame's.
     this.cars.update(dt, this.rig.target, this.sky.night);
+    // No `night`: a walker carries no lamp, so the cycle has nothing to say to
+    // it beyond the lighting every other lit surface in the scene already gets.
+    this.walkers.update(dt, this.rig.target);
     this.ships.update(dt, this.rig.target);
     this.fires.update(dt, this.elapsed, this.sky.night);
 

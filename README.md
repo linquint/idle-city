@@ -45,6 +45,13 @@ than annotates — a constructor parameter property is the one that catches peop
 out. The calibrators run these modules straight through Node's type-stripping
 loader, so anything it refuses stops `npm run economy:calibrate` at the import.
 
+A few modules in `render/` are loaded by a calibrator too — `pedestrians.ts` and
+what it reaches, because its instance ceiling is a *renderer* measurement and had
+to be priced somewhere. Those carry `.ts` extensions on their relative imports,
+same as `sim/` does, and their calibrator runs under
+`--experimental-transform-types` rather than the plain interpreter, which is what
+lets the render layer keep the parameter properties it uses everywhere.
+
 `src/sim` is a plain object and some functions over it. It has no DOM, no
 timers, no renderer — which is why the whole simulation is unit-testable in
 Node, why offline progress is a loop rather than a special case, and why a save
@@ -243,6 +250,14 @@ box.
   type is oversupplied. Demand is quantised to twenty steps before it reaches
   the rebuild stamp, or the pads would be rebuilt every frame for a signal that
   moves on a 25-second constant.
+- Traffic and pedestrians are two readouts of the same trip count. `cars.ts`
+  draws the trips that are on the road; `pedestrians.ts` draws the ones that are
+  not, which is exactly `trips - roadTrips`. So a city with no depots has empty
+  pavements by construction — buying transit is what puts people on the street —
+  and neither fleet stores a thing. The walker ceiling is 480 against the car
+  fleet's 160, measured at 0.099 µs an instance a frame: a walker is square in
+  plan so it needs no rotation, and it is 2.3 shadow-map texels across so it
+  stays out of the depth pass.
 - Industry is the anti-tower — wide, low and flat, with one stack. Height is how
   the housing tiers say "bigger", so industry competes on footprint instead.
 - Civic buildings get 2x2 plots, which is room for a silhouette each rather than
