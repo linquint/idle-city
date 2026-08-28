@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mixSeed, rng } from '../core/rng';
 import { CELL, DISTRICT_SPAN, SEED } from '../sim/config';
 import { ZONE } from '../sim/citygen';
-import { congestion, residents } from '../sim/economy';
+import { congestion, landmarkCoverage, residents } from '../sim/economy';
 import {
   DISTRICT_WIDTH,
   districtLayoutAt,
@@ -190,6 +190,23 @@ const TRUCK_WIDTH = 1.05;
 const TRUCKS_PER_ESTATE = 0.6;
 const MAX_TRUCKS = 16;
 
+/**
+ * Tourist coaches on the highway, at full landmark coverage.
+ *
+ * Road tourism arrives by coach — see ROAD_VISITORS, which is the number this
+ * draws — and a coach is a bus that is not doing a bus route. So it reuses the
+ * bus mesh rather than taking one of its own: a fourth vehicle type for six
+ * vehicles would be a fourth instanced mesh, a fourth material and a fourth
+ * count for something the player would read as a bus anyway. What tells it
+ * apart is where it is, which is out of town.
+ *
+ * They need the road, and road tourism does not: `landmarkCoverage` lands
+ * visitors from district one. A city under HIGHWAY_MIN_DISTRICTS has tourists
+ * and no coaches, which is a number without a vehicle and is fine — the same
+ * way a cruise berth's visitors have never had a person drawn for them.
+ */
+const COACHES_AT_FULL_LANDMARKS = 6;
+
 /** Lorries run slower than cars and do not stop. */
 const TRUCK_SPEED = 5;
 
@@ -215,6 +232,14 @@ interface Car {
   bus: boolean;
   /** True for a lorry: a longer body again, and a route out of town. */
   truck: boolean;
+  /**
+   * True for a tourist coach: a bus body on a route out of town.
+   *
+   * Both flags, not one: `bus` decides which mesh draws it and `coach` decides
+   * which router points it, which is exactly the split that lets a coach cost
+   * no mesh of its own.
+   */
+  coach: boolean;
   /** Seconds left at the current stop, or at a junction in heavy traffic. */
   waiting: number;
   /** How far along the run the next stop is. */
@@ -377,6 +402,8 @@ export class Cars {
   private buses = 0;
   /** How many are lorries. They take the back, so the two services never fight. */
   private trucks = 0;
+  /** How many are tourist coaches. Directly behind the buses — see `sync`. */
+  private coachCount = 0;
   /** Reused by the truck router. A route must not allocate, per frame or otherwise. */
   private readonly lane: Lane = { alongX: true, fixed: 0, from: 0, length: 0 };
   /** What the highway looked like last sync. Lorries re-route when it moves. */
@@ -441,6 +468,7 @@ export class Cars {
         routed: false,
         bus: false,
         truck: false,
+        coach: false,
         waiting: 0,
         nextStop: STOP_SPACING,
         legsLeft: 0,
@@ -487,6 +515,19 @@ export class Cars {
     return Math.min(MAX_TRUCKS, Math.round(state.estates * TRUCKS_PER_ESTATE));
   }
 
+  /**
+   * How many coaches the landmarks put on the highway.
+   *
+   * Landmarks, not a terminal, because that is what road tourism is driven by —
+   * see ROAD_VISITORS. And the road, because a coach needs one: a city with
+   * museums and no highway lands its road tourists all the same and simply has
+   * nothing to draw for them.
+   */
+  private static coachFleet(state: Readonly<GameState>): number {
+    if (!state.highway) return 0;
+    return Math.round(landmarkCoverage(state) * COACHES_AT_FULL_LANDMARKS);
+  }
+
   /** Reads the counts. Nothing here is stored; it is all recomputed from state. */
   sync(state: Readonly<GameState>): void {
     if (state.districts !== this.districts) {
@@ -506,22 +547,26 @@ export class Cars {
     // buses and lorries it has paid for.
     this.active = Math.min(
       MAX_CARS,
-      this.lines.length > 0 ? Math.max(Cars.fleet(state), Cars.coaches(state) + freight) : 0,
+      this.lines.length > 0
+        ? Math.max(Cars.fleet(state), Cars.coaches(state) + Cars.coachFleet(state) + freight)
+        : 0,
     );
     const buses = Math.min(Cars.coaches(state), this.active);
     const trucks = Math.min(freight, this.active - buses);
-    // Buses take the front of the pool and lorries the back, so a fleet that
-    // shrinks loses cars out of the middle — a route that stopped running
-    // because the population dipped would be a service the city never
-    // cancelled, and so would a freight run.
-    if (buses !== this.buses || trucks !== this.trucks) {
+    // Coaches sit directly behind the buses: they draw with the bus mesh, so
+    // keeping them adjacent keeps that mesh's instances contiguous in the pool
+    // and costs the culling nothing.
+    const coaches = Math.min(Cars.coachFleet(state), Math.max(0, this.active - buses - trucks));
+    if (buses !== this.buses || trucks !== this.trucks || coaches !== this.coachCount) {
       for (let i = 0; i < MAX_CARS; i++) {
         const car = this.pool[i] as Car;
-        const bus = i < buses;
+        const coach = i >= buses && i < buses + coaches;
+        const bus = i < buses || coach;
         const truck = i >= this.active - trucks && i < this.active && !bus;
-        if (car.bus === bus && car.truck === truck) continue;
+        if (car.bus === bus && car.truck === truck && car.coach === coach) continue;
         car.bus = bus;
         car.truck = truck;
+        car.coach = coach;
         // Re-routed rather than left mid-run: a car that became a bus would
         // otherwise finish its run at the wrong speed and stop nowhere, and one
         // that became a lorry would finish it on the wrong road entirely.
@@ -529,6 +574,7 @@ export class Cars {
       }
       this.buses = buses;
       this.trucks = trucks;
+      this.coachCount = coaches;
     }
     // The highway's own geometry moves — the spur follows the city's inland
     // edge and the band road follows the estates — so a lorry routed against
@@ -538,7 +584,7 @@ export class Cars {
       this.highwayEstates = state.estates;
       for (let i = 0; i < MAX_CARS; i++) {
         const car = this.pool[i] as Car;
-        if (car.truck) car.routed = false;
+        if (car.truck || car.coach) car.routed = false;
       }
     }
   }
@@ -563,8 +609,10 @@ export class Cars {
     car.length = lane.length;
     car.speed = this.speedFor(car);
     car.waiting = 0;
+    // No stops. A coach draws with the bus mesh and would otherwise inherit the
+    // bus route's pull-ups, which on an open road would read as a breakdown.
     car.nextStop = Infinity;
-    // One leg, always. A lorry's run is the highway end to end and there is
+    // One leg, always. A highway run is the road end to end and there is
     // nothing to turn onto — see `turn`, which the leg counter keeps it out of.
     car.legsLeft = 1;
     // The same right-hand lane offsets the streets use, so a lorry meeting a
@@ -596,7 +644,12 @@ export class Cars {
    * not say.
    */
   private speedFor(car: Car): number {
+    // Both the vehicles that run the highway rather than the streets. It is not
+    // what `congestion` measures — that is trips against the road cells inside
+    // the districts — so slowing them by downtown traffic would be the view
+    // claiming something the simulation does not say.
     if (car.truck) return TRUCK_SPEED;
+    if (car.coach) return BUS_SPEED;
     const jam = Math.max(0, Math.min(1, car.bus ? this.jam * BUS_CONGESTION_SHARE : this.jam));
     const free = car.bus ? BUS_SPEED : SPEED_MAX;
     const crawl = car.bus ? BUS_CRAWL : CAR_CRAWL;
@@ -712,7 +765,7 @@ export class Cars {
    * still gets traffic somewhere rather than none at all.
    */
   private route(car: Car, focusX: number, focusZ: number): void {
-    if (car.truck) {
+    if (car.truck || car.coach) {
       this.routeHighway(car);
       return;
     }

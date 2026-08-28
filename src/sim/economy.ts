@@ -101,6 +101,8 @@ import {
   SHOP_GROWTH,
   SHOP_JOBS,
   SKILL_YIELD,
+  ROAD_VISITORS,
+  VISITOR_TRIPS,
   SHOP_SUPPLY,
   SHOP_TRIPS,
   SPEND_PER_RESIDENT,
@@ -1106,13 +1108,66 @@ export const visitors = (s: GameState): number =>
  * keeps the happiness scaling — the term that makes tourism the one income line
  * in the game that goes to *zero* in a miserable city rather than to
  * HAPPINESS_FLOOR. Nobody's holiday is somewhere grim, and that is as true of a
- * flight as of a cruise.
+ * flight as of a cruise, and of a coach.
+ *
+ * Three sources, one expression. The road is the third and it is the only one
+ * with no building of its own: it rides on `landmarkCoverage`, so a city that
+ * has been buying museums for the mood has been buying tourism as well without
+ * being told. See `visitorSources`, which is what the Trade tab splits out.
  */
 export const berthsLanding = (s: GameState): number =>
-  s.cruiseTerminals + (s.airport ? AIRPORT_VISITORS : 0);
+  s.cruiseTerminals +
+  (s.airport ? AIRPORT_VISITORS : 0) +
+  // And the road, which is the third source and folded in the same way rather
+  // than opened beside it. Landmarks rather than a terminal, so a landlocked
+  // city under HIGHWAY_MIN_DISTRICTS has tourism at all — see ROAD_VISITORS.
+  ROAD_VISITORS * landmarkCoverage(s);
 
 /** What those visitors spend, per second, before tax. */
 export const cruiseIncome = (s: GameState): number => visitors(s) * VISITOR_SPEND;
+
+/**
+ * Where the visitors came from, in people.
+ *
+ * A split of one number rather than three numbers that have to agree: the
+ * shares are the berth counts and `visitors` is berths times everything else,
+ * so this is that product divided back up. A panel that computed each source
+ * separately would be a second arrivals model, and the first thing to go wrong
+ * with it would be the happiness scaling on one of the three.
+ */
+export interface VisitorSources {
+  readonly quay: number;
+  readonly air: number;
+  readonly road: number;
+  readonly total: number;
+}
+
+export const visitorSources = (s: GameState): VisitorSources => {
+  const berths = berthsLanding(s);
+  const total = visitors(s);
+  if (berths <= 0) return { quay: 0, air: 0, road: 0, total: 0 };
+  const per = total / berths;
+  return {
+    quay: per * s.cruiseTerminals,
+    air: per * (s.airport ? AIRPORT_VISITORS : 0),
+    road: per * ROAD_VISITORS * landmarkCoverage(s),
+    total,
+  };
+};
+
+/**
+ * The share of the city's shopping the visitors are doing, in [0, 1].
+ *
+ * For the panel, and it is the number that says whether tourism is worth
+ * anything: the trips themselves are inside `demandTargets.c` where nothing can
+ * read them, and "12% of the shopping" is a fact a player can act on where
+ * "0.04 of a demand point" is not.
+ */
+export const visitorShare = (s: GameState): number => {
+  const locals = residents(s) * SPEND_PER_RESIDENT;
+  const guests = visitors(s) * VISITOR_TRIPS;
+  return guests + locals <= 0 ? 0 : guests / (guests + locals);
+};
 
 export interface TerminalReading {
   readonly terminal: Terminal;
@@ -2090,7 +2145,13 @@ export const demandTargets = (s: GameState): DemandTargets => {
       clampDemand((jobs(s) - reachableWorkers(s)) / scale + demandLift(s, 'home')),
     ),
     c: clampDemand(
-      (residents(s) * SPEND_PER_RESIDENT -
+      (residents(s) * SPEND_PER_RESIDENT +
+        // Visitors shop, and that is the whole of how tourism reaches the
+        // ledger now: not as a line of its own — one outside the income
+        // bracket is 0.0003% of a mature city's ledger — but as demand for
+        // premises, which reaches income through SHOP_BONUS exactly as every
+        // resident's spending does. See VISITOR_TRIPS.
+        visitors(s) * VISITOR_TRIPS -
         openOf(s, 'shop', SHOP_TRIPS) +
         labourReach(s)) /
         scale +

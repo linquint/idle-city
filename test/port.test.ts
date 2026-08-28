@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   EXPORT_BASE,
+  FRONTAGE_TARGET,
+  LEVELS,
+  LEVEL_FOOTPRINT,
+  OCCUPANCY_FULL,
+  ROAD_VISITORS,
+  SERVICES,
+  SPEND_PER_RESIDENT,
+  VISITOR_TRIPS,
   EXPORT_PER_DISTRICT,
   MAX_DISTRICTS,
   TERMINALS,
@@ -10,8 +19,13 @@ import {
   type Terminal,
 } from '../src/sim/config';
 import {
+  berthsLanding,
   canBuildTerminal,
   cruiseIncome,
+  landmarkCoverage,
+  serviceAllowed,
+  visitorShare,
+  visitorSources,
   demandTargets,
   exportMarket,
   hasCoast,
@@ -28,7 +42,7 @@ import { Game } from '../src/sim/game';
 import { coastalDistricts, districtCoord, districtIsCoastal, portDistrict } from '../src/sim/layout';
 import { migrate } from '../src/sim/save';
 import { createState, type GameState } from '../src/sim/state';
-import { housedOn } from './levels';
+import { housed, housedOn, making, trading } from './levels';
 
 const cruise = TERMINALS.find((t) => t.key === 'cruise') as Terminal;
 const cargo = TERMINALS.find((t) => t.key === 'cargo') as Terminal;
@@ -236,5 +250,244 @@ describe('a port across a save', () => {
     const inland = migrate({ homes: 4, districts: 1, cruiseTerminals: 5 }, 0) as GameState;
     expect(inland.cruiseTerminals).toBe(0);
     expect(hasCoast(inland)).toBe(false);
+  });
+});
+
+/**
+ * Road tourism: the third source, folded into the one arrivals expression.
+ *
+ * Landmark-driven rather than terminal-driven, which is what makes it worth
+ * having: a quay needs a coastal district and a runway needs the highway's
+ * fourteen, so a landlocked young city had no tourism at all.
+ */
+/** A city of `districts` built out to its frontage at `level`, fully served. */
+function builtOut(districts: number, level: number, patch: Partial<GameState> = {}): GameState {
+  const s = createState(0);
+  s.districts = districts;
+  const foot = LEVEL_FOOTPRINT[level] ?? 1;
+  const fit = (per: number): number => Math.floor((districts * per) / foot);
+  const cohort = (n: number): number[] => {
+    const levels = new Array<number>(LEVELS).fill(0);
+    levels[level] = n;
+    return levels;
+  };
+  const homes = fit(FRONTAGE_TARGET.residential);
+  const shops = fit(FRONTAGE_TARGET.commercial);
+  const works = fit(FRONTAGE_TARGET.industrial);
+  Object.assign(s, {
+    homes,
+    shops,
+    industry: works,
+    homeLevels: cohort(homes),
+    shopLevels: cohort(shops),
+    industryLevels: cohort(works),
+    mergedR: foot > 1 ? homes : 0,
+    mergedC: foot > 1 ? shops : 0,
+    mergedI: foot > 1 ? works : 0,
+    occupancyR: OCCUPANCY_FULL,
+    occupancyC: OCCUPANCY_FULL,
+    occupancyI: OCCUPANCY_FULL,
+    happiness: 1,
+    parks: districts * 4,
+    plants: districts,
+    plantStaff: 1,
+    cityHall: true,
+  });
+  for (const service of SERVICES) {
+    const n = serviceAllowed(s, service);
+    if (service.key === 'hospital') s.hospitals = n;
+    else if (service.key === 'police') s.police = n;
+    else if (service.key === 'fire') s.fire = n;
+    else if (service.key === 'school') s.schools = n;
+    else if (service.key === 'transit') s.depots = n;
+    else s.universities = n;
+  }
+  s.hospitalStaff = 1;
+  s.policeStaff = 1;
+  s.fireStaff = 1;
+  s.schoolStaff = 1;
+  s.universityStaff = 1;
+  s.depotStaff = 1;
+  Object.assign(s, patch);
+  return s;
+}
+
+describe('tourists who arrive by road', () => {
+  it('lands through the one arrivals expression, not a second one', () => {
+    // The rule the airport already followed: `visitors` is berths x residents x
+    // VISITORS_PER_RESIDENT x happiness, and every source is berths. A second
+    // path would be a second place for the happiness scaling to be got wrong.
+    const s = builtOut(4, 1, { museums: 4, stadiums: 4, cruiseTerminals: 1, airport: true });
+    expect(berthsLanding(s)).toBeCloseTo(
+      s.cruiseTerminals + AIRPORT_VISITORS + ROAD_VISITORS * landmarkCoverage(s),
+      9,
+    );
+    expect(visitors(s)).toBeCloseTo(
+      berthsLanding(s) * residents(s) * VISITORS_PER_RESIDENT * s.happiness,
+      6,
+    );
+  });
+
+  it('gives a landlocked city tourism from district one', () => {
+    // The whole point. No coast, no highway, no runway — and a museum.
+    const bare = builtOut(1, 1);
+    expect(terminalCapacity(bare)).toBe(0);
+    expect(bare.highway).toBe(false);
+    expect(visitors(bare)).toBe(0);
+
+    const marked = builtOut(1, 1, { museums: 1, stadiums: 1 });
+    expect(landmarkCoverage(marked)).toBeGreaterThan(0);
+    expect(visitors(marked)).toBeGreaterThan(0);
+    expect(visitorSources(marked).road).toBeCloseTo(visitors(marked), 6);
+    expect(visitorSources(marked).quay).toBe(0);
+    expect(visitorSources(marked).air).toBe(0);
+  });
+
+  it('goes to nothing at happiness zero, coach included', () => {
+    // Nobody's holiday is somewhere grim, and that has to stay true of a coach.
+    for (const patch of [
+      { museums: 4, stadiums: 4 },
+      { cruiseTerminals: 1 },
+      { airport: true },
+      { museums: 4, stadiums: 4, cruiseTerminals: 1, airport: true },
+    ]) {
+      const grim = builtOut(4, 1, { ...patch, happiness: 0 });
+      expect(visitors(grim)).toBe(0);
+      expect(cruiseIncome(grim)).toBe(0);
+      const sources = visitorSources(grim);
+      expect(sources.road).toBe(0);
+      expect(sources.quay).toBe(0);
+      expect(sources.air).toBe(0);
+    }
+  });
+
+  it('splits one number three ways rather than modelling it three times', () => {
+    const s = builtOut(25, 2, { museums: 25, stadiums: 25, cruiseTerminals: 2, airport: true });
+    const from = visitorSources(s);
+    expect(from.total).toBeCloseTo(visitors(s), 6);
+    expect(from.quay + from.air + from.road).toBeCloseTo(from.total, 6);
+    for (const part of [from.quay, from.air, from.road]) expect(part).toBeGreaterThan(0);
+  });
+
+  it('rises with the landmarks, and stops at what the sites allow', () => {
+    let last = 0;
+    for (const n of [0, 1, 2, 4, 8]) {
+      const s = builtOut(8, 1, { museums: n, stadiums: n });
+      expect(visitorSources(s).road).toBeGreaterThanOrEqual(last);
+      last = visitorSources(s).road;
+    }
+    // Bounded by ROAD_VISITORS berths times the coverage, whatever is built:
+    // landmarks saturate against the *sites* the land holds, so a city cannot
+    // buy its way past the coverage its districts allow.
+    const covered = builtOut(8, 1, { museums: 80, stadiums: 80 });
+    expect(landmarkCoverage(covered)).toBeLessThanOrEqual(1);
+    expect(berthsLanding(covered)).toBeCloseTo(ROAD_VISITORS * landmarkCoverage(covered), 6);
+    expect(berthsLanding(covered)).toBeLessThanOrEqual(ROAD_VISITORS + 1e-9);
+  });
+});
+
+/**
+ * Where tourism actually reaches the ledger.
+ *
+ * Not through its own line, which is asymptotically nothing — see VISITOR_TRIPS
+ * for the measurement — but through commercial demand, the shops it justifies
+ * and SHOP_BONUS, which is how every other resident's spending reaches it.
+ */
+describe('what a visitor is worth', () => {
+  const city = (districts: number, patch: Partial<GameState> = {}): GameState =>
+    ({ ...createState(0), districts, ...patch });
+
+  it('lifts commercial demand rather than opening a line of its own', () => {
+    const base = {
+      ...housed(96),
+      ...trading(45),
+      districts: 4,
+      occupancyR: 1,
+      occupancyC: 1,
+      happiness: 1,
+      museums: 4,
+      stadiums: 4,
+    };
+    const touristed = city(4, base);
+    const closed = city(4, { ...base, museums: 0, stadiums: 0 });
+    expect(visitors(touristed)).toBeGreaterThan(0);
+    expect(visitors(closed)).toBe(0);
+    // Commerce is what moves. Housing and industry read the visitors not at all
+    // — they are shoppers, not residents and not a market for goods.
+    expect(demandTargets(touristed).c).toBeGreaterThan(demandTargets(closed).c);
+    expect(demandTargets(touristed).r).toBeCloseTo(demandTargets(closed).r, 9);
+  });
+
+  it('is a share of the shopping the panel can name', () => {
+    const s = city(4, {
+      ...housed(96),
+      ...trading(45),
+      occupancyR: 1,
+      happiness: 1,
+      museums: 4,
+      stadiums: 4,
+      cruiseTerminals: 1,
+    });
+    const guests = visitors(s) * VISITOR_TRIPS;
+    const locals = residents(s) * SPEND_PER_RESIDENT;
+    expect(visitorShare(s)).toBeCloseTo(guests / (guests + locals), 9);
+    expect(visitorShare(s)).toBeGreaterThan(0);
+    expect(visitorShare(s)).toBeLessThan(1);
+    // Zero for a city with no visitors, rather than a divide by nothing.
+    expect(visitorShare(city(4, { ...housed(96), occupancyR: 1 }))).toBe(0);
+    expect(visitorShare(city(1))).toBe(0);
+  });
+
+  it('never pins commerce that was not already pinned', () => {
+    // The bound VISITOR_TRIPS was chosen against. Commerce is the signal
+    // nearest its upper bound — DEMAND_TERMS says so — so a tourism term that
+    // pinned it would have taken a decision away rather than added one.
+    // The same {1,4,12,25,49} x {0..4} grid of *built-out, fully served* cities
+    // the constant was chosen against — see VISITOR_TRIPS, which carries the
+    // table. A city with no services and no industry sits somewhere no real
+    // city does, and would be measuring the fixture rather than the term.
+    let pinned = 0;
+    for (const districts of [1, 4, 12, 25, MAX_DISTRICTS]) {
+      for (let level = 0; level < LEVELS; level++) {
+        const closed = builtOut(districts, level);
+        const touristed = builtOut(districts, level, {
+          museums: districts,
+          stadiums: districts,
+          cruiseTerminals: terminalCapacity(closed),
+          airport: districts >= 14,
+        });
+        const before = demandTargets(closed).c;
+        const after = demandTargets(touristed).c;
+        expect(after).toBeGreaterThanOrEqual(before - 1e-9);
+        if (before < 0.999 && after >= 0.999) pinned++;
+      }
+    }
+    expect(pinned).toBe(0);
+  });
+
+  it('is still a vanishing line on its own, which is why it goes through commerce', () => {
+    // The measurement the design turns on, asserted rather than described:
+    // tourism sits outside the income bracket, so its own spend line shrinks
+    // against a ledger that compounds. This is what a fourth berth would have
+    // been worth if it had been left there.
+    const share = (districts: number, level: number): number => {
+      const foot = LEVEL_FOOTPRINT[level] ?? 1;
+      const s = city(districts, {
+        ...housed(Math.floor((24 * districts) / foot), level),
+        ...trading(Math.floor((45 * districts) / foot), level),
+        ...making(Math.floor((13 * districts) / foot), level),
+        districts,
+        occupancyR: 1,
+        occupancyC: 1,
+        occupancyI: 1,
+        happiness: 1,
+        museums: districts,
+        stadiums: districts,
+      });
+      return cruiseIncome(s) / income(s);
+    };
+    // Falls by orders of magnitude across the map and the ladder.
+    expect(share(1, 0)).toBeGreaterThan(share(MAX_DISTRICTS, LEVELS - 1) * 100);
+    expect(share(MAX_DISTRICTS, LEVELS - 1)).toBeLessThan(1e-4);
   });
 });

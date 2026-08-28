@@ -44,6 +44,7 @@ import {
   TAX_NEUTRAL,
   AIRPORT_EXPORT_LIFT,
   AIRPORT_VISITORS,
+  ROAD_VISITORS,
   CARGO_EXPORT_LIFT,
   HIGHWAY_MIN_DISTRICTS,
   TERMINALS,
@@ -140,6 +141,8 @@ import {
   terminalReadings,
   upkeep,
   visitors,
+  visitorShare,
+  visitorSources,
   willAutoAnnex,
 } from '../sim/economy';
 import { ESTATE_CELLS } from '../sim/estates';
@@ -527,6 +530,8 @@ export class Hud {
     portVisitors: el('port-visitors'),
     portSpend: el('port-spend'),
     portExports: el('port-exports'),
+    portSources: el('port-sources'),
+    portShopping: el('port-shopping'),
     portLift: el('port-lift'),
     airport: el<HTMLButtonElement>('build-airport'),
     airportLabel: el('build-airport-label'),
@@ -1654,16 +1659,39 @@ export class Hud {
     // Berths *landing* rather than berths owned, because the runway lands on the
     // same path a quay does — see `berthsLanding`. An inland city reads three
     // and no coast, which is the whole point of the building.
-    n.portBerths.textContent = `${fmtInt(berthsLanding(s))}/${fmtInt(berths + (s.airport ? AIRPORT_VISITORS : 0))}`;
+    // `fmt` rather than `fmtInt`, because a berth is no longer a whole number:
+    // road tourism is ROAD_VISITORS berths times a coverage, so a city with two
+    // museums is landing a fraction of one and flooring it to zero would say it
+    // had none. The allowance counts the road's two the same way.
+    const allowed = berths + (s.airport ? AIRPORT_VISITORS : 0) + ROAD_VISITORS;
+    n.portBerths.textContent = `${fmt(berthsLanding(s))}/${fmt(allowed)}`;
     n.portWhere.textContent =
       first >= 0 ? `first quay on district ${fmtInt(first + 1)}`
-      : s.airport ? 'by air only'
-      : 'no coast yet';
+      : s.airport ? 'by air and road'
+      : 'by road only';
 
     const heads = visitors(s);
     n.portVisitors.textContent = fmt(heads);
     n.portSpend.textContent =
       berthsLanding(s) <= 0 ? 'nowhere to arrive' : `${fmt(cruiseIncome(s))}/s in tourism`;
+
+    // Where they came from, and — the row that matters — what they are worth.
+    // The spend line above is honest and asymptotically nothing: tourism sits
+    // outside the income bracket, so one berth is 3.4% of a one-district
+    // ledger and 0.0003% of a finished one. What a berth is actually worth now
+    // is the shopping, which reaches income through SHOP_BONUS like everyone
+    // else's. See VISITOR_TRIPS.
+    const from = visitorSources(s);
+    const parts: string[] = [];
+    if (from.quay > 0) parts.push(`${fmt(from.quay)} sea`);
+    if (from.air > 0) parts.push(`${fmt(from.air)} air`);
+    if (from.road > 0) parts.push(`${fmt(from.road)} road`);
+    n.portSources.textContent = parts.length > 0 ? parts.join(' · ') : '—';
+    const share = visitorShare(s);
+    n.portShopping.textContent =
+      heads <= 0
+        ? 'no visitors yet'
+        : `${pct(share)} of the city's shopping`;
 
     n.portExports.textContent = fmt(exportMarket(s));
     const lift = CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0);

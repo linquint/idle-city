@@ -2497,6 +2497,73 @@ export const VISITORS_PER_RESIDENT = 0.03;
 export const VISITOR_SPEND = 0.7;
 
 /**
+ * What a fully landmarked city is worth in arrivals, in cruise berths.
+ *
+ * Road tourism, and it is stated in berths for exactly the reason
+ * AIRPORT_VISITORS is: `visitors` is one expression — residents x
+ * VISITORS_PER_RESIDENT x happiness, per berth — and a second path beside it
+ * would be a second place for the happiness scaling to be got wrong. A coach is
+ * a berth that arrives by road.
+ *
+ * Driven by landmarks rather than by a terminal, which is what makes it worth
+ * having at all: a quay needs a coastal district and a runway needs the
+ * highway's fourteen, so a landlocked young city has no tourism whatsoever. A
+ * museum is buildable from district one. `landmarkCoverage` reads 0.19 at one
+ * museum plus one stadium over four districts and 0.92 at four of each, so this
+ * ramps in over the same purchases that were already lifting the mood.
+ *
+ * Two berths at full coverage, against the six a full waterfront holds and the
+ * three an airport is worth. A city that has covered itself in landmarks has
+ * about a third of a coast, which is the right order for something bought for
+ * another reason entirely.
+ */
+export const ROAD_VISITORS = 2;
+
+/**
+ * Shopping trips one visitor generates, against SPEND_PER_RESIDENT's 0.5.
+ *
+ * The whole of what makes tourism scale, and the reason it needed to. Tourism
+ * sits outside the income bracket — rent is multiplied by `bonuses` over shops
+ * and industry and a visitor's spend is not — so measured against a ledger that
+ * compounds, one cruise berth is 3.4% of income at one district and 0.0003% at
+ * forty-nine. A new arrivals path on the same line would be invisible within an
+ * hour of play.
+ *
+ * So visitors are routed into *commerce* instead: they are people in the city
+ * doing what people in the city do, and what they do most is shop. That reaches
+ * income the way everything else does — through commercial demand, the shops it
+ * justifies, and SHOP_BONUS — rather than through a line of its own, and it
+ * feeds the R -> C -> I cycle rather than sitting beside it.
+ *
+ * **Two fifths of a resident's, and the flavour argues for more.** A visitor is
+ * in the city *to* spend where a resident also works and sleeps, so three times
+ * a resident was the first number tried. It does not survive the measurement,
+ * and the reason is worth stating: `visitors` is not a small number. A full
+ * waterfront is six berths, the airport is three more and full landmarks are
+ * two, and at VISITORS_PER_RESIDENT that is 29% of the resident count standing
+ * in the city at any moment. Measured across {1,4,12,25,49} districts x {0..4}
+ * levels, with every berth, the runway and every landmark:
+ *
+ *     trips/visitor   share of the city's shopping   configurations newly pinned
+ *          0.10                      5.5%                        0 of 25
+ *          0.20                     10.4%                        0 of 25
+ *          0.30                     14.8%                        0 of 25
+ *          0.50                     22.4%                        3 of 25
+ *          1.50                     46.5%                        3 of 25
+ *
+ * Commerce is the signal nearest its upper bound — DEMAND_TERMS says so in its
+ * own comment — so a term that pins it is a term that has taken the decision
+ * away rather than added one. 0.20 is the largest value that lifts commercial
+ * demand everywhere and pins it nowhere it was not already pinned, and it still
+ * hands the most touristed city a tenth of its retail.
+ *
+ * The honest reading of the number, then, is spend-weight rather than bodies:
+ * `visitors` is what the tourism model calibrated as a berth's worth of trade,
+ * and this is how much of that trade lands on the high street.
+ */
+export const VISITOR_TRIPS = 0.2;
+
+/**
  * What one cargo terminal adds to the export tap, as a fraction of it.
  *
  * It lifts EXPORT_BASE and EXPORT_PER_DISTRICT rather than sitting beside them,
