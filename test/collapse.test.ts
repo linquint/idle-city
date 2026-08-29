@@ -227,15 +227,33 @@ describe('the plot that is rebuilt', () => {
 
   it('stands empty for the collapse and then grows back', () => {
     const root = new THREE.Scene();
-    const layer = new Buildings(root, new CityLayout());
-    // Looked up per read rather than held: `GrowableInstancedMesh` swaps its
-    // `InstancedMesh` out from under the scene when it reallocates, so a
-    // reference taken at construction goes stale the first time the city grows
-    // past the mesh's opening capacity.
-    const bodies = (): THREE.InstancedMesh => meshes(root, 'home:0')[0] as THREE.InstancedMesh;
+    const layout = new CityLayout();
+    const layer = new Buildings(root, layout);
+    const s = state({ ...housed(240) });
+    layout.ensure(s);
+    // Found by *position* rather than by instance index, and looked up per read
+    // rather than held. Two reasons, and both are about the layer being free to
+    // move things: `GrowableInstancedMesh` swaps its `InstancedMesh` out from
+    // under the scene when it reallocates, and a level-1 house lives in one of
+    // five model meshes packed per style — so neither which mesh holds slot 12
+    // nor where in it is anything a test should claim to know. The plot it
+    // stands on is, and no two buildings share one.
+    const plot = layout.place(ZONE.residential, 12, 0, s, createPlacement());
     const box = new THREE.Matrix4();
     const size = new THREE.Vector3();
-    layer.sync(state({ ...housed(240) }), 0);
+    const at = new THREE.Vector3();
+    const heightOnPlot = (): number => {
+      for (const mesh of meshes(root, 'model:home:')) {
+        for (let i = 0; i < mesh.count; i++) {
+          mesh.getMatrixAt(i, box);
+          at.setFromMatrixPosition(box);
+          if (Math.abs(at.x - plot.x) > 0.01 || Math.abs(at.z - plot.z) > 0.01) continue;
+          return size.setFromMatrixScale(box).y;
+        }
+      }
+      throw new Error('nothing stands on the plot at all');
+    };
+    layer.sync(s, 0);
     layer.update(50);
     expect(layer.scaffolds).toBe(0);
 
@@ -244,9 +262,7 @@ describe('the plot that is rebuilt', () => {
     layer.rebuild('home', 12, 50 + COLLAPSE_SECONDS);
     const scaleAt = (now: number): number => {
       layer.update(now);
-      bodies().getMatrixAt(12, box);
-      size.setFromMatrixScale(box);
-      return size.y;
+      return heightOnPlot();
     };
     // Nothing standing on it while it is coming down.
     expect(scaleAt(50.1)).toBeLessThan(0.01);

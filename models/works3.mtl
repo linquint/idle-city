@@ -1,0 +1,55 @@
+# Exported by three-d-stage
+newmtl industry-dark
+Kd 0.0168 0.0262 0.0467
+Ks 0.2000 0.2000 0.2000
+Ns 28
+d 1.0000
+
+newmtl industry-roof
+Kd 0.0612 0.0931 0.1590
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl stack-grey
+Kd 0.0887 0.1248 0.2016
+Ks 0.2000 0.2000 0.2000
+Ns 44
+d 1.0000
+
+newmtl trim-grey
+Kd 0.3419 0.3564 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl bay-light
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+
+newmtl crate-rust
+Kd 0.4564 0.1221 0.0497
+Ks 0.2000 0.2000 0.2000
+Ns 32
+d 1.0000
+
+newmtl plant-vent
+Kd 0.0452 0.0685 0.1170
+Ks 0.2000 0.2000 0.2000
+Ns 36
+d 1.0000
+
+newmtl apron-asphalt
+Kd 0.0685 0.0782 0.0953
+Ks 0.2000 0.2000 0.2000
+Ns 16
+d 1.0000
+
+newmtl marking-white
+Kd 0.8070 0.8388 0.8879
+Ks 0.2000 0.2000 0.2000
+Ns 30
+d 1.0000
+

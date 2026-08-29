@@ -32,6 +32,7 @@ import {
   worldZ,
   type CityLayout,
   type Coord,
+  type Placement,
 } from '../sim/layout.ts';
 import type { GameState, LevelCohort, ZoneKind } from '../sim/state.ts';
 import { Glow } from './glow.ts';
@@ -49,6 +50,19 @@ import {
   CAMPUS_PARTS,
 } from './civicModels.ts';
 import { mergeByMaterial, type ModelPart } from './model.ts';
+import {
+  MODEL_EXTENT,
+  MODEL_JITTER_MAX,
+  MODEL_LIT,
+  MODEL_LIT_MAX,
+  MODEL_STYLES,
+  MODELLED_KINDS,
+  ModelMeshes,
+  QUARTER,
+  modelFacing,
+  type LitBox,
+  type ModelledKind,
+} from './modelled.ts';
 import { Scaffold } from './scaffold.ts';
 import type { OverlaySource } from './zones.ts';
 
@@ -116,6 +130,85 @@ const depthJitter = (slot: number): number => 0.88 + variety(slot, 0x27) * 0.24;
 const JITTER_MAX = 1.12;
 const HEIGHT_JITTER_MAX = 1.24;
 
+/**
+ * Whether a building is drawn from a model rather than massed from the ladder.
+ *
+ * The first rung of every zone, plus the ruins, which are drawn in that rung's
+ * set because a boarded-up plot still holds a plot. Everything above it is a
+ * box with dressing on it.
+ *
+ * It takes the kind as well as the level even though only the level decides
+ * today. That is not ceremony and it is not a type guard either: narrowing on
+ * the zone would make the massed branch unreachable, because every `ZoneKind`
+ * is now a `ModelledKind`. What keeps a fourth zone honest is `MODELS` in
+ * `modelled.ts`, which is a `Record` over `ZoneKind` — a zone arriving without
+ * a table of models is a type error there, where the tables are.
+ *
+ * A predicate rather than a field on `LevelShape`, because what it selects is
+ * not a *shape* — it is which of two write paths a building takes, and the two
+ * have different meshes, different bookkeeping and different jitter.
+ */
+const modelled = (kind: ZoneKind, level: number): boolean =>
+  level <= 0 && (MODELLED_KINDS as readonly string[]).includes(kind);
+
+/**
+ * Per-building height jitter for a model, deliberately a fifth of a block's.
+ *
+ * A box has no proportions to break, so the massed rungs take 0.82 to 1.24 and
+ * read as a skyline. A model does: it has a roof pitch, a chimney, a fascia and
+ * a door at a door's height, and stretching one 24% taller is not a taller
+ * building — it is the same building drawn wrong. The five silhouettes a zone
+ * are where a street's variety comes from now, so this only has to stop a
+ * terrace or a parade from being a ruler.
+ */
+const modelHeightJitter = (slot: number): number => 0.94 + variety(slot, 0x6b) * 0.12;
+const MODEL_HEIGHT_JITTER_MAX = 1.06;
+
+/**
+ * A modelled building's footprint jitter, clamped by the plot it stands on.
+ *
+ * The same +-12% every massed body takes, capped at whatever its own model can
+ * afford — see `MODEL_JITTER_MAX`. The cap is a no-op for a house and a shop
+ * and binds on industry, which is the widest thing on the map and has the least
+ * room to grow.
+ */
+const modelWidthJitter = (kind: ModelledKind, slot: number): number =>
+  Math.min(widthJitter(slot), cap(kind, slot));
+const modelDepthJitter = (kind: ModelledKind, slot: number): number =>
+  Math.min(depthJitter(slot), cap(kind, slot));
+
+const cap = (kind: ModelledKind, slot: number): number =>
+  MODEL_JITTER_MAX[kind][modelStyleOf(kind, slot)] as number;
+
+/**
+ * Which way a modelled building turns to face its street, in quarter turns.
+ *
+ * Salted per zone like the style is, so a shop and a house on facing corners of
+ * the same junction do not both take the same side of their identical choice.
+ */
+const MODEL_TURN_SALT: Readonly<Record<ModelledKind, number>> = {
+  home: 0x8f,
+  shop: 0xb3,
+  industry: 0x2d,
+};
+
+const modelTurn = (kind: ModelledKind, x: number, z: number, slot: number): number =>
+  modelFacing(x, z, variety(slot, MODEL_TURN_SALT[kind]));
+
+/** A quarter turn applied to a model-space offset, exactly. */
+function turnXZ(
+  x: number,
+  z: number,
+  turn: number,
+  out: { x: number; z: number },
+): { x: number; z: number } {
+  out.x = turn === 0 ? x : turn === 1 ? z : turn === 2 ? -x : -z;
+  out.z = turn === 0 ? z : turn === 1 ? -x : turn === 2 ? -z : x;
+  return out;
+}
+
+const SCRATCH_TURN = { x: 0, z: 0 };
+
 /** A slight warm/cool tint per building, on top of the shade. */
 const tintJitter = (slot: number): number => 0.94 + variety(slot, 0x3d) * 0.12;
 
@@ -139,39 +232,58 @@ function against(target: number, material: number, out: THREE.Color): THREE.Colo
   );
 }
 
-/** Bands a style may wear. Two index slots are reserved per building for them. */
-const BANDS_MAX = 2;
+/**
+ * Lit unit boxes one building may wear, and the index slots reserved for them.
+ *
+ * Two is what a *massed* style wears: lit floor bands up the body, and no style
+ * has ever wanted a third. A *modelled* building wears its model's own lit
+ * pieces through the same mesh — a shopfront and a sign, and on two of the five
+ * shops a projecting fin or a menu board as well — so the models can want more,
+ * and the reserved stride has to be whichever is larger.
+ *
+ * Derived rather than typed for exactly that reason: `PART_SLOTS` is a fixed
+ * stride the growth animation indexes into long after the pack order was
+ * decided, so a remodel that adds a second sign to a style must widen it. A
+ * constant here would instead drop the sign silently.
+ */
+const BANDS_MAX = Math.max(2, MODEL_LIT_MAX);
 
 /**
- * The shared detail bank: nine unit shapes, instanced, worn by every zone and
+ * The shared detail bank: eight unit shapes, instanced, worn by every zone and
  * every level.
  *
- * Shared is the point, and it is the whole reason 45 building variants cost 24
- * meshes rather than 45. Three variants across five levels and three zones would
- * be forty-five growable meshes and forty-five draw calls for what is
- * fundamentally the same box — so instead every shape here is a *unit* shape and
- * the building's own proportions arrive as an instance scale, the same way a
- * building's jitter does. Nine meshes total, whatever the city is made of.
+ * Shared is the point, and it is the whole reason the massed variants cost a
+ * handful of meshes rather than one apiece. Three styles across five levels and
+ * three zones would be forty-five growable meshes and forty-five draw calls for
+ * what is fundamentally the same box — so instead every shape here is a *unit*
+ * shape and the building's own proportions arrive as an instance scale, the
+ * same way a building's jitter does. Eight meshes total, whatever the city is
+ * made of.
+ *
+ * It was nine until housing's first rung was modelled. The hipped cone in it
+ * was worn by exactly one thing — a level-1 house, which is what made a
+ * detached house read as a house — and the five models carry their own roofs,
+ * so the shape had no wearer left. See `ModelMeshes`.
  *
  * Instances are packed per part rather than per building, so an instance index
  * here has nothing to do with a slot index — `Buildings` keeps the map, in
- * `partAt`. Two of the nine are lit and ramp with the daylight cycle.
+ * `partAt`. Two of the eight are lit and ramp with the daylight cycle, and one
+ * of those two is what a modelled house borrows for its own lit band.
  */
 const PART = {
-  pitched: 0,
-  flat: 1,
-  parapet: 2,
-  awning: 3,
-  stack: 4,
-  setback: 5,
-  plant: 6,
+  flat: 0,
+  parapet: 1,
+  awning: 2,
+  stack: 3,
+  setback: 4,
+  plant: 5,
   /** A lit floor band girdling the body. Glow material, so it ramps at dusk. */
-  band: 7,
+  band: 6,
   /** The aircraft warning light tall levels carry. Glow material. */
-  beacon: 8,
+  beacon: 7,
 } as const;
 
-const PART_COUNT = 9;
+const PART_COUNT = 8;
 
 /**
  * Index slots reserved per building, in the order `writeParts` fills them:
@@ -236,6 +348,13 @@ interface LevelShape {
  */
 const ZONE_SHAPES: Readonly<Record<ZoneKind, readonly LevelShape[]>> = {
   home: [
+    // Housing's first rung is drawn from `models/house*.obj` rather than from
+    // this row, and the row is what those models were built to: a house's body
+    // is 2.2 x 1.6 x 2.2 in every one of the five. It stays because the ladder
+    // still has a rung here — the row states it, and the two rungs above it
+    // step from it — and because `LEVELS` indexes straight into this array.
+    // The bound a level-1 house is actually checked against is the model's own
+    // reach: see `bodyExtent`, which reads `HOUSE_EXTENT` for this rung.
     { width: 2.2, height: 1.6, depth: 1, beacon: false },
     { width: 2.6, height: 4.6, depth: 1, beacon: false },
     { width: 2.8, height: 11.5, depth: 1, beacon: true },
@@ -243,6 +362,9 @@ const ZONE_SHAPES: Readonly<Record<ZoneKind, readonly LevelShape[]>> = {
     { width: 3.1, height: 27.0, depth: 1, beacon: true },
   ],
   shop: [
+    // Modelled, like housing's first rung and for the same reason — see the
+    // note on `home` above. Every one of the five shops is built to a 3.0-wide
+    // shell, so the row is still what the ladder steps from.
     { width: 3.0, height: 2.4, depth: 1, beacon: false },
     { width: 3.0, height: 3.2, depth: 1, beacon: false },
     { width: 3.1, height: 4.4, depth: 1, beacon: false },
@@ -280,7 +402,7 @@ interface BuildStyle {
   readonly height: number;
   /** A colour band: a multiplier on the body's instance colour. */
   readonly tint: number;
-  /** Roof shape from the shared bank. Level-0 housing overrides it — see `roofOf`. */
+  /** Roof shape from the shared bank. Not worn by modelled level-1 housing. */
   readonly roof: number;
   /** Street-level overhang, as a share of the footprint. 0 = not worn. */
   readonly awning: number;
@@ -302,8 +424,8 @@ interface BuildStyle {
  */
 const ZONE_STYLES: Readonly<Record<ZoneKind, readonly BuildStyle[]>> = {
   home: [
-    // The baseline. A plain block with one lit floor band, and a pitched roof
-    // at level 0 — which is what makes a detached house read as a house.
+    // The baseline. A plain block with one lit floor band. It is never seen at
+    // level 1, which is modelled — a style here first shows at level 2.
     { name: 'terrace', width: 1.0, height: 1.0, tint: 1.0, roof: PART.flat,
       awning: 0, stack: 0, setback: 0, plant: 0, bands: 1 },
     // Wider and shorter, stepping back near the top, with a little plant on the
@@ -316,7 +438,8 @@ const ZONE_STYLES: Readonly<Record<ZoneKind, readonly BuildStyle[]>> = {
       awning: 0.3, stack: 0.12, setback: 0, plant: 0, bands: 2 },
   ],
   shop: [
-    // A canvas skirt at street level. The old default, kept as a style.
+    // A canvas skirt at street level. The old default, kept as a style. Like
+    // every style here it first shows at level 2: level 1 is modelled.
     { name: 'canopy', width: 1.0, height: 1.0, tint: 1.0, roof: PART.flat,
       awning: 0.4, stack: 0, setback: 0, plant: 0, bands: 1 },
     // A sign board standing above the roofline, turned onto the long axis so a
@@ -364,6 +487,31 @@ export function buildingStyle(kind: ZoneKind, slot: number): number {
   return Math.min(STYLES_PER_ZONE - 1, Math.floor(variety(slot, ZONE_SALT[kind]) * STYLES_PER_ZONE));
 }
 
+/** A per-zone salt, so a house and a shop on slot 7 are not both style 2. */
+const MODEL_SALT: Readonly<Record<ModelledKind, number>> = {
+  home: 0xd7,
+  shop: 0x4e,
+  industry: 0x1b,
+};
+
+/**
+ * Which of its zone's five models a plot's first-rung building is.
+ *
+ * The same contract `buildingStyle` keeps, for the same reasons: a pure
+ * function of the slot and the seed, so a building keeps its character forever,
+ * changing SEED reshuffles the street along with the streets, and there is
+ * nothing to store — a save is still counts. Exported so the tests can assert
+ * exactly that, and that all five are actually reached.
+ *
+ * Its own salt rather than `buildingStyle`'s, so which model a plot gets and
+ * which massed style it takes when it climbs off this rung are independent
+ * draws rather than the same draw read twice.
+ */
+export function modelStyleOf(kind: ModelledKind, slot: number): number {
+  const styles = MODEL_STYLES[kind];
+  return Math.min(styles - 1, Math.floor(variety(slot, MODEL_SALT[kind]) * styles));
+}
+
 function styleOf(kind: ZoneKind, slot: number): BuildStyle {
   const styles = ZONE_STYLES[kind];
   return styles[buildingStyle(kind, slot)] ?? (styles[0] as BuildStyle);
@@ -378,6 +526,20 @@ function styleOf(kind: ZoneKind, slot: number): BuildStyle {
  * bound that quietly stops holding the next time a style is added.
  */
 export function bodyExtent(kind: ZoneKind, level: number): { width: number; height: number } {
+  // The modelled rung is bounded by its models rather than by its row, and by
+  // the larger of each model's two horizontal spans: a house turns to face its
+  // street, so the side that ends up across the frontage is whichever of its
+  // width and depth the quarter turn put there.
+  if (modelled(kind, level)) {
+    let width = 0;
+    let height = 0;
+    MODEL_EXTENT[kind].forEach((model, style) => {
+      const span = Math.max(model.width, model.depth);
+      width = Math.max(width, span * Math.min(JITTER_MAX, MODEL_JITTER_MAX[kind][style] as number));
+      height = Math.max(height, model.height * MODEL_HEIGHT_JITTER_MAX);
+    });
+    return { width, height };
+  }
   const shape = shapeOf(kind, level);
   let width = 0;
   let height = 0;
@@ -388,6 +550,10 @@ export function bodyExtent(kind: ZoneKind, level: number): { width: number; heig
   return { width, height };
 }
 
+/** The model a slot's first-rung building is drawn from. */
+const modelOf = (kind: ModelledKind, slot: number) =>
+  MODEL_EXTENT[kind][modelStyleOf(kind, slot)] as (typeof MODEL_EXTENT)[ModelledKind][number];
+
 const shapeOf = (kind: ZoneKind, level: number): LevelShape => {
   const shapes = ZONE_SHAPES[kind];
   return shapes[Math.max(0, Math.min(shapes.length - 1, level))] ?? (shapes[0] as LevelShape);
@@ -396,16 +562,14 @@ const shapeOf = (kind: ZoneKind, level: number): LevelShape => {
 /**
  * Which roof a building wears.
  *
- * The style decides, with one override: a pitched roof is what makes a detached
- * house read as a house, and the same shape on a megastructure reads as a
- * mistake. So level-0 housing takes the pitch unless its style is the slab, and
- * everything above it wears whatever its style says. A ruin wears the flattest
+ * The style decides, and there is no longer an override: it used to say that
+ * level-1 housing takes a pitch whatever its style, because a pitched roof is
+ * what makes a detached house read as a house. That rung is modelled now and
+ * carries its own roof, so the rule went with it. A ruin wears the flattest
  * thing in the bank — whatever it had is gone.
  */
-function roofOf(kind: ZoneKind, level: number, style: BuildStyle): number {
-  if (level < 0) return PART.flat;
-  if (kind === 'home' && level === 0) return style.roof === PART.flat ? PART.pitched : PART.parapet;
-  return style.roof;
+function roofOf(level: number, style: BuildStyle): number {
+  return level < 0 ? PART.flat : style.roof;
 }
 
 class PartBank {
@@ -417,21 +581,13 @@ class PartBank {
     const lambert = (color: number): THREE.Material => new THREE.MeshLambertMaterial({ color });
     const unit = (): THREE.BufferGeometry => new THREE.BoxGeometry(1, 1, 1);
     // Unit shapes: 1 x 1 x 1 before the instance scale, so one geometry covers a
-    // cottage roof and a megastructure parapet alike.
-    const pitched = new THREE.ConeGeometry(0.72, 1, 4);
-    // A four-sided cone is a hipped roof only once it is turned onto the grid,
-    // and baking the turn into the geometry keeps it out of every write.
-    pitched.rotateY(Math.PI / 4);
+    // shopfront parapet and a megastructure parapet alike.
     // A band is nearly invisible at midday and most of what a street reads as
     // after dark; a warning light gets the lowest floor of the lit surfaces.
     const bandGlow = new Glow(PALETTE.sodium, 0.42);
     const beaconGlow = new Glow(PALETTE.sodium, 0.3);
     this.glows = [bandGlow, beaconGlow];
     const meshes: GrowableInstancedMesh[] = [];
-    meshes[PART.pitched] = new GrowableInstancedMesh(scene, pitched, lambert(PALETTE.tile), capacity, {
-      castShadow: true,
-      name: 'part:pitched',
-    });
     meshes[PART.flat] = new GrowableInstancedMesh(
       scene, new THREE.BoxGeometry(0.62, 1, 0.62), lambert(PALETTE.parapet), capacity,
       { castShadow: true, name: 'part:flat' },
@@ -608,7 +764,17 @@ function bodyColor(
   }
   // The per-building shade and tint survive the overlay, so the plan still reads
   // as buildings rather than as a flat sheet of one colour.
-  return base.multiplyScalar(shade(slot) * tintJitter(slot) * styleOf(kind, slot).tint);
+  //
+  // A modelled house takes the shade and the tint and *not* a style band: the
+  // band is a multiplier standing in for a style the eye cannot otherwise tell
+  // apart on a plain box, and five silhouettes do not need one. What the
+  // multiplier lands on is different too — a house's mesh is vertex-coloured,
+  // so this scales its whole palette at once rather than one material, which is
+  // what puts a whole house under an overlay instead of only its walls. That is
+  // the right reading for an overlay about a *plot*, and the only one a
+  // vertex-colour merge can give.
+  const style = modelled(kind, level) ? 1 : styleOf(kind, slot).tint;
+  return base.multiplyScalar(shade(slot) * tintJitter(slot) * style);
 }
 
 /**
@@ -630,7 +796,24 @@ function partColor(slot: number, out: THREE.Color): THREE.Color {
  * the same rungs a house does" true in the renderer as well as in the config.
  */
 class ZoneLayer {
-  private readonly bodies: readonly BodyMeshes[];
+  /**
+   * One body mesh per level, except where the level is modelled.
+   *
+   * Null at a modelled first rung, whose buildings are drawn by `ModelMeshes`
+   * instead — a hole rather than an unused mesh, because an `InstancedMesh`
+   * nothing ever writes to is still a draw call the budget has to answer for.
+   */
+  private readonly bodies: readonly (BodyMeshes | null)[];
+  /**
+   * The five models this zone's first rung is drawn from, or null where it is
+   * massed all the way down — which is industry, and only industry.
+   *
+   * Owned here rather than by `Buildings`, unlike the part bank beside it, and
+   * the difference is what each is: the bank is one bank *shared* by every
+   * zone, so only the layer above can know when to repack it; these are this
+   * zone's own five meshes and nothing else writes to them.
+   */
+  private readonly models: ModelMeshes | null;
   readonly growth: GrowthSchedule;
   /** The cohort the scene is drawing, and where each level's run of slots begins. */
   private readonly cohort: LevelCohort = new Array<number>(LEVELS).fill(0);
@@ -669,15 +852,26 @@ class ZoneLayer {
     private readonly detail: DetailMask,
   ) {
     this.growth = new GrowthSchedule(duration);
-    this.bodies = Array.from(
-      { length: LEVELS },
-      (_, level) => new BodyMeshes(scene, kind, level, capacity),
+    this.bodies = Array.from({ length: LEVELS }, (_, level) =>
+      modelled(kind, level) ? null : new BodyMeshes(scene, kind, level, capacity),
     );
+    this.models = modelled(kind, 0) ? new ModelMeshes(scene, kind, capacity) : null;
   }
 
   /** States what this zone's bodies cover, so they can be frustum-culled. */
   setBounds(x: number, z: number, reach: number, top: number): void {
-    for (const body of this.bodies) body.mesh.setBounds(x, z, reach, top);
+    for (const body of this.bodies) body?.mesh.setBounds(x, z, reach, top);
+    this.models?.setBounds(x, z, reach, top);
+  }
+
+  /** Clears this zone's model instances, before a repack rewrites them all. */
+  beginModels(): void {
+    this.models?.begin();
+  }
+
+  /** Publishes what the repack or the append wrote. Paired with `register`. */
+  endModels(): void {
+    this.models?.end();
   }
 
   /** How many buildings this layer is drawing. The append path's `from`. */
@@ -739,12 +933,19 @@ class ZoneLayer {
     this.overlay = source;
   }
 
-  /** Registers every body mesh's slot run, so a raycast hit resolves. */
+  /**
+   * Registers what each of this zone's meshes draws, so a raycast hit resolves.
+   *
+   * After `endModels`, always: the model bank's instance -> slot tables grow as
+   * they fill, so registering before the write would hand the ranges buffers
+   * nothing writes to any more.
+   */
   register(ranges: SlotRanges<ZoneKind>): void {
     for (let l = 0; l < LEVELS; l++) {
       const body = this.bodies[l];
       if (body) ranges.set(body.mesh, this.kind, this.starts[l] ?? 0);
     }
+    this.models?.register(ranges);
   }
 
   /** How many instances a level's mesh draws: its cohort, plus the ruins. */
@@ -804,21 +1005,21 @@ class ZoneLayer {
   /** Rewrites every building in the zone, level by level. */
   writeAll(bank: PartBank, dummy: THREE.Object3D, tint: THREE.Color, now: number): void {
     const standing = this.shown - this.ruins;
+    this.models?.ensure(this.shown);
     for (let l = 0; l < LEVELS; l++) {
       const body = this.bodies[l];
-      if (!body) continue;
       const count = this.levelCount(l);
       const start = this.starts[l] ?? 0;
-      body.ensure(count);
+      body?.ensure(count);
       for (let i = 0; i < count; i++) {
         const slot = start + i;
         // Slots past the standing stock are the ruins. They live in the level-0
         // set because they hold a plot and have to be drawn on it, and -1 is
         // what tells the write they hold no level.
-        this.writeOne(body, i, slot, slot < standing ? l : -1, bank, dummy, tint, now, true, null);
+        this.writeOne(i, slot, slot < standing ? l : -1, bank, dummy, tint, now, true, null);
       }
-      body.setCount(count);
-      body.flush();
+      body?.setCount(count);
+      body?.flush();
     }
   }
 
@@ -832,19 +1033,18 @@ class ZoneLayer {
     now: number,
   ): void {
     const body = this.bodies[0];
-    if (!body) return;
     const start = this.starts[0] ?? 0;
-    body.ensure(to - start);
+    body?.ensure(to - start);
+    this.models?.ensure(to);
     for (let slot = from; slot < to; slot++) {
-      this.writeOne(body, slot - start, slot, 0, bank, dummy, tint, now, true, null);
+      this.writeOne(slot - start, slot, 0, bank, dummy, tint, now, true, null);
     }
-    body.setCount(to - start);
-    body.flush();
+    body?.setCount(to - start);
+    body?.flush();
   }
 
   /** One building: its body, and its dressing out of the shared bank. */
   private writeOne(
-    body: BodyMeshes,
     index: number,
     slot: number,
     level: number,
@@ -858,6 +1058,12 @@ class ZoneLayer {
   ): void {
     const at = this.layout.place(this.zone, slot, this.shownMerged, this.shownZoning, SCRATCH_AT);
     const scale = this.growth.scaleAt(slot, now);
+    const colour = bodyColor(this.kind, slot, level, this.overlay?.(this.kind, slot) ?? null, tint);
+    if (this.models && modelled(this.kind, level)) {
+      this.writeModel(this.models, this.kind, slot, level, at, scale, colour, bank, dummy, place, scaffold);
+      return;
+    }
+    const body = this.bodies[Math.max(0, level)] as BodyMeshes;
     const shape = shapeOf(this.kind, level);
     const style = styleOf(this.kind, slot);
     // A merged parcel is drawn by stretching the level's own box along the
@@ -874,10 +1080,7 @@ class ZoneLayer {
     dummy.scale.set(sx, stretch * scale, sz);
     dummy.updateMatrix();
     body.mesh.setMatrixAt(index, dummy.matrix);
-    body.mesh.setColorAt(
-      index,
-      bodyColor(this.kind, slot, level, this.overlay?.(this.kind, slot) ?? null, tint),
-    );
+    body.mesh.setColorAt(index, colour);
 
     // The cage, around the *finished* building rather than around the shell it
     // has reached. The test is `scale !== 1` rather than `scale < 1` and it has
@@ -914,28 +1117,107 @@ class ZoneLayer {
     );
   }
 
+  /**
+   * One modelled building: the model, and the lit pieces it borrows.
+   *
+   * The other half of `writeOne`, and it is a separate method rather than a
+   * branch inside it because almost nothing carries over: a different mesh, a
+   * different jitter, a rotation, an origin on the ground rather than at the
+   * body's centre, and no dressing to choose.
+   *
+   * A model never stretches to a merged parcel, and it never has to. A standing
+   * building on one is at MERGE_LEVEL or above by construction — the merge *is*
+   * the promotion to it — so the only thing that can be modelled and merged is
+   * a ruin, on a parcel whose building was boarded up after it merged. Drawing
+   * that as a cottage stretched to 6.8 units would be a worse answer than
+   * drawing a cottage standing on a double plot, which is what this does.
+   */
+  private writeModel(
+    models: ModelMeshes,
+    kind: ModelledKind,
+    slot: number,
+    level: number,
+    at: Placement,
+    scale: number,
+    colour: THREE.Color,
+    bank: PartBank,
+    dummy: THREE.Object3D,
+    place: boolean,
+    scaffold: Scaffold | null,
+  ): void {
+    const style = modelStyleOf(kind, slot);
+    const model = modelOf(kind, slot);
+    const turn = modelTurn(kind, at.x, at.z, slot);
+    const sx = modelWidthJitter(kind, slot);
+    const sz = modelDepthJitter(kind, slot);
+    const sy = modelHeightJitter(slot) * scale;
+
+    // The model stands on y = 0, so it grows out of the ground by scaling about
+    // its own origin — one fewer term than the massed path, which has to lift a
+    // centred box by half its height as it rises.
+    dummy.rotation.set(0, QUARTER[turn] ?? 0, 0);
+    dummy.position.set(at.x, 0, at.z);
+    dummy.scale.set(sx, sy, sz);
+    dummy.updateMatrix();
+    if (place) models.place(style, slot, dummy.matrix, colour);
+    else models.move(style, slot, dummy.matrix);
+
+    if (scaffold && scale !== 1) {
+      const turned = turn % 2 === 1;
+      const along = model.width * sx;
+      const across = model.depth * sz;
+      scaffold.add(at.x, at.z, turned ? across : along, turned ? along : across, model.height * sy);
+    }
+
+    writeModelParts(
+      kind,
+      slot,
+      style,
+      // A ruin is dark and a building past the detail radius is undressed: the
+      // two reasons `writeParts` goes bare, and the lit pieces are all there is
+      // to lose — a shuttered shop with its sign still on would be a bug.
+      level >= 0 && this.detail.dressed(at.x, at.z),
+      at.x,
+      at.z,
+      turn,
+      sx,
+      sy,
+      sz,
+      bank,
+      dummy,
+      this.partAt,
+      place,
+    );
+  }
+
   /** Rewrites body colours only. Matrices are untouched, so this is one pass. */
   recolor(tint: THREE.Color): void {
     const standing = this.shown - this.ruins;
+    let modelledAny = false;
     for (let l = 0; l < LEVELS; l++) {
       const body = this.bodies[l];
-      if (!body) continue;
       const start = this.starts[l] ?? 0;
       for (let i = 0; i < this.levelCount(l); i++) {
         const slot = start + i;
-        body.mesh.setColorAt(
-          i,
-          bodyColor(
-            this.kind,
-            slot,
-            slot < standing ? l : -1,
-            this.overlay?.(this.kind, slot) ?? null,
-            tint,
-          ),
+        const level = slot < standing ? l : -1;
+        const colour = bodyColor(
+          this.kind,
+          slot,
+          level,
+          this.overlay?.(this.kind, slot) ?? null,
+          tint,
         );
+        if (body) body.mesh.setColorAt(i, colour);
+        else if (this.models && modelled(this.kind, level)) {
+          // A modelled level has no body mesh; its instance lives in its own
+          // style's run, which `ModelMeshes` is the only thing that can index.
+          this.models.recolor(modelStyleOf(this.kind, slot), slot, colour);
+          modelledAny = true;
+        }
       }
-      body.flush();
+      body?.flush();
     }
+    if (modelledAny) this.models?.flush();
   }
 
   /** Advances this zone's in-flight growth animations, and cages what is moving. */
@@ -960,10 +1242,7 @@ class ZoneLayer {
       if (slot >= this.shown) return;
       const found = levelAt(this.cohort, slot);
       const level = slot < standing ? Math.max(0, found) : -1;
-      const body = this.bodies[Math.max(0, level)];
-      if (!body) return;
       this.writeOne(
-        body,
         slot - (this.starts[Math.max(0, level)] ?? 0),
         slot,
         level,
@@ -975,7 +1254,10 @@ class ZoneLayer {
         scaffold,
       );
     });
-    if (moving) for (const body of this.bodies) body.flush();
+    if (moving) {
+      for (const body of this.bodies) body?.flush();
+      this.models?.flush();
+    }
     return moving;
   }
 }
@@ -1158,8 +1440,14 @@ const PS = {
   beacon: 5 + BANDS_MAX,
 } as const;
 
-/** How far above the body a roof of each kind rises. */
-const roofRise = (part: number): number => (part === PART.pitched ? 1.15 : 0.5);
+/**
+ * How far above the body a roof rises.
+ *
+ * One number rather than a lookup since the hipped cone left the bank: the flat
+ * cap and the parapet are the same height and always were, and the pitch that
+ * differed was housing's first rung, which is modelled now.
+ */
+const ROOF_RISE = 0.5;
 
 /**
  * Appends or rewrites one piece of dressing.
@@ -1181,6 +1469,67 @@ function putPart(
   if (place) partAt[at] = bank.place(part, dummy.matrix, color);
   else bank.move(part, partAt[at] ?? -1, dummy.matrix);
 }
+
+/**
+ * The dressing on a modelled building: its lit pieces, and nothing else.
+ *
+ * A model carries its own roof, canopy, chimney and gardens in its geometry, so
+ * every part slot but the lit ones is spent — and those cannot be in the
+ * geometry, because a vertex-colour merge has no room for a second material.
+ * A house wears one, a shop a shopfront and a sign, and two of the shops a
+ * third piece besides. See `MODEL_LIT`.
+ *
+ * It still writes -1 into the slots it does not use, and that is not
+ * housekeeping: `PART_SLOTS` is a fixed stride the growth animation reads long
+ * after the pack order was decided, and a stale index left in a slot would
+ * animate whatever piece of another building's dressing now lives there.
+ */
+function writeModelParts(
+  kind: ModelledKind,
+  slot: number,
+  style: number,
+  /** False for a ruin and past the detail radius — the same two `writeParts` bares. */
+  lit: boolean,
+  x: number,
+  z: number,
+  turn: number,
+  sx: number,
+  sy: number,
+  sz: number,
+  bank: PartBank,
+  dummy: THREE.Object3D,
+  partAt: Int32Array,
+  place: boolean,
+): void {
+  const base = slot * PART_SLOTS;
+  if (place) {
+    partAt[base + PS.roof] = -1;
+    partAt[base + PS.awning] = -1;
+    partAt[base + PS.stack] = -1;
+    partAt[base + PS.setback] = -1;
+    partAt[base + PS.plant] = -1;
+    partAt[base + PS.beacon] = -1;
+  }
+  const boxes = lit ? (MODEL_LIT[kind][style] as readonly LitBox[]) : EMPTY_LIT;
+  dummy.rotation.set(0, QUARTER[turn] ?? 0, 0);
+  for (let b = 0; b < BANDS_MAX; b++) {
+    const box = boxes[b];
+    if (!box) {
+      if (place) partAt[base + PS.band + b] = -1;
+      continue;
+    }
+    const [bx, by, bz] = box.at;
+    const [bw, bh, bd] = box.size;
+    // Each piece rides the building: its offset turns with the model and its
+    // box is scaled by the same jitter, so it stays where the modeller put it.
+    const offset = turnXZ(bx * sx, bz * sz, turn, SCRATCH_TURN);
+    dummy.position.set(x + offset.x, by * sy, z + offset.z);
+    dummy.scale.set(bw * sx, bh * sy, bd * sz);
+    putPart(bank, PART.band, base + PS.band + b, partAt, dummy, null, place);
+  }
+}
+
+const EMPTY_LIT: readonly LitBox[] = [];
 
 /**
  * The dressing on one building, out of the shared bank.
@@ -1227,8 +1576,8 @@ function writeParts(
   const bare = ruin || !dressed;
 
   // 1. The roof. Every building has one, ruins included.
-  const roof = roofOf(kind, level, style);
-  const rise = roofRise(roof);
+  const roof = roofOf(level, style);
+  const rise = ROOF_RISE;
   dummy.rotation.set(0, 0, 0);
   dummy.position.set(x, (height + rise / 2) * scale, z);
   dummy.scale.set(footW * scale, rise * scale, footD * scale);
@@ -1338,6 +1687,10 @@ function landmarkSet(scene: THREE.Scene, landmark: Landmark, capacity: number): 
  * rather than the size of a plot: a cottage and an arcology come down very
  * differently and a heap sized for the wrong one reads as a bug.
  *
+ * Takes the whole placement rather than the two fields it used to, because a
+ * modelled house needs the position too: which way it turned to face its street
+ * decides which of its two spans is across the frontage.
+ *
  * Fills `out` rather than returning a fresh object, for the reason SCRATCH_AT
  * does: this is asked for on the frame a building is destroyed and there is no
  * reason for it to allocate.
@@ -1346,16 +1699,27 @@ export function bodyFootprint(
   kind: ZoneKind,
   slot: number,
   level: number,
-  plots: number,
-  alongX: boolean,
+  at: Placement,
   out: { width: number; depth: number },
 ): { width: number; depth: number } {
+  if (modelled(kind, level)) {
+    const model = modelOf(kind, slot);
+    const along = model.width * modelWidthJitter(kind, slot);
+    const across = model.depth * modelDepthJitter(kind, slot);
+    // An odd quarter turn puts the model's depth across the world's x. A model
+    // never stretches to a merged parcel — see `writeModel` — so `plots` is not
+    // consulted here either.
+    const turned = modelTurn(kind, at.x, at.z, slot) % 2 === 1;
+    out.width = turned ? across : along;
+    out.depth = turned ? along : across;
+    return out;
+  }
   const shape = shapeOf(kind, level);
   const style = styleOf(kind, slot);
   out.width = shape.width * style.width * widthJitter(slot);
   out.depth = shape.width * shape.depth * style.width * depthJitter(slot);
-  if (plots > 1) {
-    if (alongX) out.width = MERGED_SPAN;
+  if (at.plots > 1) {
+    if (at.alongX) out.width = MERGED_SPAN;
     else out.depth = MERGED_SPAN;
   }
   return out;
@@ -1371,12 +1735,13 @@ export function bodyFootprint(
  * into a tall one.
  */
 export function roofline(kind: ZoneKind, slot: number, level: number): number {
-  // A ruin keeps the shell it had at level 0, so a fire on one still lands on a
-  // roof rather than in mid-air.
+  // A ruin keeps the shell it had at level 1, so a fire on one still lands on a
+  // roof rather than in mid-air. For the modelled rung that shell is the model,
+  // whose own top already includes its roof — there is no separate rise to add.
+  if (modelled(kind, level)) return modelOf(kind, slot).height * modelHeightJitter(slot);
   const shape = shapeOf(kind, level);
   const style = styleOf(kind, slot);
-  const rise = roofRise(roofOf(kind, level, style));
-  return shape.height * style.height * heightJitter(slot) + rise / 2;
+  return shape.height * style.height * heightJitter(slot) + ROOF_RISE / 2;
 }
 
 /**
@@ -2239,11 +2604,38 @@ class Outline {
 /**
  * The instanced meshes the three zone ladders are allowed to cost, all told.
  *
- * Fifteen bodies — one per (zone, level) — nine shared detail parts, and the
- * construction cage. The alternative the styles were designed against is 45
- * meshes: five levels by three styles by three zones, each a draw call for what
- * is fundamentally the same box. Asserted in test/skyline.test.ts, so a later
+ * Twelve bodies, eight shared detail parts, fifteen models and the construction
+ * cage. The alternative the styles were designed against is 45 meshes: five
+ * levels by three styles by three zones, each a draw call for what is
+ * fundamentally the same box. Asserted in test/skyline.test.ts, so a later
  * change cannot quietly double the draw calls.
+ *
+ * It was 25 before the first rungs were modelled, and it is worth setting out
+ * every move since, because a budget that grows without an argument is a budget
+ * that keeps growing:
+ *
+ *   - **+5, the five house models.** Five is the floor: an instanced mesh draws
+ *     one geometry, and five silhouettes are five geometries. What is *not*
+ *     spent is the 42 a mesh-per-material merge would have cost — nine
+ *     materials across the five;
+ *   - **-1, the body they replace.** `home:0` was a box and is now a hole in
+ *     the body array rather than a mesh nothing writes to;
+ *   - **-1, the pitched roof.** The hipped cone in the part bank was worn by
+ *     level-1 housing and by nothing else in the city, so modelling that rung
+ *     left it with no wearer. See `PART`;
+ *   - **+5 -1, the shops** and `shop:0`. Nothing in the part bank died with it:
+ *     the three shop styles still wear an awning, a fin and a setback from
+ *     level 2 up;
+ *   - **+5 -1, industry** and `industry:0`, on the same argument again. The
+ *     stack and the plant survive it for the same reason.
+ *
+ * So 25 - 2 + 4 + 4 = 36, and the three rungs a district is actually made of
+ * get fifteen silhouettes for the price of thirteen boxes. Every ladder is now
+ * four bodies rather than five, and every zone's first rung is a model.
+ *
+ * The cost that is *not* in this number is triangles rather than draw calls: a
+ * modelled building is 15 to 31 boxes where the massed one was one, which is
+ * measured by tools/lod.calibrate.mjs part 1b rather than bounded here.
  *
  * The cage is the twenty-fifth and it is worth saying what it costs, because a
  * budget nobody argues with is a budget that drifts: it is one mesh, it is
@@ -2254,18 +2646,22 @@ class Outline {
  *
  * Civic buildings, the city hall, power plants and landmarks are counted
  * separately and are not part of this: they stand on 2x2 and 3x3 sites, have no
- * level ladder, and are told apart by silhouette rather than by style. Ten
- * types — six services, the city hall, the power plant and two landmark sizes
- * — two of them a slab, a roof and one mark at three meshes each (the city hall
- * and the power plant, which are all that is left of that shape), plus the
- * eight modelled ones: the museum at five meshes, the hospital, the school and
- * the stadium at eight, and the police station, the fire station, the depot and
- * the university at nine each. The count grows with the *table* rather than
- * with the city: a mesh is built once per type and every hospital the player
- * opens is another instance in the ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
+ * level ladder, and are told apart by silhouette rather than by style. Eleven
+ * types and eighty meshes — seven services, the city hall, the power plant and
+ * two landmark sizes — two of them a slab, a roof and one mark at three meshes
+ * each (the city hall and the power plant, which are all that is left of that
+ * shape), plus the nine modelled ones: the museum at five meshes, the hospital,
+ * the school and the stadium at eight, and the police station, the fire
+ * station, the two depots and the university at nine each. The waste depot is
+ * the ninth and it draws the transit depot's model under its own names, so it
+ * costs a set of meshes without costing a table — see `busDepotSet`.
+ *
+ * The count grows with the *table* rather than with the city: a mesh is built
+ * once per type and every hospital the player opens is another instance in the
+ * ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
-export const BUILDING_MESH_BUDGET = 25;
+export const BUILDING_MESH_BUDGET = 36;
 
 /**
  * The building layer. It owns no game state: given counts, it reconciles the
@@ -2274,7 +2670,7 @@ export const BUILDING_MESH_BUDGET = 25;
 export class Buildings {
   /** One layer per zone, each owning its five body meshes. */
   private readonly zones: readonly ZoneLayer[];
-  /** Nine unit shapes, shared by every zone and every level. See `PartBank`. */
+  /** Eight unit shapes, shared by every zone and every level. See `PartBank`. */
   private readonly parts: PartBank;
   /**
    * Cages around whatever is mid-growth.
@@ -2461,6 +2857,7 @@ export class Buildings {
         zone.stage(state, now);
         zone.adopt(state);
         zone.writeRange(this.parts, this.dummy, this.tint, from, from + grew, now);
+        zone.endModels();
         zone.register(this.ranges);
       }
       this.parts.end();
@@ -2586,11 +2983,17 @@ export class Buildings {
    */
   repack(now: number): void {
     this.parts.begin();
+    for (const zone of this.zones) zone.beginModels();
+    for (const zone of this.zones) zone.writeAll(this.parts, this.dummy, this.tint, now);
+    this.parts.end();
+    // Registered after the write, like the part bank is published after it: a
+    // zone's model bank grows its instance -> slot tables as they fill, so
+    // registering mid-write would hand the ranges a buffer that is about to be
+    // replaced.
     for (const zone of this.zones) {
-      zone.writeAll(this.parts, this.dummy, this.tint, now);
+      zone.endModels();
       zone.register(this.ranges);
     }
-    this.parts.end();
   }
 
   private writeCivic(
@@ -2680,7 +3083,7 @@ export class Buildings {
     }
     const at = this.layout.place(zoneOf(ref.kind), ref.slot, mergedOf(state, ref.kind), state, SCRATCH_AT);
     const level = levelAt(levelsOf(state, ref.kind), ref.slot);
-    const foot = bodyFootprint(ref.kind, ref.slot, level, at.plots, at.alongX, SCRATCH_FOOT);
+    const foot = bodyFootprint(ref.kind, ref.slot, level, at, SCRATCH_FOOT);
     this.outline.show(at.x, at.z, foot.width, foot.depth, roofline(ref.kind, ref.slot, level));
   }
 

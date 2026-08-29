@@ -364,7 +364,7 @@ describe('the detail mask', () => {
       scene.traverse((object) => {
         if (
           object instanceof THREE.InstancedMesh &&
-          ['part:pitched', 'part:flat', 'part:parapet'].includes(object.name)
+          ['part:flat', 'part:parapet'].includes(object.name)
         ) {
           n += object.count;
         }

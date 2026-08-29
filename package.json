@@ -15,6 +15,7 @@
     "test:pwa": "node --check tools/pwa.test.mjs && node tools/pwa.test.mjs",
     "test:worker": "node --check tools/worker.test.mjs && node tools/worker.test.mjs",
     "model:parts": "node tools/model2parts.mjs",
+    "model:solids": "node tools/model2solids.mjs",
     "citygen:calibrate": "node tools/citygen.calibrate.mjs",
     "parcels:calibrate": "node tools/parcels.calibrate.mjs",
     "economy:calibrate": "node tools/economy.calibrate.mjs",

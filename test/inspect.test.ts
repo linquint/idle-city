@@ -46,6 +46,31 @@ function under(buildings: Buildings, x: number, z: number): BuildingRef | null {
   return buildings.pick(raycaster);
 }
 
+/**
+ * Every distinct answer a plot gives to a ray dropped anywhere over it.
+ *
+ * The plot centre used to be enough, because every body was a box centred on
+ * it. A modelled building is not: the modern house is an L of two wings with
+ * its drive in the notch, and the notch is where the plot centre falls — so a
+ * ray straight down the middle of that plot passes through its garden and hits
+ * the ground, exactly as a ray a metre off the middle of *any* plot always has.
+ * A plot is 4 units across and nothing on it has ever filled that.
+ *
+ * So the question the pick map actually has to answer is this one: a building
+ * is hittable somewhere over its own plot, and everything hit over that plot is
+ * that building. Sweeping is what asks it.
+ */
+function over(buildings: Buildings, x: number, z: number): Set<string> {
+  const found = new Set<string>();
+  for (let i = -4; i <= 4; i++) {
+    for (let j = -4; j <= 4; j++) {
+      const hit = under(buildings, x + i * 0.4, z + j * 0.4);
+      if (hit) found.add(`${hit.kind}:${hit.slot}`);
+    }
+  }
+  return found;
+}
+
 describe('picking a building', () => {
   it('round-trips every built slot, in every zone', () => {
     const { buildings, layout, s } = scene({
@@ -59,10 +84,9 @@ describe('picking a building', () => {
       const count = kind === 'home' ? s.homes : kind === 'shop' ? s.shops : s.industry;
       for (let slot = 0; slot < count; slot++) {
         const at = layout.place(zoneOf(kind), slot, mergedOf(s, kind), s, out);
-        const found = under(buildings, at.x, at.z);
-        expect(found).not.toBeNull();
-        expect(found?.kind).toBe(kind);
-        expect(found?.slot).toBe(slot);
+        // Its own plot answers with it, and with nothing else. A neighbour
+        // reaching over the kerb would show up here as a second entry.
+        expect(over(buildings, at.x, at.z)).toEqual(new Set([`${kind}:${slot}`]));
       }
     }
   });
@@ -80,9 +104,7 @@ describe('picking a building', () => {
     const out = createPlacement();
     for (let slot = 0; slot < s.homes; slot++) {
       const at = layout.place(zoneOf('home'), slot, s.mergedR, s, out);
-      const found = under(buildings, at.x, at.z);
-      expect(found?.slot).toBe(slot);
-      expect(found?.kind).toBe('home');
+      expect(over(buildings, at.x, at.z)).toEqual(new Set([`home:${slot}`]));
     }
   });
 
@@ -96,7 +118,7 @@ describe('picking a building', () => {
     const out = createPlacement();
     for (let slot = 0; slot < s.homes; slot++) {
       const at = layout.place(zoneOf('home'), slot, 0, s, out);
-      expect(under(buildings, at.x, at.z)?.slot).toBe(slot);
+      expect(over(buildings, at.x, at.z)).toEqual(new Set([`home:${slot}`]));
     }
   });
 

@@ -423,7 +423,7 @@ export class Fires {
       blaze.z = at.z;
       const level = levelAt(levelsOf(state, fire.kind), fire.index);
       blaze.top = roofline(fire.kind, fire.index, level);
-      bodyFootprint(fire.kind, fire.index, level, at.plots, at.alongX, blaze);
+      bodyFootprint(fire.kind, fire.index, level, at, blaze);
       if (same) continue;
       blaze.kind = fire.kind;
       blaze.index = fire.index;

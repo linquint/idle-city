@@ -186,10 +186,15 @@ export class GrowableInstancedMesh {
  * The map back from a raycast hit to the building it hit.
  *
  * `Raycaster` hands an `InstancedMesh` intersection an `instanceId`, which is a
- * position in that mesh's own instance buffer and nothing else. Every mesh in
- * the building layer draws one contiguous run of slots — a level's cohort, or a
+ * position in that mesh's own instance buffer and nothing else. Most meshes in
+ * the building layer draw one contiguous run of slots — a level's cohort, or a
  * whole zone from slot zero — so the map back is a single addition, and the
  * only thing worth keeping is where each mesh's run starts.
+ *
+ * The house meshes are the exception and `setMapped` is for them: five styles
+ * interleaved across one level's slots cannot each be a run, so they carry an
+ * explicit instance -> slot table instead. Both kinds resolve through the same
+ * call, because from a click's point of view they are the same question.
  *
  * It lives beside `GrowableInstancedMesh` because the ranges are its ranges: a
  * mesh that reallocates swaps its `THREE.InstancedMesh` out from under the
@@ -197,7 +202,13 @@ export class GrowableInstancedMesh {
  * the first time a district was annexed. Keyed on the wrapper, it cannot.
  */
 export class SlotRanges<T> {
-  private readonly entries: Array<{ mesh: GrowableInstancedMesh; tag: T; from: number }> = [];
+  private readonly entries: Array<{
+    mesh: GrowableInstancedMesh;
+    tag: T;
+    from: number;
+    /** Instance -> slot, where the mesh's instances are not a run. */
+    slots: Int32Array | null;
+  }> = [];
   /** Reused by `targets`, which is called once per click and never per frame. */
   private readonly scratch: THREE.Object3D[] = [];
 
@@ -207,9 +218,28 @@ export class SlotRanges<T> {
     if (found) {
       found.tag = tag;
       found.from = from;
+      found.slots = null;
       return;
     }
-    this.entries.push({ mesh, tag, from });
+    this.entries.push({ mesh, tag, from, slots: null });
+  }
+
+  /**
+   * Says that `mesh`'s i-th instance is slot `slots[i]`, tagged with `tag`.
+   *
+   * Re-stated rather than kept, every repack: the table grows with the city, so
+   * an entry holding the array it was given last time would resolve clicks
+   * against a buffer nothing writes to any more.
+   */
+  setMapped(mesh: GrowableInstancedMesh, tag: T, slots: Int32Array): void {
+    const found = this.entries.find((entry) => entry.mesh === mesh);
+    if (found) {
+      found.tag = tag;
+      found.from = 0;
+      found.slots = slots;
+      return;
+    }
+    this.entries.push({ mesh, tag, from: 0, slots });
   }
 
   /** Every mesh with something in it, for `Raycaster.intersectObjects`. */
@@ -226,7 +256,9 @@ export class SlotRanges<T> {
     for (const entry of this.entries) {
       if (entry.mesh.mesh !== object) continue;
       if (instanceId < 0 || instanceId >= entry.mesh.count) return null;
-      return { tag: entry.tag, slot: entry.from + instanceId };
+      if (!entry.slots) return { tag: entry.tag, slot: entry.from + instanceId };
+      if (instanceId >= entry.slots.length) return null;
+      return { tag: entry.tag, slot: entry.slots[instanceId] as number };
     }
     return null;
   }

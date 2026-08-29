@@ -7,7 +7,15 @@ import {
   BUILDING_MESH_BUDGET,
   Buildings,
   buildingStyle,
+  modelStyleOf,
 } from '../src/render/buildings';
+import {
+  MODEL_EXTENT,
+  MODEL_LIT,
+  MODEL_STYLES,
+  MODELLED_KINDS,
+  type ModelledKind,
+} from '../src/render/modelled';
 import { createState, type GameState, type ZoneKind } from '../src/sim/state';
 import { cohort, housed, making, mix, trading } from './levels';
 
@@ -46,10 +54,26 @@ function scene(): Scene {
   };
 }
 
-const ROOF_PARTS = ['part:pitched', 'part:flat', 'part:parapet'] as const;
+const ROOF_PARTS = ['part:flat', 'part:parapet'] as const;
 
+/**
+ * Roofs out of the shared bank, which is every building the ladder *masses*.
+ *
+ * Housing's first rung is not one of them: it is drawn from five models, each
+ * carrying its own roof in its geometry, so a district of level-1 houses has
+ * every roof it should have and none of them here. That is what took the hipped
+ * cone out of the bank — it had no other wearer.
+ */
 const roofTotal = (counts: Map<string, number>): number =>
   ROOF_PARTS.reduce((sum, name) => sum + (counts.get(name) ?? 0), 0);
+
+/** The five modelled level-1 buildings of a zone. See `ModelMeshes`. */
+const modelMeshes = (kind: ModelledKind): string[] =>
+  Array.from({ length: MODEL_STYLES[kind] }, (_, i) => `model:${kind}:${i}`);
+
+/** Level-1 buildings of a zone standing, over all five of its models. */
+const modelTotal = (counts: Map<string, number>, kind: ModelledKind): number =>
+  modelMeshes(kind).reduce((sum, name) => sum + (counts.get(name) ?? 0), 0);
 
 /** Every InstancedMesh under a scene whose name starts with `prefix`. */
 const meshes = (root: THREE.Object3D, prefix: string): THREE.InstancedMesh[] => {
@@ -69,7 +93,7 @@ const spread = (total: number): number[] => {
 };
 
 describe('the skyline the renderer draws', () => {
-  it('gives every home exactly one body and one roof', () => {
+  it('gives every home exactly one body, and every massed one a roof', () => {
     const { buildings, counts } = scene();
     for (const levels of [
       mix(24),
@@ -80,10 +104,16 @@ describe('the skyline the renderer draws', () => {
     ]) {
       buildings.sync(state({ homes: 24, homeLevels: [...levels] }), 0);
       const seen = counts();
-      for (let l = 0; l < LEVELS; l++) {
+      // The first rung is modelled and has no body mesh at all; the rungs above
+      // it are one mesh each, exactly as before.
+      expect(seen.get('home:0') ?? 0).toBe(0);
+      expect(modelTotal(seen, 'home')).toBe(levels[0]);
+      for (let l = 1; l < LEVELS; l++) {
         expect(seen.get(`home:${l}`) ?? 0).toBe(levels[l]);
       }
-      expect(roofTotal(seen)).toBe(24);
+      // Every building still has exactly one roof; the modelled ones carry
+      // theirs themselves, so the bank draws one for each of the rest.
+      expect(roofTotal(seen)).toBe(24 - (levels[0] as number));
     }
   });
 
@@ -98,23 +128,33 @@ describe('the skyline the renderer draws', () => {
         promoted * 0.1,
       );
       const seen = counts();
-      expect(seen.get('home:0')).toBe(24 - promoted);
+      // A promotion off the modelled rung moves a building out of its model's
+      // mesh and into a body mesh, and its roof appears in the bank as it goes.
+      expect(modelTotal(seen, 'home')).toBe(24 - promoted);
       expect(seen.get('home:1')).toBe(promoted);
-      expect(roofTotal(seen)).toBe(24);
+      expect(roofTotal(seen)).toBe(promoted);
     }
   });
 
-  it('draws a ruin on its plot, in the level-0 set, with a roof', () => {
+  it('draws a ruin on its plot, in the modelled set, and unlit', () => {
     const { buildings, counts } = scene();
     // Twenty standing homes at level 2, four boarded up. The ruins hold their
-    // plots, so the city still draws 24 buildings and 24 roofs.
+    // plots, so the city still draws 24 buildings.
     buildings.sync(state({ homes: 24, homeLevels: mix(0, 0, 20), abandonedR: 4 }), 0);
     const seen = counts();
     expect(seen.get('home:2')).toBe(20);
-    expect(seen.get('home:0')).toBe(4);
-    expect(roofTotal(seen)).toBe(24);
-    // Every ruin takes the flat roof, so there are at least four of them.
-    expect(seen.get('part:flat') ?? 0).toBeGreaterThanOrEqual(4);
+    // A ruin is drawn in the first rung's set, which is the modelled one — so a
+    // boarded-up plot is a darkened house rather than a darkened box.
+    expect(seen.get('home:0') ?? 0).toBe(0);
+    expect(modelTotal(seen, 'home')).toBe(4);
+    // Twenty roofs out of the bank: the standing level-2 blocks. The four ruins
+    // wear their model's own roof and take nothing from it.
+    expect(roofTotal(seen)).toBe(20);
+    // And a ruin keeps its plot and loses everything else, its lit band
+    // included: twenty standing buildings can light bands, four ruins cannot.
+    const lit = seen.get('part:band') ?? 0;
+    buildings.sync(state({ homes: 24, homeLevels: mix(0, 0, 24) }), 1);
+    expect(counts().get('part:band') ?? 0).toBeGreaterThan(lit);
   });
 
   it('puts out the lights on a shuttered building but leaves it standing', () => {
@@ -122,32 +162,100 @@ describe('the skyline the renderer draws', () => {
     buildings.sync(state({ ...trading(20) }), 0);
     const lit = counts().get('part:band') ?? 0;
     expect(lit).toBeGreaterThan(0);
-    expect(counts().get('shop:0')).toBe(20);
+    expect(modelTotal(counts(), 'shop')).toBe(20);
 
     // Seven closed. The bodies stay — the plot is still occupied — and the lit
-    // bands stop at the trading thirteen.
+    // pieces stop at the trading thirteen. On a modelled shop those are the
+    // shopfront and the sign, which is the whole of how a shuttered unit reads.
     buildings.sync(state({ shops: 20, shopLevels: mix(13), abandonedC: 7 }), 1);
-    expect((counts().get('shop:0') ?? 0)).toBe(20);
+    expect(modelTotal(counts(), 'shop')).toBe(20);
     expect(counts().get('part:band') ?? 0).toBeLessThan(lit);
   });
 
   it('uses more than one roof shape, and only sensible ones per level', () => {
     const { buildings, counts } = scene();
-    // A whole district of detached housing: pitched roofs dominate, because a
-    // pitched roof is what makes a house read as a house.
+    // A whole district of detached housing takes nothing from the roof bank at
+    // all: every one of them is a model with its own roof on it. This is what
+    // the hipped cone used to be for, and the reason it is gone.
     buildings.sync(state(housed(24)), 0);
     const cottages = counts();
-    expect(cottages.get('part:pitched') ?? 0).toBeGreaterThan(10);
-    expect(cottages.get('part:flat') ?? 0).toBe(0);
+    expect(modelTotal(cottages, 'home')).toBe(24);
+    expect(roofTotal(cottages)).toBe(0);
 
-    // A whole district of megastructures: never pitched, and a mix of the other
-    // two. Ten of them rather than twenty-four — each stands on a merged
-    // parcel, and a district offers about ten pairs of housing frontage.
+    // A whole district of megastructures: a mix of the two shapes left. Ten of
+    // them rather than twenty-four — each stands on a merged parcel, and a
+    // district offers about ten pairs of housing frontage.
     buildings.sync(state(housed(10, LEVELS - 1)), 1);
     const towers = counts();
-    expect(towers.get('part:pitched') ?? 0).toBe(0);
+    expect(modelTotal(towers, 'home')).toBe(0);
     expect(towers.get('part:flat') ?? 0).toBeGreaterThan(0);
     expect(towers.get('part:parapet') ?? 0).toBeGreaterThan(0);
+  });
+
+  it('builds a street out of all five models, in every zone', () => {
+    const { buildings, counts } = scene();
+    // Two districts built out at the first rung, which is the state a city
+    // spends its first hour in. Every model has to actually turn up in it, or
+    // the variety is a table nobody sees.
+    buildings.sync(
+      state({ ...housed(48), ...trading(60), ...making(26), districts: 2 }),
+      0,
+    );
+    const seen = counts();
+    expect(modelTotal(seen, 'home')).toBe(48);
+    expect(modelTotal(seen, 'shop')).toBe(60);
+    expect(modelTotal(seen, 'industry')).toBe(26);
+    for (const kind of MODELLED_KINDS) {
+      for (const name of modelMeshes(kind)) expect(seen.get(name) ?? 0).toBeGreaterThan(0);
+    }
+    // Every zone is modelled at this rung now, so nothing draws a level-1 body.
+    for (const kind of MODELLED_KINDS) expect(seen.get(`${kind}:0`) ?? 0).toBe(0);
+  });
+
+  it('gives every zone five silhouettes, all inside the plot', () => {
+    for (const kind of MODELLED_KINDS) {
+      // Five models are only worth five meshes if they read as five buildings.
+      // Bounding boxes are a coarse proxy for that and a sharp one for the case
+      // that would matter: a model pasted twice.
+      const shapes = MODEL_EXTENT[kind].map((m) => `${m.width}x${m.depth}x${m.height}`);
+      expect(new Set(shapes).size).toBe(MODEL_STYLES[kind]);
+      // A modelled building turns to face its street, so either span can end up
+      // across the frontage and both have to clear the kerb. `bodyExtent`
+      // reports only the widest of the five; this is each of them.
+      for (const model of MODEL_EXTENT[kind]) {
+        expect(Math.max(model.width, model.depth)).toBeLessThan(CELL);
+      }
+      // And every model is lit, or the zone goes dark at dusk one style at a
+      // time — the failure `MODEL_LIT` throws on, asserted from the outside.
+      for (const lit of MODEL_LIT[kind]) expect(lit.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('picks a model from the slot and the seed, and never from the save', () => {
+    // The same contract `buildingStyle` keeps. A building's model must not
+    // depend on the cohort under it — it keeps its character as the city grows
+    // around it — and must not be anywhere in a save.
+    const draws = 4000;
+    for (const kind of MODELLED_KINDS) {
+      const styles = MODEL_STYLES[kind];
+      const seen = new Array<number>(styles).fill(0);
+      for (let slot = 0; slot < draws; slot++) {
+        const style = modelStyleOf(kind, slot);
+        expect(style).toBe(modelStyleOf(kind, slot));
+        expect(style).toBeGreaterThanOrEqual(0);
+        expect(style).toBeLessThan(styles);
+        seen[style] = (seen[style] as number) + 1;
+      }
+      // All five reachable, and none of them running away with the street.
+      for (const n of seen) expect(n).toBeGreaterThan(draws / styles / 2);
+    }
+    // And the two zones draw independently: a plot's house and the shop on the
+    // same slot must not be the same index, or half the map would rhyme.
+    let same = 0;
+    for (let slot = 0; slot < draws; slot++) {
+      if (modelStyleOf('home', slot) === modelStyleOf('shop', slot)) same++;
+    }
+    expect(same).toBeLessThan(draws * 0.3);
   });
 });
 
@@ -166,7 +274,11 @@ describe('what the ladder costs to draw', () => {
     const names: string[] = [];
     root.traverse((object) => {
       if (!(object instanceof THREE.InstancedMesh)) return;
-      if (/^(home|shop|industry):\d+$/.test(object.name) || object.name.startsWith('part:')) {
+      if (
+        /^(home|shop|industry):\d+$/.test(object.name) ||
+        object.name.startsWith('model:') ||
+        object.name.startsWith('part:')
+      ) {
         names.push(object.name);
       }
     });
@@ -196,8 +308,13 @@ describe('what the ladder costs to draw', () => {
     expect(full.length).toBeLessThanOrEqual(BUILDING_MESH_BUDGET);
     // One body per (zone, level), and no duplicates anywhere.
     expect(new Set(full).size).toBe(full.length);
-    for (const kind of ['home', 'shop', 'industry']) {
-      expect(full.filter((name) => name.startsWith(`${kind}:`))).toHaveLength(LEVELS);
+    // Every zone is one body short: its first rung has no body mesh — and the
+    // five models replacing it are five meshes, not five per rung.
+    for (const kind of MODELLED_KINDS) {
+      expect(full.filter((name) => name.startsWith(`${kind}:`))).toHaveLength(LEVELS - 1);
+      expect(full.filter((name) => name.startsWith(`model:${kind}:`))).toHaveLength(
+        MODEL_STYLES[kind],
+      );
     }
   });
 
@@ -232,23 +349,45 @@ describe('what the ladder costs to draw', () => {
     expect(aspect(top)).toBeLessThan(6);
     // Commerce stays well under housing from the rung housing becomes a block
     // of flats: height is housing's signal, and a shop that competed on it
-    // would read as a stunted apartment block. Level 0 is the exception and
-    // always has been — a shopfront under a fascia really is taller than a
-    // bungalow. Industry is under commerce everywhere: it is the anti-tower.
-    for (let level = 0; level < LEVELS; level++) {
-      if (level > 0) {
-        expect(bodyExtent('shop', level).height).toBeLessThan(bodyExtent('home', level).height);
-      }
+    // would read as a stunted apartment block. Industry is under commerce: it
+    // is the anti-tower.
+    //
+    // Both orderings are about the *massed* rungs, and level 0 is not one — it
+    // is modelled in all three zones, and what `bodyExtent` reports there is a
+    // model's whole silhouette, chimney and fin sign and all. That is a
+    // different quantity from a massed body, which has never counted the stack
+    // standing on it: a level-1 industrial shed is 1.3 tall and carries a stack
+    // 1.35 times that, and this has always reported 1.93 rather than 3.05. So
+    // comparing model heights to each other here would be comparing silhouettes
+    // to bodies, and it would say a works with a 6-unit flue is "taller" than a
+    // shop in a sense the massed numbers never meant. Level 0 was already the
+    // exception for commerce against housing, for a smaller version of the same
+    // reason; it is now the exception for both orderings.
+    for (let level = 1; level < LEVELS; level++) {
+      expect(bodyExtent('shop', level).height).toBeLessThan(bodyExtent('home', level).height);
       expect(bodyExtent('industry', level).height).toBeLessThan(bodyExtent('shop', level).height);
     }
+
+    // What *is* true at the modelled rung, and is the whole of how the three
+    // zones read from the play camera: industry is the widest thing standing on
+    // a plot, and housing the narrowest. Footprint carries the type there,
+    // exactly as the massed ladder intends it to.
+    const span = (kind: ZoneKind): number => bodyExtent(kind, 0).width;
+    expect(span('industry')).toBeGreaterThan(span('shop'));
+    expect(span('shop')).toBeGreaterThan(span('home'));
   });
 
   it('gives every building its dressing, and every zone the same bank', () => {
     const { buildings, counts } = scene();
     buildings.sync(state({ ...housed(8), ...trading(12), ...making(5) }), 0);
     const seen = counts();
-    // One roof each, across all three zones, out of the one shared bank.
-    expect(roofTotal(seen)).toBe(8 + 12 + 5);
+    // Nothing draws a roof out of the shared bank at all: every building here
+    // is at its zone's modelled rung and carries its own. The bank's roofs are
+    // for the rungs above, which this city has not climbed to.
+    expect(roofTotal(seen)).toBe(0);
+    expect(modelTotal(seen, 'home')).toBe(8);
+    expect(modelTotal(seen, 'shop')).toBe(12);
+    expect(modelTotal(seen, 'industry')).toBe(5);
     // And the bank is genuinely shared: no zone has a part mesh of its own.
     expect(meshes(new THREE.Scene(), 'shop:front')).toHaveLength(0);
   });
@@ -257,8 +396,11 @@ describe('what the ladder costs to draw', () => {
     const root = new THREE.Scene();
     const buildings = new Buildings(root, new CityLayout());
     // Six merged shops and six single ones on the same district. The merged
-    // ones are the *oldest* slots, so they are the level-2 set.
-    buildings.sync(state({ shops: 12, shopLevels: mix(6, 0, 6), mergedC: 6, districts: 2 }), 0);
+    // ones are the *oldest* slots, so they are the level-3 set; the singles are
+    // at level 2 rather than level 1 because level 1 is modelled, and a model
+    // is never stretched to a parcel — the comparison has to be between two
+    // massed bodies to mean anything.
+    buildings.sync(state({ shops: 12, shopLevels: mix(0, 6, 0, 6), mergedC: 6, districts: 2 }), 0);
 
     const matrix = new THREE.Matrix4();
     const scale = new THREE.Vector3();
@@ -269,8 +411,8 @@ describe('what the ladder costs to draw', () => {
       matrix.decompose(position, quaternion, scale);
       return Math.max(scale.x, scale.z) / Math.min(scale.x, scale.z);
     };
-    const merged = meshes(root, 'shop:2')[0];
-    const single = meshes(root, 'shop:0')[0];
+    const merged = meshes(root, 'shop:3')[0];
+    const single = meshes(root, 'shop:1')[0];
     // A merged shop is oblong by roughly the parcel's two plots against one
     // shop's width; a single one is square to within its own jitter and its
     // style's proportions.

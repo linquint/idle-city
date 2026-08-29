@@ -126,7 +126,32 @@ const BUDGETS = [
     // over a wire and it has held inside every re-base, which is the honest
     // reading of a chunk that is mostly prose and tables. Re-based to +12% of
     // the four-feature figure; a fifth still has to be argued for.
-    raw: 281_000,
+
+    // Re-based in parallel on modelling every zone's first rung: fifteen
+    // building models and the four modules that draw them. `houseModels.ts`,
+    // `shopModels.ts`, `industryModels.ts` and `modelled.ts` are 55 kB of
+    // source between them, and three quarters of that is generated part table —
+    // fifteen models at 15 to 31 boxes each.
+    //
+    // The same shape a part table always makes, and the same reading the two
+    // notes above reach: raw breaches while gzip stays inside. A table of
+    // `{ shape: 'box', at: [...], size: [...], mtl: '...', colour: PALETTE.x }`
+    // repeated three hundred times is the most compressible thing this codebase
+    // produces, so raw is the honest measure of the source and gzip is the
+    // honest measure of what a player downloads. Trimming to fit would mean
+    // hand-shortening generated output, which is the one thing every one of
+    // those files says never to do.
+    //
+    // Measured on the merge of the two, which is the only figure that means
+    // anything now: 284,825 raw and 83,749 gzip. The raw half breached the
+    // 281,000 above by 3,825 B (+1.4%); the gzip half came in 4.3% *under* the
+    // 87,500 the network set and has not been moved. That is the whole argument
+    // for re-basing raw alone rather than both: a ceiling with headroom under
+    // it is a ceiling that is still doing its job, and raising it because a
+    // sibling number moved would be the drift this file exists to stop. Raw is
+    // +12% of the merged figure; gzip stays where it was and the next thing
+    // that breaches it owes an argument of its own.
+    raw: 319_000,
     gzip: 87_500,
   },
   {

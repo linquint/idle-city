@@ -179,10 +179,10 @@ const big = stand(MAX_DISTRICTS, LEVELS - 1);
   console.log(`  instances submitted                ${thou(t.instances, 8)}`);
   console.log(`  triangles submitted                ${thou(t.tris, 8)}`);
   console.log('');
-  console.log(`  BUILDING_MESH_BUDGET is ${BUILDING_MESH_BUDGET}: the three zone ladders and the`);
-  console.log('  shared part bank. A style is a parameter set rather than a mesh, and the');
-  console.log('  nine detail parts are shared across every zone and level — so 45 looks');
-  console.log('  cost 24 meshes, not 45 and not 150.');
+  console.log(`  BUILDING_MESH_BUDGET is ${BUILDING_MESH_BUDGET}: the three zone ladders, the`);
+  console.log('  shared part bank and the five house models. A massed style is a parameter');
+  console.log('  set rather than a mesh and the detail parts are shared across every zone');
+  console.log('  and level, so 45 massed looks still cost fourteen bodies and eight parts.');
   console.log('');
   console.log('  the ten largest, by triangles submitted\n');
   console.log('    mesh                     instances     triangles   shadow');
@@ -191,6 +191,64 @@ const big = stand(MAX_DISTRICTS, LEVELS - 1);
       `    ${r.name.padEnd(22)}${thou(r.count, 10)}${thou(r.tris, 14)}${(r.shadow ? '   yes' : '    no').padStart(9)}`,
     );
   }
+}
+console.log('');
+
+// ------------------------------------------------------- part 1b
+
+/**
+ * What modelling the first rungs costs, measured at the city that is made of
+ * them.
+ *
+ * Part 1 stands the city at level 4, where there is not a single first-rung
+ * building in it — so it says nothing at all about the ten models. The
+ * case that pays for them is the opposite one: a player who annexes widely and
+ * promotes little has a 49-district city of nothing but the modelled rungs, and
+ * that is the most modelled geometry the game can ever have standing.
+ *
+ * The comparison is against what that same city used to be: one box per
+ * building, one roof out of the shared bank. That is not a state this build can
+ * produce, so it is arithmetic rather than a second measurement — a massed
+ * first-rung building was a 12-triangle box and a 12-triangle roof, and the
+ * count of them is the count standing.
+ */
+console.log('what modelling every zone\'s first rung costs\n');
+{
+  const low = stand(MAX_DISTRICTS, 0);
+  const rows = submitted(low.root);
+  const t = totals(rows);
+  const models = rows.filter((r) => r.name.startsWith('model:'));
+  const standing = models.reduce((n, r) => n + r.count, 0);
+  const tris = models.reduce((n, r) => n + r.tris, 0);
+  const massed = standing * 24;
+  const shadowTris = rows.filter((r) => r.count > 0 && r.shadow).reduce((n, r) => n + r.tris, 0);
+  console.log(`  districts ${MAX_DISTRICTS}, everything at level 1 — every building a model`);
+  console.log(`  draw calls in the whole scene      ${pad(t.drawn, 8)}`);
+  console.log(`  triangles submitted                ${thou(t.tris, 8)}`);
+  console.log(`  of those, in the shadow pass       ${thou(shadowTris, 8)}`);
+  console.log('');
+  console.log('    model                     instances     triangles');
+  for (const zone of ['home', 'shop', 'industry']) {
+    const mine = models.filter((r) => r.name.startsWith(`model:${zone}:`));
+    for (const r of mine) {
+      console.log(`    ${r.name.padEnd(25)}${thou(r.count, 10)}${thou(r.tris, 14)}`);
+    }
+    const n = mine.reduce((a, r) => a + r.count, 0);
+    const x = mine.reduce((a, r) => a + r.tris, 0);
+    console.log(`    ${`all five ${zone}`.padEnd(25)}${thou(n, 10)}${thou(x, 14)}`);
+  }
+  console.log('');
+  const before = t.tris - tris + massed;
+  console.log(`  the same ${standing.toLocaleString('en-GB')} buildings massed would be`);
+  console.log(`  a box and a roof each: ${thou(massed, 1)} triangles, in 6 meshes.`);
+  console.log(`  So the models cost ${thou(tris - massed, 1)} triangles and 9 draw calls,`);
+  console.log(`  and are ${fixed((100 * tris) / t.tris, 1, 1)}% of everything this city submits.`);
+  console.log('');
+  console.log('  This is the honest headline, and it is a real cost: the worst scene the');
+  console.log(`  game can build goes from ${thou(before, 1)} triangles to ${thou(t.tris, 1)},`);
+  console.log(`  which is ${fixed((100 * t.tris) / before - 100, 1, 1)}% more, for 9 draw calls and fifteen silhouettes.`);
+  console.log('  It is also worth reading against part 1, which is the *other* worst case:');
+  console.log('  a level-4 city has half the buildings and dresses them to the teeth.');
 }
 console.log('');
 
