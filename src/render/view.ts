@@ -273,6 +273,9 @@ export class View {
     this.world.setSky(sky);
     this.buildings.setNight(sky.night);
     this.port.setNight(sky.night);
+    // The park lamps, which are the only sodium the city has that is not on a
+    // building or a quay.
+    this.parks.setNight(sky.night);
 
     const centre = cityCentre(state.districts);
     const reach = this.reachOf(state, centre);

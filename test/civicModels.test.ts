@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { Buildings } from '../src/render/buildings';
+import { Parks } from '../src/render/zones';
 import {
   BUS_DEPOT_PARTS,
   FIRE_STATION_PARTS,
   HOSPITAL_PARTS,
   MUSEUM_PARTS,
+  PARK_PARTS,
   POLICE_STATION_PARTS,
+  SCHOOL_PARTS,
   STADIUM_PARTS,
 } from '../src/render/civicModels';
 import type { ModelPart } from '../src/render/model';
@@ -15,11 +18,12 @@ import { CityLayout, worldX, worldZ, type Coord } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
 
 /**
- * The six buildings on a reserved square that come out of a model, checked as a
- * black box.
+ * The seven buildings on a reserved square that come out of a model, checked as
+ * a black box. The park, which is modelled too and is not a building, is at the
+ * bottom of this file.
  *
- * The other four are a slab with one thing standing on them, and bounds checks
- * on those would only restate `civicTrio`. These six are assembled from part
+ * The other three are a slab with one thing standing on them, and bounds checks
+ * on those would only restate `civicTrio`. These seven are assembled from part
  * tables generated out of `models/`, and three things can go wrong with that
  * which cannot go wrong with a slab:
  *
@@ -146,6 +150,23 @@ const MODELLED: readonly Modelled[] = [
       ['yard-asphalt', 'police:yard'],
       ['patrol-white', 'police:cars'],
       ['signal-blue', 'police:lights'],
+    ]),
+  },
+  {
+    label: 'school',
+    parts: SCHOOL_PARTS,
+    site: (layout, i) => layout.civicSiteFor(3, i),
+    span: 2,
+    count: (n) => ({ schools: n }),
+    meshes: new Map([
+      ['school-stone', 'school:walls'],
+      ['glazing', 'school:glazing'],
+      ['school-roof', 'school:roofs'],
+      ['clerestory-light', 'school:clerestory'],
+      ['trim-grey', 'school:trim'],
+      ['yard-asphalt', 'school:yard'],
+      ['marking-white', 'school:markings'],
+      ['hedge-green', 'school:hedge'],
     ]),
   },
   {
@@ -379,6 +400,123 @@ describe.each(MODELLED)('the $label', (building) => {
     const drawn = boxes(root, prefix, 11);
     for (const [mtl, box] of expected(building.parts)) {
       const got = drawn.get(building.meshes.get(mtl) as string);
+      expect(got, mtl).toBeDefined();
+      if (got) {
+        expect([got.max.x - centre.x, got.max.y, got.max.z - centre.z].map(round)).toEqual(
+          box.max.map(round),
+        );
+      }
+    }
+  });
+});
+
+
+/**
+ * The park, which is modelled like the seven above and drawn by none of the
+ * same code.
+ *
+ * It is a single plot with no building on it, so `Parks` writes one transform
+ * per park into one mesh per material and there is no growth animation to keep
+ * anything in register through. That leaves two of the four questions above
+ * worth asking — the parts land where the model puts them, and they land in the
+ * right meshes — plus one this file could not ask of a building: that the model
+ * stays inside the pad, because a park's neighbours are other plots rather than
+ * the rest of its own site.
+ */
+describe('the park', () => {
+  /** The pad a park is drawn on: a plot, less the gutter every plot leaves. */
+  const PAD = CELL - 0.8;
+
+  const laid = (): { root: THREE.Scene; layout: CityLayout; centre: THREE.Vector3 } => {
+    const root = new THREE.Scene();
+    const layout = new CityLayout();
+    const parks = new Parks(root, layout);
+    const at = state({ districts: 1, parks: 1 });
+    layout.ensure(at);
+    parks.sync(at);
+    const cell = layout.parkCell(0);
+    // A park sits on one plot and `worldX` is that plot's centre, so unlike a
+    // civic building there is no half-site to step over.
+    return { root, layout, centre: new THREE.Vector3(worldX(cell.x), 0, worldZ(cell.z)) };
+  };
+
+  const MESHES = new Map([
+    ['park-lawn', 'park:park-lawn'],
+    ['park-path', 'park:park-path'],
+    ['planting-bed', 'park:planting-bed'],
+    ['pond-water', 'park:pond-water'],
+    ['tree-trunk', 'park:tree-trunk'],
+    ['tree-canopy', 'park:tree-canopy'],
+    ['bench-grey', 'park:bench-grey'],
+    ['lamp-light', 'park:lamp-light'],
+  ]);
+
+  it('lays out where the model puts it, material for material', () => {
+    const { root, centre } = laid();
+    const drawn = boxes(root, 'park', 0);
+    const want = expected(PARK_PARTS);
+
+    expect([...drawn.keys()].sort()).toEqual([...MESHES.values()].sort());
+    expect(want.size).toBe(MESHES.size);
+
+    for (const [mtl, box] of want) {
+      const got = drawn.get(MESHES.get(mtl) as string);
+      expect(got, mtl).toBeDefined();
+      if (!got) continue;
+      expect([got.min.x - centre.x, got.min.y, got.min.z - centre.z].map(round)).toEqual(
+        box.min.map(round),
+      );
+      expect([got.max.x - centre.x, got.max.y, got.max.z - centre.z].map(round)).toEqual(
+        box.max.map(round),
+      );
+    }
+  });
+
+  it('keeps inside its own plot and out of the ground', () => {
+    const { root, centre } = laid();
+    // The pad's own half-width. A park's neighbours are plots rather than the
+    // rest of a site it owns, so anything past this is over someone's kerb —
+    // and the lamp on the corner is what makes that worth asserting.
+    const half = PAD / 2;
+    for (const [name, box] of boxes(root, 'park', 0)) {
+      expect(box.min.y, `${name} sits on the ground`).toBeGreaterThanOrEqual(-EPSILON);
+      for (const corner of [box.min, box.max]) {
+        expect(Math.abs(corner.x - centre.x), `${name} within the pad in x`).toBeLessThanOrEqual(
+          half + EPSILON,
+        );
+        expect(Math.abs(corner.z - centre.z), `${name} within the pad in z`).toBeLessThanOrEqual(
+          half + EPSILON,
+        );
+      }
+    }
+  });
+
+  it('costs one mesh a material however many the city lays out', () => {
+    const root = new THREE.Scene();
+    const layout = new CityLayout();
+    const parks = new Parks(root, layout);
+    const names = (): string[] => {
+      const found: string[] = [];
+      root.traverse((object) => {
+        if (object instanceof THREE.InstancedMesh && object.name.startsWith('park:')) {
+          found.push(object.name);
+        }
+      });
+      return found.sort();
+    };
+    expect(names()).toEqual([...MESHES.values()].sort());
+
+    const at = state({ districts: 8, parks: 32 });
+    layout.ensure(at);
+    parks.sync(at);
+    expect(names()).toEqual([...MESHES.values()].sort());
+
+    // And the thirty-second is the model too, on its own plot.
+    const cell = layout.parkCell(31);
+    const centre = new THREE.Vector3(worldX(cell.x), 0, worldZ(cell.z));
+    const drawn = boxes(root, 'park', 31);
+    for (const [mtl, box] of expected(PARK_PARTS)) {
+      const got = drawn.get(MESHES.get(mtl) as string);
       expect(got, mtl).toBeDefined();
       if (got) {
         expect([got.max.x - centre.x, got.max.y, got.max.z - centre.z].map(round)).toEqual(

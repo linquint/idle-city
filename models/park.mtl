@@ -1,0 +1,49 @@
+# Exported by three-d-stage
+newmtl park-lawn
+Kd 0.0497 0.2747 0.0953
+Ks 0.2000 0.2000 0.2000
+Ns 16
+d 1.0000
+
+newmtl park-path
+Kd 0.5457 0.4564 0.2502
+Ks 0.2000 0.2000 0.2000
+Ns 20
+d 1.0000
+
+newmtl planting-bed
+Kd 0.1046 0.2122 0.0953
+Ks 0.2000 0.2000 0.2000
+Ns 20
+d 1.0000
+
+newmtl pond-water
+Kd 0.0284 0.1170 0.1812
+Ks 0.2000 0.2000 0.2000
+Ns 160
+d 1.0000
+
+newmtl tree-trunk
+Kd 0.0685 0.0356 0.0176
+Ks 0.2000 0.2000 0.2000
+Ns 20
+d 1.0000
+
+newmtl tree-canopy
+Kd 0.0865 0.3916 0.1441
+Ks 0.2000 0.2000 0.2000
+Ns 24
+d 1.0000
+
+newmtl bench-grey
+Kd 0.3419 0.3564 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl lamp-light
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+

@@ -131,6 +131,11 @@ export const PALETTE = {
   park: 0x3f8f57,
   trunk: 0x4a3524,
   canopy: 0x53a86a,
+  // Clipped planting: the hedge along the school's playground. Darker and
+  // greyer than a tree's canopy and flatter than the park's lawn, because it is
+  // neither — a hedge that borrowed either colour would read as a wall of park
+  // pushed up against a school.
+  hedge: 0x4a7a4e,
   // Traffic. One shared body colour rather than a per-instance tint: at the
   // distance this is played from a car is two world units long, so the variety
   // would not read, and instance colours would have to be rewritten every frame

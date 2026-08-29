@@ -1,0 +1,49 @@
+# Exported by three-d-stage
+newmtl school-stone
+Kd 0.4851 0.4072 0.2705
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl glazing
+Kd 0.0273 0.0482 0.0908
+Ks 0.2000 0.2000 0.2000
+Ns 144
+d 1.0000
+
+newmtl school-roof
+Kd 0.2664 0.2122 0.1248
+Ks 0.2000 0.2000 0.2000
+Ns 52
+d 1.0000
+
+newmtl clerestory-light
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+
+newmtl trim-grey
+Kd 0.3419 0.3564 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl yard-asphalt
+Kd 0.0685 0.0782 0.0953
+Ks 0.2000 0.2000 0.2000
+Ns 16
+d 1.0000
+
+newmtl marking-white
+Kd 0.8070 0.8388 0.8879
+Ks 0.2000 0.2000 0.2000
+Ns 30
+d 1.0000
+
+newmtl hedge-green
+Kd 0.0685 0.1946 0.0762
+Ks 0.2000 0.2000 0.2000
+Ns 24
+d 1.0000
+

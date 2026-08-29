@@ -45,6 +45,7 @@ import {
   POLICE_STATION_PARTS,
   MUSEUM_PARTS,
   STADIUM_PARTS,
+  SCHOOL_PARTS,
 } from './civicModels.ts';
 import { mergeByMaterial, type ModelPart } from './model.ts';
 import type { OverlaySource } from './zones.ts';
@@ -1314,13 +1315,13 @@ const PART_AT_SITE = new THREE.Vector3(0, 0, 0);
  * play camera.
  *
  * A set is a list of parts rather than a fixed body-roof-mark triple, because
- * the types have grown apart. Four of them are a slab with one thing standing
- * on it and say exactly that through `civicTrio`; the other six are modelled —
- * assembled from part tables generated out of `models/` and merged by material,
- * to between five meshes and nine. A list is what both kinds are, and the cost
- * still grows with the *table* rather than with the city: every mesh is built
- * once, in this constructor, and a hundred hospitals are a hundred instances in
- * it rather than a hundred draw calls.
+ * the types have grown apart. Three of them are a slab with one thing standing
+ * on it and say exactly that through `civicTrio`; the other seven are modelled
+ * — assembled from part tables generated out of `models/` and merged by
+ * material, to between five meshes and nine. A list is what both kinds are, and
+ * the cost still grows with the *table* rather than with the city: every mesh
+ * is built once, in this constructor, and a hundred hospitals are a hundred
+ * instances in it rather than a hundred draw calls.
  */
 class CivicMeshes {
   private readonly meshes: readonly GrowableInstancedMesh[];
@@ -1415,7 +1416,7 @@ class CivicMeshes {
 }
 
 /**
- * A slab, the roof on it, and one thing standing on that: four of the ten types.
+ * A slab, the roof on it, and one thing standing on that: three of the ten types.
  *
  * The body rises out of the ground and the other two ride up on it, which is
  * the growth animation every civic building had when there was only one shape
@@ -1554,7 +1555,7 @@ interface Finish {
 /**
  * A civic building assembled from its model: one instanced mesh per material.
  *
- * The six composed types come through here and the four slabs go through
+ * The seven composed types come through here and the three slabs go through
  * `civicTrio`; the only thing that makes this different is that the geometry
  * came out of a file. Growth is `ride` with no offset throughout, which comes
  * out as the whole assembly scaling about the site's ground centre — the one
@@ -1594,7 +1595,7 @@ function modelSet(
  * The hospital: a ward slab across the back of the site and a low treatment
  * wing across the front of it, in an L around the ambulance bay.
  *
- * It is the first of the six types that are *composed* rather than
+ * It is the first of the seven types that are *composed* rather than
  * massed, and it earns that by being the building the city is told to buy
  * first — the anchor of the service ladder, on the site the player looks at
  * longest. What it has to do from the play camera is read as a hospital rather
@@ -1923,28 +1924,61 @@ function stadiumSet(scene: THREE.Scene, capacity: number): CivicMeshes {
   );
 }
 
+/**
+ * The school: a teaching hall along the back of the site, a gym on one corner,
+ * and the playground the two of them look onto.
+ *
+ * The seventh composed type and the last service. As a slab it was the flattest
+ * thing on a civic quad, and that was the whole of it — a low pale box with a
+ * lit band, told apart from its neighbours by being *less* than they were.
+ * Nothing about it said school.
+ *
+ * What says it now is the playground, which is half the site: a marked court
+ * with a hoop at each end and a hedge along the two sides that face the street.
+ * The city has three other yards — the depot's apron, the police station's
+ * patrol yard and the stadium's pitch — and this is the only one with a game
+ * painted on it. The hedge is the only clipped planting anywhere on the map,
+ * which is what keeps a low pale building with a yard from reading as the
+ * depot's shed with the buses taken out.
+ *
+ * The clerestory is kept from the slab, and stays the one lit surface: a band
+ * along the ridge of the hall rather than around a parapet, so what is lit
+ * after dark is the classrooms rather than the outline of a box.
+ *
+ * Twenty-three pieces, eight meshes.
+ */
+function schoolSet(scene: THREE.Scene, capacity: number): CivicMeshes {
+  // The clerestory over the hall. A lower floor than the slab's band carried:
+  // that band was lighting an outline and this is lighting a roof, and a roof
+  // that glowed at noon would read as painted.
+  const clerestory = new Glow(PALETTE.sodium, 0.34);
+  return modelSet(
+    scene,
+    SCHOOL_PARTS,
+    new Map<string, Finish>([
+      // The hall and the gym.
+      ['school-stone', { name: 'school:walls', tint: true, receiveShadow: true }],
+      // Banded classroom windows on both volumes, and the entrance glass, which
+      // is the same dark glazing and reads as one material with them.
+      ['glazing', { name: 'school:glazing', castShadow: false }],
+      ['school-roof', { name: 'school:roofs', receiveShadow: true }],
+      ['clerestory-light', { name: 'school:clerestory', glow: clerestory, castShadow: false }],
+      // The entrance canopy and its posts, and the two hoops on the court.
+      ['trim-grey', { name: 'school:trim' }],
+      ['yard-asphalt', { name: 'school:yard', castShadow: false, receiveShadow: true }],
+      ['marking-white', { name: 'school:markings', castShadow: false }],
+      ['hedge-green', { name: 'school:hedge', receiveShadow: true }],
+    ]),
+    capacity,
+  );
+}
+
 /** One mesh set per service, in SERVICES order. */
 function civicSet(scene: THREE.Scene, service: Service, capacity: number): CivicMeshes {
   if (service.key === 'hospital') return hospitalSet(scene, capacity);
   if (service.key === 'police') return policeStationSet(scene, capacity);
   if (service.key === 'fire') return fireStationSet(scene, capacity);
-  if (service.key === 'school') {
-    // A long low hall with a lit clerestory band along its roofline. Read from
-    // the play camera it is the flattest thing on a 2x2 site — nothing stands
-    // on it at all — which is what tells it apart from the police station's
-    // banded block and mast at the same footprint.
-    const windows = new Glow(PALETTE.sodium, 0.34);
-    return civicTrio(
-      scene,
-      service.key,
-      { body: PALETTE.school, roof: PALETTE.schoolRoof, height: 1.5 },
-      new THREE.BoxGeometry(CIVIC_W - 1.2, 0.42, CIVIC_W - 1.2),
-      windows.material,
-      new THREE.Vector3(0, 0.5, 0),
-      capacity,
-      windows,
-    );
-  }
+  if (service.key === 'school') return schoolSet(scene, capacity);
   if (service.key === 'transit') return busDepotSet(scene, capacity);
   // The university: three plots a side and a tower off the middle of it, taller
   // than anything else the city builds until it reaches arcologies. It is the
@@ -2026,12 +2060,13 @@ class Outline {
  * separately and are not part of this: they stand on 2x2 and 3x3 sites, have no
  * level ladder, and are told apart by silhouette rather than by style. Ten
  * types — six services, the city hall, the power plant and two landmark sizes
- * — four of them a slab, a roof and one mark at three meshes each, plus the six
- * modelled ones: the museum at five meshes, the hospital and the stadium at
- * eight, and the police station, the fire station and the depot at nine each.
- * The count grows with the *table* rather than with the city: a mesh is built
- * once per type and every hospital the player opens is another instance in the
- * ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
+ * — three of them a slab, a roof and one mark at three meshes each (the
+ * university, the city hall and the power plant), plus the seven modelled ones:
+ * the museum at five meshes, the hospital, the school and the stadium at eight,
+ * and the police station, the fire station and the depot at nine each. The
+ * count grows with the *table* rather than with the city: a mesh is built once
+ * per type and every hospital the player opens is another instance in the ones
+ * that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
 export const BUILDING_MESH_BUDGET = 24;

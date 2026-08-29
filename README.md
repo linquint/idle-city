@@ -298,21 +298,28 @@ box.
 - Industry is the anti-tower — wide, low and flat, with one stack. Height is how
   the housing tiers say "bigger", so industry competes on footprint instead.
 - Civic buildings get 2x2 plots and landmarks a square of their own, which is
-  room for a silhouette each rather than three colours of the same box. Four
-  types are still a slab with one thing standing on it — the school a long flat
-  hall, the university a tower, the city hall a clock tower, the power plant a
-  lit stack. The other six are *modelled* rather than massed: the hospital as a
-  ward slab and a lower treatment wing in an L, with a helipad and a painted
-  cross on the roofs the play camera looks down at; the fire station as an
-  appliance hall, a dormitory and a hose tower with a beacon on top; the police
-  station as a banded block with a cell wing, a walled yard with two patrol cars
-  in it, and a radio mast that goes higher than the fire station's tower while
-  reading as a line rather than a mass; the depot as a low shed over a lit apron
-  with the fleet parked on it, which is the one civic square that is mostly
-  yard; the museum as a colonnaded hall between two wings on a stone plinth; and
-  the stadium as four stands around a marked pitch under corner floodlights, on
-  the only 3x3 square anything modelled stands on. All six are generated from
-  the models in `models/` — see `npm run model:parts`.
+  room for a silhouette each rather than three colours of the same box. Three
+  types are still a slab with one thing standing on it — the university a tower,
+  the city hall a clock tower, the power plant a lit stack. The other seven are
+  *modelled* rather than massed: the hospital as a ward slab and a lower
+  treatment wing in an L, with a helipad and a painted cross on the roofs the
+  play camera looks down at; the fire station as an appliance hall, a dormitory
+  and a hose tower with a beacon on top; the police station as a banded block
+  with a cell wing, a walled yard with two patrol cars in it, and a radio mast
+  that goes higher than the fire station's tower while reading as a line rather
+  than a mass; the depot as a low shed over a lit apron with the fleet parked on
+  it, which is the one civic square that is mostly yard; the school as a
+  teaching hall and a gym over a marked playground, hedged along the street; the
+  museum as a colonnaded hall between two wings on a stone plinth; and the
+  stadium as four stands around a marked pitch under corner floodlights, on the
+  only 3x3 square anything modelled stands on. All seven are generated from the
+  models in `models/` — see `npm run model:parts`.
+- Parks are modelled too, and are the one thing that comes out of a model
+  without being a building: a plot-sized lawn with paths, planting, a pond,
+  three trees, benches and a lit lamp, drawn by `Parks` rather than `Buildings`.
+  The trees used to be scattered per park by `hash01`, which bought variety
+  nobody could read at four world units a plot; a laid-out park is worth more
+  than sixty-four slightly different ones.
 
   The converter takes axis-aligned boxes and discs/rings and **refuses**
   anything else, including two solids welded at a shared corner — a group's

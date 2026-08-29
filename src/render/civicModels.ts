@@ -2,7 +2,13 @@ import { PALETTE } from './palette.ts';
 import type { ModelPart } from './model.ts';
 
 /**
- * Civic buildings that are modelled rather than massed, as part tables.
+ * Everything in the city that is modelled rather than massed, as part tables.
+ *
+ * Seven of the eight are buildings on a reserved square and are drawn by
+ * `buildings.ts`; the eighth is the park, which is a single plot with no
+ * building on it at all and is drawn by `Parks` in `zones.ts`. They are in one
+ * file because what they are is one thing — the output of the converter — and
+ * what draws them is not.
  *
  * GENERATED. Every table here is the output of
  *
@@ -208,4 +214,63 @@ export const STADIUM_PARTS: readonly ModelPart[] = [
   { shape: 'box', at: [4.9, 6.9, -4.9], size: [1, 0.4, 0.7], mtl: 'floodlight', colour: PALETTE.sodium }, // floodlights
   { shape: 'box', at: [-4.9, 6.9, 4.9], size: [1, 0.4, 0.7], mtl: 'floodlight', colour: PALETTE.sodium }, // floodlights
   { shape: 'box', at: [4.9, 6.9, 4.9], size: [1, 0.4, 0.7], mtl: 'floodlight', colour: PALETTE.sodium }, // floodlights
+];
+
+/** The school: a teaching hall, a gym, and the playground between them. */
+export const SCHOOL_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [0, 0.9, -1.9], size: [7, 1.8, 3.2], mtl: 'school-stone', colour: PALETTE.school }, // hall
+  { shape: 'box', at: [0, 1.1, -1.9], size: [7.06, 0.62, 3.26], mtl: 'glazing', colour: PALETTE.parapet }, // hall-glazing
+  { shape: 'box', at: [0, 1.91, -1.9], size: [7.22, 0.22, 3.42], mtl: 'school-roof', colour: PALETTE.schoolRoof }, // hall-roof
+  { shape: 'box', at: [0, 2.18, -1.9], size: [4.6, 0.3, 0.66], mtl: 'clerestory-light', colour: PALETTE.sodium }, // clerestory
+  { shape: 'box', at: [-2.25, 1.3, 0.9], size: [2.5, 2.6, 2.4], mtl: 'school-stone', colour: PALETTE.school }, // gym
+  { shape: 'box', at: [-2.25, 1.85, 0.9], size: [2.56, 0.42, 2.46], mtl: 'glazing', colour: PALETTE.parapet }, // gym-glazing
+  { shape: 'box', at: [-2.25, 2.7, 0.9], size: [2.7, 0.2, 2.6], mtl: 'school-roof', colour: PALETTE.schoolRoof }, // gym-roof
+  { shape: 'box', at: [1.4, 0.85, -0.24], size: [1.7, 1.5, 0.12], mtl: 'glazing', colour: PALETTE.parapet }, // entrance
+  { shape: 'box', at: [1.4, 1.72, 0.1], size: [2.6, 0.16, 1.6], mtl: 'trim-grey', colour: PALETTE.kerb }, // entrance-canopy
+  { shape: 'box', at: [0.35, 0.82, 0.78], size: [0.14, 1.64, 0.14], mtl: 'trim-grey', colour: PALETTE.kerb }, // entrance-canopy
+  { shape: 'box', at: [2.45, 0.82, 0.78], size: [0.14, 1.64, 0.14], mtl: 'trim-grey', colour: PALETTE.kerb }, // entrance-canopy
+  { shape: 'box', at: [0.65, 0.04, 1.85], size: [5.6, 0.08, 3.1], mtl: 'yard-asphalt', colour: PALETTE.asphalt }, // playground
+  { shape: 'box', at: [0.65, 0.09, 0.45], size: [5.2, 0.03, 0.1], mtl: 'marking-white', colour: PALETTE.marking }, // court-lines-back
+  { shape: 'box', at: [0.65, 0.09, 3.25], size: [5.2, 0.03, 0.1], mtl: 'marking-white', colour: PALETTE.marking }, // court-lines-front
+  { shape: 'box', at: [-1.9, 0.09, 1.85], size: [0.1, 0.03, 2.9], mtl: 'marking-white', colour: PALETTE.marking }, // court-lines-west
+  { shape: 'box', at: [3.2, 0.09, 1.85], size: [0.1, 0.03, 2.9], mtl: 'marking-white', colour: PALETTE.marking }, // court-lines-east
+  { shape: 'box', at: [0.65, 0.09, 1.85], size: [5.2, 0.03, 0.1], mtl: 'marking-white', colour: PALETTE.marking }, // court-halfway
+  { shape: 'box', at: [-1.75, 0.85, 1.85], size: [0.12, 1.7, 0.12], mtl: 'trim-grey', colour: PALETTE.kerb }, // hoops
+  { shape: 'box', at: [-1.75, 1.6, 1.85], size: [0.08, 0.42, 0.62], mtl: 'trim-grey', colour: PALETTE.kerb }, // hoops
+  { shape: 'box', at: [3.05, 0.85, 1.85], size: [0.12, 1.7, 0.12], mtl: 'trim-grey', colour: PALETTE.kerb }, // hoops
+  { shape: 'box', at: [3.05, 1.6, 1.85], size: [0.08, 0.42, 0.62], mtl: 'trim-grey', colour: PALETTE.kerb }, // hoops
+  { shape: 'box', at: [0.65, 0.25, 3.44], size: [5.9, 0.45, 0.3], mtl: 'hedge-green', colour: PALETTE.hedge }, // hedge
+  { shape: 'box', at: [3.44, 0.25, 1.9], size: [0.3, 0.45, 3.4], mtl: 'hedge-green', colour: PALETTE.hedge }, // hedge
+];
+
+/**
+ * A park: a lawn with paths across it, planting, a pond, three trees, two
+ * benches and a lamp.
+ *
+ * The one modelled thing in the city that is not a building and does not stand
+ * on a reserved square — it is a single plot, and the model is drawn to the
+ * 3.2-unit pad `PAD` already gave it. Drawn by `Parks` rather than `Buildings`.
+ */
+export const PARK_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [0, 0.05, 0], size: [3.2, 0.1, 3.2], mtl: 'park-lawn', colour: PALETTE.park }, // lawn
+  { shape: 'box', at: [0, 0.12, 0], size: [3.2, 0.06, 0.62], mtl: 'park-path', colour: PALETTE.sand }, // paths
+  { shape: 'box', at: [0.15, 0.12, 0], size: [0.62, 0.06, 3.2], mtl: 'park-path', colour: PALETTE.sand }, // paths
+  { shape: 'box', at: [-1.02, 0.15, -1.02], size: [0.9, 0.12, 0.9], mtl: 'planting-bed', colour: PALETTE.courtyard }, // planting-beds
+  { shape: 'box', at: [1.08, 0.15, 1.08], size: [0.72, 0.12, 0.72], mtl: 'planting-bed', colour: PALETTE.courtyard }, // planting-beds
+  { shape: 'box', at: [-0.95, 0.13, 0.98], size: [1, 0.08, 0.86], mtl: 'pond-water', colour: PALETTE.water }, // pond
+  { shape: 'box', at: [-1, 0.334, 1], size: [0.16, 0.468, 0.16], mtl: 'tree-trunk', colour: PALETTE.trunk }, // tree-trunks
+  { shape: 'box', at: [0.95, 0.399, -0.9], size: [0.16, 0.598, 0.16], mtl: 'tree-trunk', colour: PALETTE.trunk }, // tree-trunks
+  { shape: 'box', at: [0.7, 0.303, 1.05], size: [0.16, 0.406, 0.16], mtl: 'tree-trunk', colour: PALETTE.trunk }, // tree-trunks
+  { shape: 'box', at: [-1, 0.748, 1], size: [0.648, 0.36, 0.648], mtl: 'tree-canopy', colour: PALETTE.canopy }, // tree-canopies
+  { shape: 'box', at: [-1, 1.072, 1], size: [0.396, 0.288, 0.396], mtl: 'tree-canopy', colour: PALETTE.canopy }, // tree-canopies
+  { shape: 'box', at: [0.95, 0.928, -0.9], size: [0.828, 0.46, 0.828], mtl: 'tree-canopy', colour: PALETTE.canopy }, // tree-canopies
+  { shape: 'box', at: [0.95, 1.342, -0.9], size: [0.506, 0.368, 0.506], mtl: 'tree-canopy', colour: PALETTE.canopy }, // tree-canopies
+  { shape: 'box', at: [0.7, 0.662, 1.05], size: [0.562, 0.312, 0.562], mtl: 'tree-canopy', colour: PALETTE.canopy }, // tree-canopies
+  { shape: 'box', at: [0.7, 0.942, 1.05], size: [0.343, 0.25, 0.343], mtl: 'tree-canopy', colour: PALETTE.canopy }, // tree-canopies
+  { shape: 'box', at: [-0.62, 0.32, -0.52], size: [0.7, 0.08, 0.22], mtl: 'bench-grey', colour: PALETTE.kerb }, // benches
+  { shape: 'box', at: [-0.62, 0.21, -0.52], size: [0.6, 0.14, 0.1], mtl: 'bench-grey', colour: PALETTE.kerb }, // benches
+  { shape: 'box', at: [0.62, 0.32, 0.52], size: [0.7, 0.08, 0.22], mtl: 'bench-grey', colour: PALETTE.kerb }, // benches
+  { shape: 'box', at: [0.62, 0.21, 0.52], size: [0.6, 0.14, 0.1], mtl: 'bench-grey', colour: PALETTE.kerb }, // benches
+  { shape: 'box', at: [1.42, 0.75, -1.42], size: [0.1, 1.3, 0.1], mtl: 'bench-grey', colour: PALETTE.kerb }, // lamp-post
+  { shape: 'box', at: [1.42, 1.45, -1.42], size: [0.24, 0.14, 0.24], mtl: 'lamp-light', colour: PALETTE.sodium }, // lamp-head
 ];
