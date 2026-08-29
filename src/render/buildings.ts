@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { hash01, mixSeed } from '../core/rng.ts';
 import {
   CELL,
@@ -39,6 +38,7 @@ import { Glow } from './glow.ts';
 import { GrowableInstancedMesh, SlotRanges } from './growable.ts';
 import { GrowthSchedule } from './growth.ts';
 import { PALETTE } from './palette.ts';
+import { mergeByColour, type ModelPart } from './model.ts';
 import type { OverlaySource } from './zones.ts';
 
 const GROW_SECONDS = 0.55;
@@ -1558,27 +1558,58 @@ function powerPlantSet(scene: THREE.Scene, capacity: number): CivicMeshes {
   );
 }
 
-/** A box centred where the hospital's design puts it, relative to the site. */
-function boxAt(
-  w: number,
-  h: number,
-  d: number,
-  x: number,
-  y: number,
-  z: number,
-): THREE.BufferGeometry {
-  return new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+/**
+ * The hospital, as `tools/model2parts.mjs` reads it out of the model.
+ *
+ * Generated — `npm run model:parts -- <name>.obj <name>.mtl --ts` — and pasted
+ * whole. Do not hand-edit it: the numbers are the model's, and a value changed
+ * here is a value that silently stops matching the file it came from. A remodel
+ * is a re-run and a paste.
+ */
+const HOSPITAL_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [0, 1.65, -2], size: [7, 3.3, 3], colour: PALETTE.hospital }, // ward
+  { shape: 'box', at: [0, 1, -2], size: [7.06, 0.36, 3.06], colour: PALETTE.parapet }, // ward-glazing
+  { shape: 'box', at: [0, 2.12, -2], size: [7.06, 0.36, 3.06], colour: PALETTE.parapet }, // ward-glazing
+  { shape: 'box', at: [0, 3.4, -2], size: [7.22, 0.22, 3.22], colour: PALETTE.hospitalRoof }, // ward-cap
+  { shape: 'box', at: [-1, 0.825, 1.5], size: [5, 1.65, 4], colour: PALETTE.hospital }, // wing
+  { shape: 'box', at: [-1, 0.82, 1.5], size: [5.06, 0.5, 4.06], colour: PALETTE.parapet }, // wing-glazing
+  { shape: 'box', at: [-1, 1.74, 1.5], size: [5.2, 0.2, 4.2], colour: PALETTE.hospitalRoof }, // wing-cap
+  { shape: 'box', at: [-1.7, 1.28, 3.2], size: [3.2, 0.2, 1.5], colour: PALETTE.parapet }, // entrance-canopy
+  { shape: 'box', at: [-3.05, 0.64, 3.75], size: [0.22, 1.28, 0.22], colour: PALETTE.hospital }, // entrance-columns
+  { shape: 'box', at: [-0.35, 0.64, 3.75], size: [0.22, 1.28, 0.22], colour: PALETTE.hospital }, // entrance-columns
+  { shape: 'box', at: [2.4, 1.95, 1.35], size: [2.1, 0.16, 3.7], colour: PALETTE.stack }, // bay-canopy
+  { shape: 'box', at: [2.4, 0.6, -0.44], size: [1.9, 1.15, 0.14], colour: PALETTE.sodium }, // bay-doors
+  { shape: 'disc', at: [1.4, 3.62, -2], radius: 1.45, height: 0.12, segments: 40, colour: PALETTE.runway }, // helipad
+  { shape: 'box', at: [-2.5, 3.9, -2.9], size: [1.5, 0.62, 0.9], colour: PALETTE.stack }, // roof-plant
+  { shape: 'box', at: [-2.5, 3.9, -1.5], size: [0.9, 0.62, 0.7], colour: PALETTE.stack }, // roof-plant
+  { shape: 'box', at: [-0.7, 3.9, -2.6], size: [0.7, 0.62, 1.4], colour: PALETTE.stack }, // roof-plant
+];
+
+/**
+ * How each of the hospital's colours is drawn.
+ *
+ * Kept apart from the parts table on purpose: the model states shape and
+ * colour, and how a surface behaves under light is a renderer decision that a
+ * modeller should not have to encode and a regenerated table must not clobber.
+ */
+interface Finish {
+  readonly name: string;
+  /** Supplied only where the surface is not plain diffuse — a lit face. */
+  readonly material?: THREE.Material;
+  /** Whether the zone overlay resolves against this colour. Walls only. */
+  readonly tint?: boolean;
+  readonly castShadow?: boolean;
+  readonly receiveShadow?: boolean;
 }
 
 /**
  * A marking painted on a roof: a closed outline, extruded and laid flat.
  *
- * The outline is given in the site's own plan view — the pairs are (x, z) —
- * which is how both of the hospital's markings were drawn and the only way
- * either is legible to read. `ExtrudeGeometry` works in a shape's XY plane and
- * pushes along +Z, so the result has to be tipped a quarter turn onto the
- * ground; that tip mirrors the second axis, which both of these outlines are
- * symmetric about, so nothing has to be unwound afterwards.
+ * The outline is given in the site's own plan view — the pairs are (x, z).
+ * `ExtrudeGeometry` works in a shape's XY plane and pushes along +Z, so the
+ * result is tipped a quarter turn onto the ground; that tip mirrors the second
+ * axis, which both of these outlines are symmetric about, so nothing has to be
+ * unwound afterwards.
  */
 function markingAt(
   outline: ReadonlyArray<readonly [number, number]>,
@@ -1596,7 +1627,7 @@ function markingAt(
   return geometry.translate(x, y - thickness / 2, z);
 }
 
-/** The H on the helipad, in plan view. Twelve points, drawn once. */
+/** The H on the helipad, in plan view. */
 const HELIPAD_H: ReadonlyArray<readonly [number, number]> = [
   [-0.75, -0.75], [-0.41, -0.75], [-0.41, -0.17], [0.41, -0.17],
   [0.41, -0.75], [0.75, -0.75], [0.75, 0.75], [0.41, 0.75],
@@ -1609,6 +1640,42 @@ const MEDICAL_CROSS: ReadonlyArray<readonly [number, number]> = [
   [0.43, -0.43], [1.3, -0.43], [1.3, 0.43], [0.43, 0.43],
   [0.43, 1.3], [-0.43, 1.3], [-0.43, 0.43], [-1.3, 0.43],
 ];
+
+/**
+ * The two markings `tools/model2parts.mjs` refuses, hand-written until it does
+ * not have to.
+ *
+ * Both are extruded twelve-sided outlines, which the converter will not accept
+ * and is right not to — see `ModelPart`. They are here knowingly, and only
+ * because the alternative is shipping a hospital with no cross on it, and the
+ * cross is the one literal sign anywhere in the city.
+ *
+ * It is a debt with a known payment. Both decompose exactly into
+ * non-overlapping boxes — the cross into a full-length arm and two stubs, the H
+ * into two uprights and a bar — so a model that draws them that way converts
+ * with no approximation, joins `HOSPITAL_PARTS` on the next regeneration, and
+ * takes this function and its two outline tables with it. The finishes below
+ * are already keyed on the right colours, so nothing else moves when it does.
+ */
+function pendingMarkings(finishes: ReadonlyMap<number, Finish>): CivicPart[] {
+  const flat = (colour: number, geometry: THREE.BufferGeometry): CivicPart => {
+    const finish = finishes.get(colour);
+    if (!finish) throw new Error(`hospital: no finish for 0x${colour.toString(16)}`);
+    return {
+      geometry,
+      material: new THREE.MeshLambertMaterial({ color: colour }),
+      offset: PART_AT_SITE,
+      grow: 'ride',
+      tint: null,
+      name: finish.name,
+      castShadow: finish.castShadow ?? true,
+    };
+  };
+  return [
+    flat(PALETTE.marking, markingAt(HELIPAD_H, 0.06, 1.4, 3.72, -2)),
+    flat(PALETTE.emergency, markingAt(MEDICAL_CROSS, 0.07, -1.2, 1.945, 1.4)),
+  ];
+}
 
 /**
  * The hospital: a ward slab across the back of the site and a low treatment
@@ -1633,128 +1700,54 @@ const MEDICAL_CROSS: ReadonlyArray<readonly [number, number]> = [
  *    anywhere in the city, which is why it is the hospital that gets one: the
  *    building whose name a new player has to learn before any other.
  *
- * Eighteen pieces, eight meshes: parts sharing a material are merged into one
- * geometry, because they also share an instance transform and so can never be
- * anything but one draw call's worth of work. The mint cap and pale walls are
- * the same two colours the hospital already wore, so a city built before this
- * design still reads as the same city afterwards.
+ * The geometry is the model's, by way of `mergeByColour`: eighteen pieces, eight
+ * meshes. The pale walls and mint cap are the two colours the hospital already
+ * wore, so a city built before this design still reads as the same city after.
  */
 function hospitalSet(scene: THREE.Scene, capacity: number): CivicMeshes {
   // The ambulance bay doors, the one lit surface on the building. The same
   // sodium the fire station's doors wear, and for the same reason: the two
   // buildings people are sent to at night are the two that stay lit.
   const doors = new Glow(PALETTE.sodium, 0.5);
-  const wall = (name: string, geometry: THREE.BufferGeometry): CivicPart => ({
-    geometry,
-    material: new THREE.MeshLambertMaterial({ color: PALETTE.hospital }),
-    offset: PART_AT_SITE,
-    grow: 'ride',
-    tint: PALETTE.hospital,
-    name,
-    receiveShadow: true,
-  });
-  const trim = (
-    name: string,
-    color: number,
-    geometry: THREE.BufferGeometry,
-    castShadow: boolean,
-  ): CivicPart => ({
-    geometry,
-    material: new THREE.MeshLambertMaterial({ color }),
-    offset: PART_AT_SITE,
-    grow: 'ride',
-    tint: null,
-    name,
-    castShadow,
+  const finishes = new Map<number, Finish>([
+    // The ward, the wing and the entrance columns.
+    [PALETTE.hospital, { name: 'hospital:walls', tint: true, receiveShadow: true }],
+    // Banded storeys on both volumes, and the entrance canopy, which is the
+    // same dark glass and reads as one material with them. Proud of the walls
+    // by 3cm and so never shadow-cast: a surface that close to the one behind
+    // it buys acne and nothing else.
+    [PALETTE.parapet, { name: 'hospital:glazing', castShadow: false }],
+    // The mint caps. They overhang their walls, so they cast the eave line that
+    // tells the two volumes apart from above — and they are the surface the
+    // roof clutter stands on, which the play camera is looking straight down at.
+    [PALETTE.hospitalRoof, { name: 'hospital:caps', receiveShadow: true }],
+    // Plant housings and the ambulance bay canopy, in the working grey the
+    // industrial stacks wear.
+    [PALETTE.stack, { name: 'hospital:plant' }],
+    [PALETTE.sodium, { name: 'hospital:doors', material: doors.material, castShadow: false }],
+    // The helipad deck, in the near-black the airport's runways use, because it
+    // is the same thing: made ground for an aircraft.
+    [PALETTE.runway, { name: 'hospital:helipad', castShadow: false }],
+    [PALETTE.marking, { name: 'hospital:mark', castShadow: false }],
+    [PALETTE.emergency, { name: 'hospital:cross', castShadow: false }],
+  ]);
+
+  const parts = mergeByColour([...HOSPITAL_PARTS]).map(({ colour, geometry }): CivicPart => {
+    const finish = finishes.get(colour);
+    if (!finish) throw new Error(`hospital: no finish for 0x${colour.toString(16)}`);
+    return {
+      geometry,
+      material: finish.material ?? new THREE.MeshLambertMaterial({ color: colour }),
+      offset: PART_AT_SITE,
+      grow: 'ride',
+      tint: finish.tint === true ? colour : null,
+      name: finish.name,
+      castShadow: finish.castShadow ?? true,
+      receiveShadow: finish.receiveShadow ?? false,
+    };
   });
 
-  return new CivicMeshes(
-    scene,
-    [
-      wall(
-        'hospital:walls',
-        mergeGeometries([
-          // The ward, across the back of the site and the full width of it.
-          boxAt(7, 3.3, 3, 0, 1.65, -2),
-          // The treatment wing, in front and half the height, so the ward still
-          // shows over it from a low camera.
-          boxAt(5, 1.65, 4, -1, 0.825, 1.5),
-          // Two columns under the entrance canopy. Small, and the only thing on
-          // the building at eye level — which is exactly where a street camera
-          // is, so they are what says "way in" from down there.
-          boxAt(0.22, 1.28, 0.22, -3.05, 0.64, 3.75),
-          boxAt(0.22, 1.28, 0.22, -0.35, 0.64, 3.75),
-        ]),
-      ),
-      // Glazing: two banded storeys on the ward and one on the wing, plus the
-      // canopy over the entrance, which is the same dark glass and reads as one
-      // material with them. Proud of the walls by 3cm and so never shadow-cast:
-      // a surface that close to the one behind it buys acne and nothing else.
-      trim(
-        'hospital:glazing',
-        PALETTE.parapet,
-        mergeGeometries([
-          boxAt(7.06, 0.36, 3.06, 0, 1.0, -2),
-          boxAt(7.06, 0.36, 3.06, 0, 2.12, -2),
-          boxAt(5.06, 0.5, 4.06, -1, 0.82, 1.5),
-          boxAt(3.2, 0.2, 1.5, -1.7, 1.28, 3.2),
-        ]),
-        false,
-      ),
-      // The mint caps, which are the hospital's roof colour and the second
-      // signal after the massing. They overhang their walls, so they cast the
-      // eave line that tells the two volumes apart from above.
-      {
-        ...trim(
-          'hospital:caps',
-          PALETTE.hospitalRoof,
-          mergeGeometries([
-            boxAt(7.22, 0.22, 3.22, 0, 3.4, -2),
-            boxAt(5.2, 0.2, 4.2, -1, 1.74, 1.5),
-          ]),
-          true,
-        ),
-        // The caps are the surface everything on the roof stands on, and the
-        // play camera looks down at it: the helipad and the plant have to lay
-        // shadows on something or the roof reads as a decal.
-        receiveShadow: true,
-      },
-      // Plant and the ambulance bay canopy — the building's working grey, the
-      // same one the industrial stacks wear.
-      trim(
-        'hospital:plant',
-        PALETTE.stack,
-        mergeGeometries([
-          boxAt(2.1, 0.16, 3.7, 2.4, 1.95, 1.35),
-          boxAt(1.5, 0.62, 0.9, -2.5, 3.9, -2.9),
-          boxAt(0.9, 0.62, 0.7, -2.5, 3.9, -1.5),
-          boxAt(0.7, 0.62, 1.4, -0.7, 3.9, -2.6),
-        ]),
-        true,
-      ),
-      {
-        geometry: boxAt(1.9, 1.15, 0.14, 2.4, 0.6, -0.44),
-        material: doors.material,
-        offset: PART_AT_SITE,
-        grow: 'ride',
-        tint: null,
-        name: 'hospital:doors',
-        castShadow: false,
-      },
-      // The helipad deck, in the same near-black the airport's runways use,
-      // because it is the same thing: made ground for an aircraft.
-      trim(
-        'hospital:helipad',
-        PALETTE.runway,
-        new THREE.CylinderGeometry(1.45, 1.45, 0.12, 40).translate(1.4, 3.62, -2),
-        false,
-      ),
-      trim('hospital:mark', PALETTE.marking, markingAt(HELIPAD_H, 0.06, 1.4, 3.72, -2), false),
-      trim('hospital:cross', PALETTE.emergency, markingAt(MEDICAL_CROSS, 0.07, -1.2, 1.945, 1.4), false),
-    ],
-    capacity,
-    [doors],
-  );
+  return new CivicMeshes(scene, [...parts, ...pendingMarkings(finishes)], capacity, [doors]);
 }
 
 /** One mesh set per service, in SERVICES order. */

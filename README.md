@@ -22,6 +22,7 @@ compiles to about 10 kB gzipped on top of three.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Simulation tests (vitest), then the generator suite |
 | `npm run test:citygen` | District generation acceptance tests (plain Node) |
+| `npm run model:parts -- <obj> <mtl> [--ts]` | Convert a building model to a part table; `--ts` emits the pasteable form |
 | `npm run citygen:calibrate` | Plot-count distribution over 1000 seeds |
 | `npm run economy:calibrate` | 24h demand/pricing sweep under four policies |
 | `npm run upkeep:calibrate` | What the civic wage bill is worth, swept over rate and growth |
