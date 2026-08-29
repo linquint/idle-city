@@ -22,30 +22,45 @@ import {
   INDUSTRY_TANKS_PARTS,
   INDUSTRY_WORKS_PARTS,
 } from './industryModels.ts';
+import {
+  WALKUP_CORE_PARTS,
+  WALKUP_COURT_PARTS,
+  WALKUP_DECK_PARTS,
+  WALKUP_MAISONETTE_PARTS,
+  WALKUP_MANSARD_PARTS,
+} from './walkupModels.ts';
 import { CELL } from '../sim/config.ts';
 import { cellX, cellZ, isRoad } from '../sim/layout.ts';
 import type { ZoneKind } from '../sim/state.ts';
 
 /**
- * The first rung of every ladder, drawn from models, and the meshes that draw
- * them.
+ * The modelled rungs of the three ladders, and the meshes that draw them.
  *
- * Level 1 of housing, of commerce and of industry: the three rungs the city is
- * mostly *made* of. Every plot a player buys starts on one of them, a district
- * that has not been pushed up the ladder is nothing but them, and they are what
- * a new player spends their first hour looking at. They were a box with a cone
- * on it, a box with a canopy on it and a box with a stack on it, which is the
- * right answer for a rung the camera flies past and the wrong one for the rung
- * it lives at.
+ * The first rung of housing, of commerce and of industry, plus housing's
+ * second: the rungs the city is mostly *made* of. Every plot a player buys
+ * starts on a first rung, a district that has not been pushed up the ladder is
+ * nothing but them, and they are what a new player spends their first hour
+ * looking at. They were a box with a cone on it, a box with a canopy on it and
+ * a box with a stack on it, which is the right answer for a rung the camera
+ * flies past and the wrong one for the rung it lives at.
  *
  * So each is modelled, five times over, and a plot gets one of the five. What
- * that buys is a *street*: five silhouettes a zone, each with a front, standing
+ * that buys is a *street*: five silhouettes a rung, each with a front, standing
  * along a kerb in the order the seed put them in. What it costs is five meshes
- * a zone, and most of this file is about keeping it to five.
+ * a rung, and most of this file is about keeping it to five.
  *
- * Everything above the first rung is still massed, and that is the shape the
- * ladder should have: the rung the game is played on gets the geometry, and the
- * rungs a settled city has climbed to get proportions and dressing.
+ * **Housing is modelled twice, and it is the only zone that is.** That is not a
+ * step toward modelling everything: it is where the cliff was. A player's first
+ * promotion turns a street of five house silhouettes into twenty-four copies of
+ * one 2.6 x 4.6 box, and it is the first thing they do after the hour the
+ * houses were built for. Commerce and industry climb too, but a district climbs
+ * *housing* first and climbs it most — see `LEVEL_HOUSING` — so the second rung
+ * of housing is the next most-looked-at surface in the game and the second and
+ * third rungs of the other two are not close.
+ *
+ * Everything above is still massed, and that is the shape the ladder should
+ * have: the rungs the game is played on get the geometry, and the rungs a
+ * settled city has climbed to get proportions and dressing.
  */
 
 /**
@@ -57,38 +72,119 @@ import type { ZoneKind } from '../sim/state.ts';
  */
 export type ModelledKind = ZoneKind;
 
-/** The five of each, in the order `modelStyleOf` indexes them. */
-const MODELS: Readonly<Record<ModelledKind, readonly (readonly ModelPart[])[]>> = {
+/**
+ * Five models a rung, indexed `[kind][level][style]`.
+ *
+ * The level axis is a *prefix* of the ladder rather than a sparse map: a zone
+ * models its rungs from the bottom up and stops, so the length of its row is
+ * how far up it is modelled and everything past the end is massed. A hole in
+ * the middle would be a fourth thing for `Buildings` to reason about and there
+ * is no design in which one is wanted — a city whose second rung is modelled
+ * and whose first is not would read as a district that got worse when it grew.
+ */
+const MODELS: Readonly<Record<ModelledKind, readonly (readonly (readonly ModelPart[])[])[]>> = {
   home: [
-    HOUSE_COTTAGE_PARTS,
-    HOUSE_TERRACE_PARTS,
-    HOUSE_VERANDA_PARTS,
-    HOUSE_SEMI_PARTS,
-    HOUSE_MODERN_PARTS,
+    [
+      HOUSE_COTTAGE_PARTS,
+      HOUSE_TERRACE_PARTS,
+      HOUSE_VERANDA_PARTS,
+      HOUSE_SEMI_PARTS,
+      HOUSE_MODERN_PARTS,
+    ],
+    [
+      WALKUP_CORE_PARTS,
+      WALKUP_DECK_PARTS,
+      WALKUP_MAISONETTE_PARTS,
+      WALKUP_COURT_PARTS,
+      WALKUP_MANSARD_PARTS,
+    ],
   ],
   shop: [
-    SHOP_PARADE_PARTS,
-    SHOP_FIN_PARTS,
-    SHOP_ARCADE_PARTS,
-    SHOP_MARKET_PARTS,
-    SHOP_CAFE_PARTS,
+    [
+      SHOP_PARADE_PARTS,
+      SHOP_FIN_PARTS,
+      SHOP_ARCADE_PARTS,
+      SHOP_MARKET_PARTS,
+      SHOP_CAFE_PARTS,
+    ],
   ],
   industry: [
-    INDUSTRY_SHED_PARTS,
-    INDUSTRY_WORKS_PARTS,
-    INDUSTRY_DOCK_PARTS,
-    INDUSTRY_TANKS_PARTS,
-    INDUSTRY_MILL_PARTS,
+    [
+      INDUSTRY_SHED_PARTS,
+      INDUSTRY_WORKS_PARTS,
+      INDUSTRY_DOCK_PARTS,
+      INDUSTRY_TANKS_PARTS,
+      INDUSTRY_MILL_PARTS,
+    ],
   ],
 };
 
 export const MODELLED_KINDS = Object.keys(MODELS) as readonly ModelledKind[];
 
-/** How many models a zone's first rung is drawn from. Five each, and asserted. */
-export const MODEL_STYLES: Readonly<Record<ModelledKind, number>> = {
+/**
+ * How many rungs from the bottom each zone draws from models.
+ *
+ * Two for housing and one for the other two. Read by `modelledAt`, which is the
+ * only thing that should ever ask.
+ */
+export const MODEL_LEVELS: Readonly<Record<ModelledKind, number>> = {
   home: MODELS.home.length,
   shop: MODELS.shop.length,
   industry: MODELS.industry.length,
+};
+
+/**
+ * Whether a zone draws this level from models rather than massing it.
+ *
+ * Takes a level off the bottom of the ladder only — a ruin is level -1 and is
+ * drawn in the first rung's set by `Buildings`, which is that caller's business
+ * rather than this table's.
+ */
+export const modelledAt = (kind: ModelledKind, level: number): boolean =>
+  level >= 0 && level < MODEL_LEVELS[kind];
+
+/**
+ * How many models a zone is drawn from at every rung it models. Five each.
+ *
+ * One number per zone rather than one per rung, and that is load-bearing:
+ * `modelStyleOf` draws a style from the slot and the seed *without* the level,
+ * so a plot keeps its character as it climbs — the terrace that was style 1 is
+ * the deck block that is style 1. It is the same contract `buildingStyle`
+ * keeps for the massed rungs, and it only holds while every rung of a zone
+ * offers the same number of styles to draw from, so that is asserted here
+ * rather than left to hold by luck.
+ */
+export const MODEL_STYLES: Readonly<Record<ModelledKind, number>> = {
+  home: stylesOf('home'),
+  shop: stylesOf('shop'),
+  industry: stylesOf('industry'),
+};
+
+function stylesOf(kind: ModelledKind): number {
+  const styles = (MODELS[kind][0] as readonly (readonly ModelPart[])[]).length;
+  for (const rung of MODELS[kind]) {
+    if (rung.length !== styles) {
+      throw new Error(`${kind} models ${styles} styles at one rung and ${rung.length} at another`);
+    }
+  }
+  return styles;
+}
+
+/**
+ * A table derived per (kind, level, style), which is the shape of every one.
+ *
+ * Written out a zone at a time rather than mapped over `MODELLED_KINDS`, which
+ * is the same choice `MODELS` itself makes and for the same reason: a `Record`
+ * built by `Object.fromEntries` is a `Record<string, T>` however it is cast, so
+ * a fourth zone would arrive here silently. Three named keys make it a type
+ * error, which is where this file wants to catch it.
+ */
+const rungsOf = <T>(
+  make: (parts: readonly ModelPart[], kind: ModelledKind, level: number) => T,
+): Readonly<Record<ModelledKind, readonly (readonly T[])[]>> => {
+  const of = (kind: ModelledKind): readonly (readonly T[])[] =>
+    MODELS[kind].map((rung, level) => rung.map((parts) => make(parts, kind, level)));
+  return { home: of('home'), shop: of('shop'), industry: of('industry') };
 };
 
 /**
@@ -109,31 +205,28 @@ export interface LitBox {
 }
 
 /**
- * Every lit box a model carries, per zone and style.
+ * Every lit box a model carries, per zone, level and style.
  *
  * Pulled out of the model and handed to the *shared* band mesh in `PartBank`
  * rather than drawn by the model itself, and that is the trick that keeps this
- * at five meshes a zone. A merged vertex-coloured mesh can hold every colour a
+ * at five meshes a rung. A merged vertex-coloured mesh can hold every colour a
  * building wears but it cannot hold a light: the night ramp is a property of a
  * material, and a vertex-colour merge has one material for the whole model. The
  * band was already a lit unit box that every other building in the city wears,
  * scaled per instance — so a modelled building wears its own lit pieces through
  * the mesh that already existed, and the ramp comes back for free.
  */
-export const MODEL_LIT: Readonly<Record<ModelledKind, readonly (readonly LitBox[])[]>> = {
-  home: MODELS.home.map((parts) => litOf(parts, 'home')),
-  shop: MODELS.shop.map((parts) => litOf(parts, 'shop')),
-  industry: MODELS.industry.map((parts) => litOf(parts, 'industry')),
-};
+export const MODEL_LIT: Readonly<Record<ModelledKind, readonly (readonly (readonly LitBox[])[])[]>> =
+  rungsOf(litOf);
 
-function litOf(parts: readonly ModelPart[], kind: ModelledKind): readonly LitBox[] {
+function litOf(parts: readonly ModelPart[], kind: ModelledKind, level: number): readonly LitBox[] {
   const lit = parts.filter((part) => LIT.has(part.mtl));
   // Thrown rather than defaulted. A remodel that dropped every lit piece would
   // otherwise put a building on screen that is simply dark after dusk, which is
   // the kind of wrong nobody notices until a night shot.
-  if (lit.length === 0) throw new Error(`a ${kind} model carries no lit part`);
+  if (lit.length === 0) throw new Error(`a ${kind} model at level ${level} carries no lit part`);
   return lit.map((part) => {
-    if (part.shape !== 'box') throw new Error(`a ${kind} model lights a non-box`);
+    if (part.shape !== 'box') throw new Error(`a ${kind} model at level ${level} lights a non-box`);
     return { at: part.at, size: part.size };
   });
 }
@@ -148,7 +241,9 @@ function litOf(parts: readonly ModelPart[], kind: ModelledKind): readonly LitBox
  * wears.
  */
 export const MODEL_LIT_MAX = Math.max(
-  ...MODELLED_KINDS.flatMap((kind) => MODEL_LIT[kind].map((lit) => lit.length)),
+  ...MODELLED_KINDS.flatMap((kind) =>
+    MODEL_LIT[kind].flatMap((rung) => rung.map((lit) => lit.length)),
+  ),
 );
 
 /** How far a model reaches, in its own coordinates. */
@@ -159,7 +254,7 @@ export interface ModelExtent {
 }
 
 /**
- * How far each model reaches, per zone and style.
+ * How far each model reaches, per zone, level and style.
  *
  * The whole model, forecourts and gardens included: what this bounds is the
  * *plot* a building occupies, and a hedge standing in the street is as wrong as
@@ -174,11 +269,8 @@ export interface ModelExtent {
  * sign. That is what the outline should wrap, and a flame on a burning building
  * rising from the chimney is not the wrong place for it either.
  */
-export const MODEL_EXTENT: Readonly<Record<ModelledKind, readonly ModelExtent[]>> = {
-  home: MODELS.home.map(extentOf),
-  shop: MODELS.shop.map(extentOf),
-  industry: MODELS.industry.map(extentOf),
-};
+export const MODEL_EXTENT: Readonly<Record<ModelledKind, readonly (readonly ModelExtent[])[]>> =
+  rungsOf(extentOf);
 
 function extentOf(parts: readonly ModelPart[]): ModelExtent {
   let width = 0;
@@ -220,10 +312,10 @@ const MODEL_SPAN_MAX = CELL - 0.2;
  * puts across the frontage is the one that has to clear the kerb, and which one
  * that is depends on the plot.
  */
-export const MODEL_JITTER_MAX: Readonly<Record<ModelledKind, readonly number[]>> = {
-  home: MODEL_EXTENT.home.map(jitterCap),
-  shop: MODEL_EXTENT.shop.map(jitterCap),
-  industry: MODEL_EXTENT.industry.map(jitterCap),
+export const MODEL_JITTER_MAX: Readonly<Record<ModelledKind, readonly (readonly number[])[]>> = {
+  home: MODEL_EXTENT.home.map((rung) => rung.map(jitterCap)),
+  shop: MODEL_EXTENT.shop.map((rung) => rung.map(jitterCap)),
+  industry: MODEL_EXTENT.industry.map((rung) => rung.map(jitterCap)),
 };
 
 function jitterCap(extent: ModelExtent): number {
@@ -283,7 +375,7 @@ export function modelFacing(x: number, z: number, pick: number): number {
 }
 
 /**
- * One zone's five model meshes, packed per style.
+ * One rung's five model meshes, packed per style.
  *
  * One `GrowableInstancedMesh` a style, merged by *vertex colour* rather than by
  * material — the choice the bus already makes, for the mirror of the bus's
@@ -296,15 +388,21 @@ export function modelFacing(x: number, z: number, pick: number): number {
  * any of these parts needed — the night ramp on the lit pieces — is bought back
  * through the shared band mesh instead. See `MODEL_LIT`.
  *
- * Packed per style rather than per level, so an instance index here has nothing
+ * One of these covers a single (zone, level), and a zone that models two rungs
+ * owns two of them: the meshes are the *geometry*, and a walk-up shares nothing
+ * with the house that was on the plot before it. What a slot keeps across the
+ * promotion is its style index, which `modelStyleOf` draws without the level —
+ * so the terrace becomes the deck block and stays recognisably that plot.
+ *
+ * Packed per style rather than per slot, so an instance index here has nothing
  * to do with a slot index — this class keeps the map both ways, exactly as
  * `PartBank` and `partAt` do between them. `slotOf` is what a raycast hit
  * resolves through and `indexOf` is what the growth animation rewrites through.
  *
  * **What this costs is triangles, not draw calls, and it is the largest single
  * cost in the renderer.** Measured (tools/lod.calibrate.mjs, part 1b) at 49
- * districts of nothing but first-rung buildings, which is the city these *make*
- * — a player who annexes widely and promotes little:
+ * districts of nothing but first-rung buildings, which is the city the *first
+ * rungs* make — a player who annexes widely and promotes little:
  *
  *     1,176 houses   266,904 triangles     (227 each)
  *     2,205 shops    564,024 triangles     (256 each)
@@ -319,12 +417,28 @@ export function modelFacing(x: number, z: number, pick: number): number {
  * works reserve, so the zone with the fewest buildings costs the least however
  * elaborate its models are.
  *
- * That is a real number and it is deliberately not hidden: the three rungs the
- * game is played on are now the most expensive thing in it. Whether it
- * *matters* is a frame-time question this harness cannot answer — Node has no
- * GPU — and 1.5M triangles is not obviously too many for one. What it does mean
- * is that the next optimisation the renderer needs is almost certainly here
- * rather than anywhere else.
+ * That is a real number and it is deliberately not hidden: the rungs the game is
+ * played on are now the most expensive thing in it. Whether it *matters* is a
+ * frame-time question this harness cannot answer — Node has no GPU — and 1.5M
+ * triangles is not obviously too many for one. What it does mean is that the
+ * next optimisation the renderer needs is almost certainly here rather than
+ * anywhere else.
+ *
+ * Modelling housing's *second* rung buys no new buildings, which is the one
+ * thing worth knowing about its cost: a plot holds one building, so a district
+ * that promotes its housing trades 24 houses for 24 walk-ups rather than adding
+ * any. What it trades up is the model — 22 to 33 drawn boxes against a house's
+ * 17 to 23 — and part 1c of the calibration measures exactly that swap on the
+ * city above:
+ *
+ *     1,176 houses     266,904 triangles     (227 each)
+ *     1,176 walk-ups   407,184 triangles     (346 each)
+ *
+ * so +140,280, which is 52.6% on the housing and 11.3% on the whole scene:
+ * 1,416,216 to 1,575,768. That is the new ceiling and it is the right shape for
+ * one — the city that pays it has climbed housing everywhere and left commerce
+ * and industry on their first rung, and climbing is what a player does
+ * *instead* of annexing.
  *
  * Two moves are available and neither is made, so the reasoning survives:
  *
@@ -357,9 +471,10 @@ export class ModelMeshes {
   constructor(
     scene: THREE.Scene,
     private readonly kind: ModelledKind,
+    level: number,
     capacity: number,
   ) {
-    const models = MODELS[kind];
+    const models = MODELS[kind][level] as readonly (readonly ModelPart[])[];
     this.styles = models.length;
     this.counts = new Int32Array(this.styles);
     this.slotOf = models.map(() => new Int32Array(0));
@@ -373,7 +488,7 @@ export class ModelMeshes {
           mergeColoured(parts.filter((part) => !LIT.has(part.mtl))),
           new THREE.MeshLambertMaterial({ vertexColors: true }),
           capacity,
-          { castShadow: true, receiveShadow: true, name: `model:${kind}:${style}` },
+          { castShadow: true, receiveShadow: true, name: `model:${kind}:${level}:${style}` },
         ),
     );
   }

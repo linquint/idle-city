@@ -138,9 +138,25 @@ const totals = (rows) => ({
   shadowDrawn: rows.filter((r) => r.count > 0 && r.shadow).length,
 });
 
-/** The whole city, standing in one scene, exactly as `View` assembles it. */
-function stand(districts, level) {
+/**
+ * The whole city, standing in one scene, exactly as `View` assembles it.
+ *
+ * `housingAt` moves the housing cohort off `level` without moving the other two
+ * zones, which is what part 1c needs to measure the promotion in isolation. It
+ * is only legal between levels of the same footprint — the count `city` fitted
+ * is a count of *buildings*, and a rung that stands on two plots would need
+ * half as many — so it is used for 0 -> 1 and asserted rather than trusted.
+ */
+function stand(districts, level, housingAt = level) {
   const state = city(districts, level);
+  if (housingAt !== level) {
+    if ((LEVEL_FOOTPRINT[housingAt] ?? 1) !== (LEVEL_FOOTPRINT[level] ?? 1)) {
+      throw new Error(`levels ${level} and ${housingAt} have different footprints`);
+    }
+    const levels = new Array(LEVELS).fill(0);
+    levels[housingAt] = state.homes;
+    state.homeLevels = levels;
+  }
   const root = new THREE.Scene();
   const layout = new CityLayout();
   const ground = new Ground(root, layout);
@@ -203,8 +219,11 @@ console.log('');
  * Part 1 stands the city at level 4, where there is not a single first-rung
  * building in it — so it says nothing at all about the ten models. The
  * case that pays for them is the opposite one: a player who annexes widely and
- * promotes little has a 49-district city of nothing but the modelled rungs, and
- * that is the most modelled geometry the game can ever have standing.
+ * promotes little has a 49-district city of nothing but the modelled rungs,
+ * which is the most *buildings* the game can ever have standing as models. Part
+ * 1c is the other half: the same city with its housing promoted one rung, which
+ * is the most modelled geometry, because a walk-up is a bigger model than the
+ * house it replaces.
  *
  * The comparison is against what that same city used to be: one box per
  * building, one roof out of the shared bank. That is not a state this build can
@@ -249,6 +268,60 @@ console.log('what modelling every zone\'s first rung costs\n');
   console.log(`  which is ${fixed((100 * t.tris) / before - 100, 1, 1)}% more, for 9 draw calls and fifteen silhouettes.`);
   console.log('  It is also worth reading against part 1, which is the *other* worst case:');
   console.log('  a level-4 city has half the buildings and dresses them to the teeth.');
+}
+console.log('');
+
+// ------------------------------------------------------- part 1c
+
+/**
+ * What modelling housing's *second* rung costs, measured as the swap it is.
+ *
+ * The question part 1b cannot answer, and the one the fourth +4 on
+ * BUILDING_MESH_BUDGET has to be argued against: a district that promotes its
+ * housing does not gain buildings, it trades them. A plot holds one building,
+ * so 1,176 houses become 1,176 walk-ups — and what the promotion costs is the
+ * difference between the two models rather than the whole of the second one.
+ *
+ * Housing alone moves, with commerce and industry left on their first rung.
+ * That is the city the trade is visible in: promoting all three at once would
+ * mix in the massed rungs the other two climb to, and the reading would be
+ * about those instead.
+ */
+console.log("what modelling housing's second rung costs\n");
+{
+  const houses = stand(MAX_DISTRICTS, 0);
+  const walkups = stand(MAX_DISTRICTS, 0, 1);
+  const homeRows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:home:${level}:`));
+  const sum = (rows, key) => rows.reduce((n, r) => n + r[key], 0);
+
+  const before = homeRows(houses.root, 0);
+  const after = homeRows(walkups.root, 1);
+  const nBefore = sum(before, 'count');
+  const nAfter = sum(after, 'count');
+  const tBefore = sum(before, 'tris');
+  const tAfter = sum(after, 'tris');
+  const whole = totals(submitted(houses.root)).tris;
+  const wholeAfter = totals(submitted(walkups.root)).tris;
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce and industry at level 1 throughout`);
+  console.log('');
+  console.log('    housing            buildings     triangles      each');
+  console.log(
+    `    ${'level 1, houses'.padEnd(19)}${thou(nBefore, 9)}${thou(tBefore, 14)}${thou(tBefore / Math.max(1, nBefore), 10)}`,
+  );
+  console.log(
+    `    ${'level 2, walk-ups'.padEnd(19)}${thou(nAfter, 9)}${thou(tAfter, 14)}${thou(tAfter / Math.max(1, nAfter), 10)}`,
+  );
+  console.log('');
+  console.log(`  The same ${nBefore.toLocaleString('en-GB')} plots, so the promotion is a swap and not an addition:`);
+  console.log(`  ${thou(tAfter - tBefore, 1)} triangles more, which is ${fixed((100 * tAfter) / tBefore - 100, 1, 1)}% on the housing and`);
+  console.log(`  ${fixed((100 * wholeAfter) / whole - 100, 1, 1)}% on the whole scene — ${thou(whole, 1)} to ${thou(wholeAfter, 1)}.`);
+  console.log('');
+  console.log('  Massed, this rung was a box and a roof: 24 triangles a building, so the');
+  console.log(`  rung the player promotes to went from ${thou(nAfter * 24, 1)} triangles to`);
+  console.log(`  ${thou(tAfter, 1)} for five silhouettes and 4 draw calls. That is the price,`);
+  console.log('  and it buys the one promotion every player makes.');
 }
 console.log('');
 

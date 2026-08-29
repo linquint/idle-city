@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 12, +8 shared parts, +15 models = 35 (asserted, plus the cage) | 16, +8, +20 = **44**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 11, +8 shared parts, +20 models = 39 (asserted, plus the cage) | 15, +8, +25 = **48**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -76,6 +76,17 @@ clothes.
 > a budget that has three times spent its headroom on the rungs the city is
 > actually made of, and a fifth frontage number the sampler has never been
 > measured for.
+>
+> Re-measured again after housing's *second* rung was modelled, which moved the
+> row a fourth time: eleven bodies and twenty models, and `BUILDING_MESH_BUDGET`
+> re-based 36 -> 40. This is the reading that matters for Option A, and it cuts
+> against it harder than the last one: the precedent is now that a rung earns
+> models by being a rung *players look at*, and the argument for the walk-ups
+> was a specific cliff at a specific hour of play. A fourth zone has no such
+> argument and would arrive owing five models on the first rung before anyone
+> had seen it. The floor for it is 48 against a budget of 40 — and raising the
+> budget to cover a zone nobody has asked for is the drift this file exists to
+> refuse.
 
 ### Option B — a second building type on the commercial frontage
 

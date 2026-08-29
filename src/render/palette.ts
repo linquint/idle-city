@@ -27,6 +27,16 @@ export const PALETTE = {
   // it is set into at the one zoom a house is ever more than a silhouette —
   // and a door that borrowed the roof's colour would read as a hole.
   door: 0x6b4632,
+  // A walk-up's roof: the gable over the maisonettes and the mansard floor the
+  // dormers are cut into. Darker than the `tile` above, which the walk-ups wear
+  // as brick on their *walls* — the one place in the city where a brick wall
+  // and a pitched roof meet on the same building, and they have to be two
+  // browns or the roof reads as more wall. It lands within a few points of the
+  // door below it, which is a near-match rather than a duplicate: they never
+  // meet on a building — one is at the eaves and the other at the pavement —
+  // and naming them apart is what stops a remodel of either dragging the other
+  // with it.
+  walkupRoof: 0x6f4636,
   parapet: 0x2e3e55,
   shop: 0x27364c,
   // A shopfront's glass, and the one blue on the map that is *lighter* than the
