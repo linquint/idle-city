@@ -11,6 +11,17 @@ import {
   AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   CITY_HALL_BASE,
+  GOODS_TRADE_ANSWER,
+  GOODS_TRADE_LIFT,
+  GOODS_TRADE_UPKEEP,
+  POWER_EXPORT_CAP,
+  POWER_TRADES,
+  POWER_TRADE_NEUTRAL,
+  RIVAL_COMMERCIAL_DEMAND,
+  RIVAL_INDUSTRIAL_DEMAND,
+  RIVAL_MATCH_DISTRICTS,
+  RIVAL_SETTLE_SECONDS,
+  type PowerTrade,
   CRIME_CROWDING_FULL,
   CRIME_FROM_CROWDING,
   CRIME_FROM_IDLENESS,
@@ -2090,6 +2101,135 @@ export const alight = (s: GameState, kind: ZoneKind): number => {
 export const isBurning = (s: GameState, kind: ZoneKind, index: number): boolean =>
   s.fires.some((fire) => fire.kind === kind && fire.index === index);
 
+// ---------------------------------------------------------- the rival city
+
+/**
+ * Whether the city's goods agreement is actually in force.
+ *
+ * Read instead of `s.goodsTrade` everywhere it matters, exactly as
+ * `faresWaived` is read instead of `s.freeTransport`: the stored flag is the
+ * player's *choice* and this is whether the city can act on it. Keeping the two
+ * apart is what lets a setting survive a save that predates the city hall.
+ */
+export const goodsTraded = (s: GameState): boolean => hasPolicy(s) && s.goodsTrade;
+
+/**
+ * How established the city next door is, in [0, 1].
+ *
+ * Derived and never stored, which is the whole of why it survives an offline
+ * catch-up: it is a function of `s.elapsed` and `s.districts`, both of which
+ * only ever rise, so a twelve-hour absence lands on exactly the rival a watched
+ * session would have. A stored rival scalar would be a fourth exception to "the
+ * save is counts" — and unlike the three that exist, it would be bounded by a
+ * clock rather than by districts, a static table or a fixed ring, which is the
+ * one thing every one of them is bounded by something *other* than.
+ *
+ * Two factors, and between them they are the shape that makes a rival a feature
+ * rather than a tax:
+ *
+ *   - it *arrives*. `age / (1 + age)` against RIVAL_SETTLE_SECONDS saturates
+ *     rather than clamping, so there is no moment at which the rival suddenly
+ *     is one;
+ *   - it is *outgrown*. A city that has annexed its way to
+ *     RIVAL_MATCH_DISTRICTS has made the place next door a suburb, and the term
+ *     goes to zero — so the answer the player was always going to reach for is
+ *     the answer.
+ *
+ * The treaty is the faster answer and is the one that makes this pushable back
+ * against inside an hour. See GOODS_TRADE_ANSWER.
+ */
+export const rivalStrength = (s: GameState): number => {
+  const age = Math.max(0, s.elapsed) / RIVAL_SETTLE_SECONDS;
+  const arrived = age / (1 + age);
+  const outgrown = Math.min(1, Math.max(0, s.districts - 1) / Math.max(1, RIVAL_MATCH_DISTRICTS - 1));
+  const answered = goodsTraded(s) ? GOODS_TRADE_ANSWER : 0;
+  return Math.max(0, arrived * (1 - outgrown) * (1 - answered));
+};
+
+/**
+ * What the rival takes off one zone's demand target, signed. Never positive.
+ *
+ * Additive, in the same bracket `demandLift` adds into, because that is where
+ * it *is*: the two `rival` rows are DEMAND_TERMS entries like every other term,
+ * so `demandTargets` carries it without a line of its own and the HUD's
+ * breakdown names it without a case of its own. This is the readable accessor
+ * for a caller that wants the one term rather than the sum — the trade panel,
+ * which has to say what the place next door is costing before a player will
+ * spend anything on answering it.
+ */
+export const rivalDemand = (s: GameState, kind: ZoneKind): number => {
+  if (kind === 'home') return 0;
+  const weight = kind === 'shop' ? RIVAL_COMMERCIAL_DEMAND : RIVAL_INDUSTRIAL_DEMAND;
+  return -weight * rivalStrength(s);
+};
+
+// --------------------------------------------------------------------- trade
+
+/** The power arrangement the city is *on*, which is not always the one it stored. */
+export const powerTradeStep = (s: GameState): PowerTrade => {
+  const wanted = hasPolicy(s) ? s.powerTrade : POWER_TRADE_NEUTRAL;
+  const at = Math.max(0, Math.min(POWER_TRADES.length - 1, Math.floor(wanted)));
+  return POWER_TRADES[at] as PowerTrade;
+};
+
+/**
+ * Power the city buys in, per second.
+ *
+ * A share of what it draws rather than a flat block, and that is what keeps the
+ * agreement useful at every size: POWER_PER_PLANT is multiplied by `cityScale`,
+ * so a fixed import would be the whole grid at one district and a rounding
+ * error at forty-nine.
+ */
+export const powerImported = (s: GameState): number => {
+  const share = powerTradeStep(s).imports;
+  return share <= 0 ? 0 : share * powerDemand(s);
+};
+
+/**
+ * Power the city has spare and can find a buyer for, per second.
+ *
+ * Imports are excluded from the surplus on purpose: a city that bought a unit
+ * and sold it back would be a money printer, and both halves of the switch
+ * cannot be on at once anyway — POWER_TRADES is one index.
+ */
+export const powerSurplus = (s: GameState): number => {
+  const draw = powerDemand(s);
+  // Capped at a share of the city's own draw — see POWER_EXPORT_CAP, which is
+  // what stops an over-plotted small city selling eleven times what it uses.
+  return Math.max(0, Math.min(ownPowerSupply(s) - draw, POWER_EXPORT_CAP * draw));
+};
+
+/**
+ * What selling the surplus earns, per second, before tax.
+ *
+ * Short-circuited on the step rather than multiplied by zero, and both of these
+ * are: `powerSurplus` and `powerImported` each walk the three cohorts through
+ * `powerDemand`, and `income` and `upkeep` run ten times a second on a path
+ * that is already the hottest in the game. A city with no treaty pays nothing
+ * for having the mechanism.
+ */
+export const powerTradeIncome = (s: GameState): number => {
+  const sells = powerTradeStep(s).sells;
+  return sells <= 0 ? 0 : sells * powerSurplus(s);
+};
+
+/** What buying power costs, per second. Joins the wage bill, not the ledger. */
+export const powerTradeCost = (s: GameState): number => {
+  const step = powerTradeStep(s);
+  return step.imports <= 0 || step.price <= 0 ? 0 : step.price * step.imports * powerDemand(s);
+};
+
+/**
+ * What a goods agreement costs to keep, per second.
+ *
+ * A share of the ledger rather than a flat fee, for the reason `civicPayroll`
+ * is: a flat fee is a decision for the first hour and a rounding error after
+ * it. Indexed to the same yardstick the wage bill is, so a treaty is worth the
+ * same fraction of a village's income as of a metropolis's.
+ */
+export const tradeUpkeep = (s: GameState): number =>
+  goodsTraded(s) ? GOODS_TRADE_UPKEEP * ledgerScale(s) * housingPlots(s) : 0;
+
 // -------------------------------------------------------------------- demand
 
 /**
@@ -2107,7 +2247,14 @@ export const exportMarket = (s: GameState): number =>
   // cargo terminal: a city with both has one tap raised twice, not two taps for
   // the same goods — and a multiplicative form would have made the airport worth
   // most to the city that least needs it. See AIRPORT_EXPORT_LIFT.
-  (1 + CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0));
+  //
+  // The goods agreement is the third, and it adds in the same bracket for the
+  // same reason: it is a treaty about the goods the berths and the runway carry
+  // rather than a fourth kind of goods. See GOODS_TRADE_LIFT.
+  (1 +
+    CARGO_EXPORT_LIFT * s.cargoTerminals +
+    (s.airport ? AIRPORT_EXPORT_LIFT : 0) +
+    (goodsTraded(s) ? GOODS_TRADE_LIFT : 0));
 
 export const jobs = (s: GameState): number =>
   openOf(s, 'shop', SHOP_JOBS) +
@@ -2434,6 +2581,7 @@ const demandReading = (s: GameState, key: DemandTerm['key']): number =>
   : key === 'transit' ? transitCoverage(s)
   : key === 'landmark' ? landmarkCoverage(s)
   : key === 'education' ? educationCoverage(s)
+  : key === 'rival' ? rivalStrength(s)
   : taxPressure(s);
 
 /** What one term contributes to its zone's target, signed. */
@@ -2441,7 +2589,8 @@ const demandTermValue = (s: GameState, term: DemandTerm): number =>
   term.weight * (term.centred ? demandReading(s, term.key) - 0.5 : demandReading(s, term.key));
 
 /**
- * What the city's services add to one zone's demand target.
+ * What the table adds to one zone's demand target: services, the tax rate, and
+ * the city next door.
  *
  * Zero — every term, all three zones — while the city has no housing, and that
  * gate is the whole of what keeps the opening where it was. `coverage` reads 1
@@ -2524,6 +2673,9 @@ export const demandTargets = (s: GameState): DemandTargets => {
       s.happiness,
       clampDemand((jobs(s) - reachableWorkers(s)) / scale + demandLift(s, 'home')),
     ),
+    // The rival arrives through `demandLift` with everything else — it is two
+    // DEMAND_TERMS rows, not a special case. Housing has no rival row: a rival
+    // competes for trade, and people live where they work.
     c: clampDemand(
       (residents(s) * SPEND_PER_RESIDENT +
         // Visitors shop, and that is the whole of how tourism reaches the
@@ -2803,7 +2955,13 @@ export const income = (s: GameState): number => {
       // Tourism, outside the bracket for the same reason and carrying its own
       // happiness term — see `visitors`, where the mood is a multiplier rather
       // than the floor `incomeMultiplier` applies to rent.
-      cruiseIncome(s)) *
+      cruiseIncome(s) +
+      // And what the grid sells. Outside the bracket for the same reason fares
+      // are: a unit of surplus power is not rent, so it does not scale with the
+      // shop multiplier or the district bonus. It *is* taxed, like everything
+      // else the city takes in. Zero unless the export agreement is on and the
+      // city's own plants are making more than it draws — see `powerSurplus`.
+      powerTradeIncome(s)) *
     // The tax rate multiplies the whole ledger, which is why the happiness it
     // costs is worth more than it looks: happiness multiplies this same line
     // through `incomeMultiplier`, so the two terms compound against each other.
@@ -2873,8 +3031,25 @@ export const powerDemand = (s: GameState): number =>
  * grid yet — the same ninety-second ramp every civic building has, and the same
  * thing an unpaid wage bill takes back.
  */
-export const powerSupply = (s: GameState): number =>
+/**
+ * What the city's own grid makes, per second: the base and its plants.
+ *
+ * Split out from `powerSupply` because the export agreement sells the *surplus*
+ * and a city that bought a unit and sold it back would be a money printer. See
+ * `powerSurplus`, which is the only caller that wants this rather than the
+ * total.
+ */
+export const ownPowerSupply = (s: GameState): number =>
   POWER_BASE + s.plants * s.plantStaff * POWER_PER_PLANT * cityScale(s);
+
+/**
+ * Everything on the grid, per second: the city's own plants and whatever the
+ * import agreement is buying in.
+ *
+ * The one `powerRatio` reads, so an imported unit browns the city out exactly
+ * as a generated one does not — which is the whole of what the agreement buys.
+ */
+export const powerSupply = (s: GameState): number => ownPowerSupply(s) + powerImported(s);
 
 /**
  * Supply over draw. Above 1 the city has power to spare.
@@ -2889,7 +3064,12 @@ export const powerSupply = (s: GameState): number =>
  */
 export const powerRatio = (s: GameState): number => {
   const draw = powerDemand(s);
-  return draw <= 0 ? 1 : powerSupply(s) / draw;
+  if (draw <= 0) return 1;
+  // The import inlined rather than read through `powerSupply`, because that
+  // would ask `powerDemand` — a walk over three cohorts — for a second time on
+  // a path `Game.step` runs ten times a second.
+  const imports = s.powerTrade === POWER_TRADE_NEUTRAL ? 0 : powerTradeStep(s).imports * draw;
+  return (ownPowerSupply(s) + imports) / draw;
 };
 
 /**
@@ -3100,8 +3280,28 @@ export const serviceUpkeep = (s: GameState, service: Service): number =>
  * and the two must not be conflated: charging upkeep inside `income` would make
  * every marginal-value readout in the HUD quietly wrong.
  */
-export const upkeep = (s: GameState): number =>
-  UPKEEP_RATE * civicPayroll(s) * ledgerScale(s);
+/**
+ * Everything the city pays out per second: the wage bill and its treaties.
+ *
+ * The two treaty lines are outside `civicPayroll` rather than inside it,
+ * because they are not wages — a payroll is indexed to the ledger by
+ * `ledgerScale` and staffed buildings are what it counts, where an imported
+ * unit of power is bought at a price and a trade mission is a running cost. But
+ * they *are* upkeep in every sense that matters here: they are what a shortfall
+ * fails to pay, they are what `upkeepReserve` holds back, and they are the
+ * difference between the gross and the net the dock shows.
+ */
+export const upkeep = (s: GameState): number => {
+  // One `ledgerScale`, not two: it is a walk over the cohorts and both the wage
+  // bill and the trade mission are indexed to it. `tradeUpkeep` is the same
+  // expression for a caller that wants the line on its own.
+  const scale = ledgerScale(s);
+  return (
+    UPKEEP_RATE * civicPayroll(s) * scale +
+    powerTradeCost(s) +
+    (goodsTraded(s) ? GOODS_TRADE_UPKEEP * scale * housingPlots(s) : 0)
+  );
+};
 
 /** What the treasury actually gains per second. The number the dock shows. */
 export const netIncome = (s: GameState): number => income(s) - upkeep(s);

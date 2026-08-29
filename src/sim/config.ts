@@ -1217,7 +1217,15 @@ export const EXPORT_PER_DISTRICT = 14;
  */
 export interface DemandTerm {
   /** What the reading is drawn from. Not unique on its own — `zone` completes it. */
-  readonly key: 'police' | 'hospital' | 'recreation' | 'transit' | 'landmark' | 'education' | 'tax';
+  readonly key:
+    | 'police'
+    | 'hospital'
+    | 'recreation'
+    | 'transit'
+    | 'landmark'
+    | 'education'
+    | 'tax'
+    | 'rival';
   readonly zone: 'home' | 'shop' | 'industry';
   /** What the HUD calls it. */
   readonly label: string;
@@ -1236,7 +1244,35 @@ export const DEMAND_TERMS: readonly DemandTerm[] = [
   { key: 'tax',        zone: 'shop',     label: 'Tax rate',         weight: -0.30, centred: false },
   { key: 'education',  zone: 'industry', label: 'Education',        weight:  0.20, centred: true },
   { key: 'tax',        zone: 'industry', label: 'Tax rate',         weight: -0.35, centred: false },
+  /**
+   * The city next door, and it is in this table rather than added to
+   * `demandTargets` on its own for one reason: the table is what the HUD walks.
+   * A rival the player could not see would be indistinguishable from commerce
+   * being mysteriously expensive, and "a rival the player cannot push back on
+   * is a tax" starts with being able to find it.
+   *
+   * Not a service and not centred — it is read from 0 exactly as the tax
+   * pressure is, and like the tax pressure it is the city's own doing rather
+   * than a coverage. Housing has no row: a rival competes for *trade*, and
+   * people live where they work. See `rivalStrength` and RIVAL_SETTLE_SECONDS.
+   */
+  { key: 'rival',      zone: 'shop',     label: 'Rival city',       weight: -0.11, centred: false },
+  { key: 'rival',      zone: 'industry', label: 'Rival city',       weight: -0.15, centred: false },
 ];
+
+/**
+ * The rival's own weights, read back off the table.
+ *
+ * Stated here rather than in the table so a reader of `rivalDemand` has a name
+ * to look up, and derived from the table rather than typed twice so the two can
+ * never disagree — the same trick `TAX_NEUTRAL` plays on TAX_STEPS.
+ */
+export const RIVAL_COMMERCIAL_DEMAND = -(
+  DEMAND_TERMS.find((t) => t.key === 'rival' && t.zone === 'shop')?.weight ?? 0
+);
+export const RIVAL_INDUSTRIAL_DEMAND = -(
+  DEMAND_TERMS.find((t) => t.key === 'rival' && t.zone === 'industry')?.weight ?? 0
+);
 
 /**
  * The most any one term may move a signal, and the most the whole table may.
@@ -2880,6 +2916,170 @@ export const GARBAGE_PER_WORKS = 12;
  */
 export const GARBAGE_SATURATION = 220;
 export const GARBAGE_CURVE = 0.5;
+
+// ---------------------------------------------------------- the rival city
+
+/**
+ * How long the rival takes to become one, in seconds.
+ *
+ * The rival is derived and never stored — see `rivalStrength`, which is a
+ * function of `s.elapsed` and `s.districts` and nothing else. That is what
+ * makes an offline catch-up and a watched session agree by construction: a
+ * stored rival would be a fourth exception to "the save is counts" bounded by
+ * a clock, which is the one thing the three existing exceptions are all
+ * bounded by something *other* than.
+ *
+ * Its strength is `age / (1 + age)` against this constant, so it is half
+ * established at 20 minutes and three quarters at an hour — measured in
+ * tools/rival.calibrate.mjs against a played run, where the city's first
+ * annexation lands at 1:30 and the city hall that answers it at 1:28.
+ */
+export const RIVAL_SETTLE_SECONDS = 1_200;
+
+/**
+ * The size at which the city has outgrown the rival entirely.
+ *
+ * The other half of the shape, and the reason a rival is a feature rather than
+ * a tax: it arrives, it matters, and it is *outgrown*. HIGHWAY_MIN_DISTRICTS,
+ * because that is where the city stops being a place and starts being a region
+ * — a rival is a rival to a town and a suburb of a conurbation.
+ *
+ * Both inputs are monotone in the direction that matters, which is what keeps
+ * the reading exact under a 60-second catch-up step: elapsed only rises and
+ * districts only rise, so there is no integrator to disagree with itself.
+ */
+export const RIVAL_MATCH_DISTRICTS = HIGHWAY_MIN_DISTRICTS;
+
+/**
+ * What a fully established rival takes off commercial and industrial demand.
+ *
+ * Sized against the *surcharge* rather than against the signal, which is the
+ * trap the brief names: `priceModifier` is asymmetric on purpose — a discount
+ * is `1 - 0.45 d` and a surcharge is `1 + 0.60 d` — so a rival that pinned a
+ * signal negative would not slow the city down, it would make shops 60% dearer
+ * forever. Measured in tools/rival.calibrate.mjs as what it does to the cost of
+ * filling one district: +6.5% on commerce and +7.6% on industry at its worst,
+ * against the 60% a pinned signal would have cost.
+ *
+ * Industry takes more of it than commerce, and the asymmetry is the same one
+ * DEMAND_TERMS already carries for the tax rate: a shop sells to the people
+ * standing in front of it and a works sells to whoever will buy, so a rival
+ * next door is a competitor for the second and an inconvenience to the first.
+ */
+// The two weights themselves live in DEMAND_TERMS, because that is the table
+// the HUD walks — see the two `rival` rows, and RIVAL_COMMERCIAL_DEMAND beside
+// them, which reads them back so this comment has a name to point at.
+
+// ---------------------------------------------------------------- trade
+
+/**
+ * Where the city's power comes from, when it does not come from its own plants.
+ *
+ * A table and an index, exactly as TAX_STEPS is: one policy scalar in the save
+ * and the whole of what it does stated in one place. Behind `hasPolicy` like
+ * every other policy, because a treaty needs somebody to sign it.
+ *
+ *   - **import** raises `powerSupply` by a share of what the city draws, and
+ *     charges for it every second. It is the answer to a brownout the city
+ *     cannot build its way out of yet — POWER_PLANT_BASE is 900 and compounds
+ *     at 1.6, so the fourth plant is 3,686 and the eighth is 38,700;
+ *   - **export** sells whatever the city's own plants make over its draw. It
+ *     is what makes over-building the grid a decision rather than a waste, and
+ *     it earns nothing at all until there is a surplus, so switching it on in a
+ *     brownout is inert rather than harmful.
+ *
+ * Neither is free and neither is strictly better. A plant is a one-off against
+ * a per-second bill and wins overwhelmingly whenever a *site* is free — which
+ * is the shape wanted: the import is the answer to `plantCapacity` running out
+ * at one plant a district, not an alternative to building one. And leaving
+ * either switch on when it is not needed costs: the import buys half the city's
+ * draw whether or not the ratio was already over 1.
+ *
+ * Measured at 10 districts, as a share of the city's own income (see
+ * tools/rival.calibrate.mjs): importing costs 13.7% at detached houses, 5.2% at
+ * terraces, 1.8% at towers and 0.2% at arcologies; exporting earns 9.7%, 3.7%,
+ * 1.2% and 0.1%. The fall is structural rather than a mis-set price — power
+ * draw carries POWER_EXPONENT and is sub-linear in the ladder where income is
+ * quadratic in it — so no single per-unit price is a constant share. What that
+ * buys is the right shape anyway: a lifeline in the hour a player first meets a
+ * brownout, and a rounding error to a city that is rich and out of sites.
+ */
+export interface PowerTrade {
+  readonly label: string;
+  /** Extra supply, as a share of the city's own draw. */
+  readonly imports: number;
+  /** What that costs a second, per unit imported. */
+  readonly price: number;
+  /** What a unit of surplus sells for. Zero unless the city is exporting. */
+  readonly sells: number;
+}
+
+export const POWER_TRADES: readonly PowerTrade[] = [
+  { label: 'Off', imports: 0, price: 0, sells: 0 },
+  { label: 'Import', imports: 0.5, price: 0.85, sells: 0 },
+  { label: 'Export', imports: 0, price: 0, sells: 0.6 },
+];
+
+/**
+ * The most of its own draw the city can sell, as a share.
+ *
+ * The neighbours will take half again of what the city uses and no more, and
+ * the cap is load-bearing rather than flavour: POWER_BASE alone is a floor
+ * under the grid and `POWER_PER_PLANT` is multiplied by `cityScale`, so a small
+ * city with a plant a district makes many times what it draws. Uncapped,
+ * selling that surplus is worth 582% of the ledger at its worst — an arbitrage
+ * rather than a trade.
+ *
+ * Two things bring it down, and the *second* is the larger of them, which is
+ * worth stating because it is not the one this constant is. The cap takes the
+ * worst case to 39% — better, and still too much. What makes it about a tenth
+ * is that the switch is behind `hasPolicy`: a hall needs RANK_GATES.cityHall,
+ * which is 1,200 people, and the 39% city is a village of 88. Swept over every
+ * district count and level that could hold a hall at all, the worst is 8.9% —
+ * one district of terraces, the smallest town there is. See
+ * tools/rival.calibrate.mjs, which prints the uncapped worst, the capped worst
+ * and the rank that rules the capped one out.
+ *
+ * Symmetric with the import's own share on purpose: the city can buy half its
+ * draw and sell half its draw, so the switch is one decision at one scale
+ * rather than two mechanisms that happen to share an index.
+ */
+export const POWER_EXPORT_CAP = 0.5;
+
+/** The step a fresh city starts on, and the one a save without one defaults to. */
+export const POWER_TRADE_NEUTRAL = 0;
+
+/**
+ * What a goods agreement is worth, and what it costs to keep.
+ *
+ * The same shape CARGO_EXPORT_LIFT already is — a multiplier on the export tap
+ * rather than a second tap beside it — so there is still one number the outside
+ * world's appetite is made of. Bigger than a cargo berth's 0.4 because it is
+ * bought with a running cost rather than with a building, and because it is the
+ * answer to the rival: a city that has signed the treaty takes back the trade
+ * the rival was taking, which is what makes the rival a thing to push against
+ * rather than a tax.
+ *
+ * The upkeep is a share of the *ledger* rather than a flat rate, for the reason
+ * `civicPayroll` is: a flat fee is a decision for the first hour and a rounding
+ * error after it. `ledgerScale` times `housingPlots`, and both factors are
+ * needed — `ledgerScale` alone is what a *plot* is worth, and the ledger is
+ * plots times that, so a fee scaled by it alone falls away exactly as a flat
+ * one does. Measured over three city sizes it lands at 2.9%, 2.9% and 2.9% of
+ * income; scaled by `ledgerScale` alone it was 0.31%, 0.03% and 0.01%.
+ */
+export const GOODS_TRADE_LIFT = 0.55;
+export const GOODS_TRADE_UPKEEP = 0.015;
+
+/**
+ * How much of the rival a goods agreement answers.
+ *
+ * Not all of it, deliberately. A treaty that erased the rival would make the
+ * switch a one-time chore rather than a lever, and the other half of the answer
+ * is the one the city was always going to reach for: `RIVAL_MATCH_DISTRICTS`,
+ * which is to say growing.
+ */
+export const GOODS_TRADE_ANSWER = 0.6;
 
 // --------------------------------------------------------------- ascension
 

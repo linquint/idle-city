@@ -30,6 +30,7 @@ import {
   OFFLINE_CAP_SECONDS,
   SERVICES,
   UPKEEP_KEEP_SHARE,
+  POWER_TRADES,
   TAX_STEPS,
   TICK_RATE,
   type Landmark,
@@ -1629,6 +1630,24 @@ export class Game {
   setFreeTransport(on: boolean): void {
     if (!hasPolicy(this.inner)) return;
     this.inner.freeTransport = on;
+  }
+
+  /**
+   * Where the city buys and sells power. An index into POWER_TRADES.
+   *
+   * Same shape and same gate as `setTaxRate`: a treaty is policy, and policy
+   * needs somebody to sign it. Clamped rather than trusted, so a caller cannot
+   * put the save on a step that is not in the table.
+   */
+  setPowerTrade(step: number): void {
+    if (!hasPolicy(this.inner)) return;
+    this.inner.powerTrade = Math.max(0, Math.min(POWER_TRADES.length - 1, Math.floor(step)));
+  }
+
+  /** The goods agreement: a lift on the export tap, and most of the rival's answer. */
+  setGoodsTrade(on: boolean): void {
+    if (!hasPolicy(this.inner)) return;
+    this.inner.goodsTrade = on;
   }
 
   reset(): void {

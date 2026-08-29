@@ -596,6 +596,55 @@ The ceiling is safe by construction and measured to be: both are pressure times
 happiness ceiling comes out identical before and after to six decimal places at
 every district count and level. What moved is everything below it.
 
+### There is a city next door, and it can be traded with
+
+`rivalStrength` is derived and never stored, which is the whole of why it
+survives an offline catch-up: it is a function of `elapsed` and `districts`,
+both of which only ever rise, so twelve hours away lands on exactly the rival a
+watched session would have. A stored scalar would have been a fourth exception
+to "the save is counts" — and unlike the three that exist, bounded by a clock
+rather than by districts, a table or a ring.
+
+Two factors, and between them they are what makes a rival a feature rather than
+a tax. It **arrives**: `age / (1 + age)` against `RIVAL_SETTLE_SECONDS`
+saturates instead of clamping, so there is no tick at which it suddenly is one.
+And it is **outgrown**: at `RIVAL_MATCH_DISTRICTS` the place next door is a
+suburb and the term reads zero, so the answer the player was always going to
+reach for is an answer.
+
+It reaches the game as two `DEMAND_TERMS` rows — commerce −0.11, industry −0.15
+— rather than as a line in `demandTargets`, so the demand breakdown names it
+without a case of its own. A rival the player cannot find would be
+indistinguishable from commerce being mysteriously expensive. Housing has no
+row: a rival competes for trade, and people live where they work. The sizing is
+against `priceModifier`'s asymmetry rather than against the signal, which is the
+trap: a rival that pinned a signal would not slow the city down, it would make
+what it pins 60% dearer forever. Measured, it costs between 5.1% and 12.3% of a
+fill across the whole demand range.
+
+Two agreements answer it, both behind `hasPolicy` like the tax rate:
+
+- **Power** is a three-way switch, `POWER_TRADES`, in the shape `TAX_STEPS`
+  already is — one index in the save and the whole of what it does in one place.
+  Importing raises supply by half the draw and bills for it every second, which
+  is the answer to a brownout the grid cannot be built out of yet; exporting
+  sells whatever the city's own plants make over its draw. Selling is capped at
+  `POWER_EXPORT_CAP` of the draw, because uncapped it was worth 582% of the
+  ledger — and the *rank gate* is the larger half of that guard, since the city
+  that has the most spare power is a village and a village has no hall to sign
+  with. Worst case over everything that could sign: 8.9%.
+- **Goods** lifts the export tap by `GOODS_TRADE_LIFT`, in the same additive
+  bracket the cargo berths and the runway are in, so there is still one number
+  the outside world's appetite is made of. It answers `GOODS_TRADE_ANSWER` of the
+  rival — not all of it, or the switch would be a chore rather than a lever. The
+  fee is a share of the ledger rather than a flat rate, for the reason
+  `civicPayroll` is: measured at 2.8% of income at 1, 10 and 25 districts, where
+  a flat fee would have fallen from 0.31% to 0.01%. It pays through demand and
+  costs through the ledger, so a city signs it to grow into rather than to cash.
+
+Neither touches happiness at all — the rival is a demand term and the treaties
+are a supply and a tap. `tools/rival.calibrate.mjs` prints all of it.
+
 ## Balance
 
 Every tunable is in `src/sim/config.ts`, and nothing else in that file imports

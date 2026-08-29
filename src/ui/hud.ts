@@ -49,8 +49,13 @@ import {
   AIRPORT_VISITORS,
   ROAD_VISITORS,
   CARGO_EXPORT_LIFT,
+  GOODS_TRADE_ANSWER,
+  GOODS_TRADE_LIFT,
   HIGHWAY_MIN_DISTRICTS,
+  POWER_TRADES,
+  RIVAL_MATCH_DISTRICTS,
   TERMINALS,
+  type PowerTrade,
 } from '../sim/config';
 import {
   abandonedBuildings,
@@ -101,6 +106,7 @@ import {
   estateSupply,
   exportMarket,
   fareIncome,
+  goodsTraded,
   highwayAllowed,
   highwayBlocker,
   highwayCost,
@@ -126,7 +132,14 @@ import {
   policyBlocker,
   powerCap,
   powerDemand,
+  powerImported,
   powerRatio,
+  powerSurplus,
+  powerTradeCost,
+  powerTradeIncome,
+  powerTradeStep,
+  rivalDemand,
+  rivalStrength,
   levelAt,
   mergedOf,
   parkCost,
@@ -152,6 +165,7 @@ import {
   shopCost,
   terminalBlocker,
   terminalReadings,
+  tradeUpkeep,
   upkeep,
   visitors,
   visitorShare,
@@ -574,6 +588,14 @@ export class Hud {
     portSources: el('port-sources'),
     portShopping: el('port-shopping'),
     portLift: el('port-lift'),
+    rivalStrength: el('rival-strength'),
+    rivalCost: el('rival-cost'),
+    powerSteps: el('power-steps'),
+    powerTradeFlow: el('power-trade-flow'),
+    powerTradeWorth: el('power-trade-worth'),
+    goodsTrade: el<HTMLButtonElement>('goods-trade'),
+    goodsFee: el('goods-fee'),
+    goodsEffect: el('goods-effect'),
     airport: el<HTMLButtonElement>('build-airport'),
     airportLabel: el('build-airport-label'),
     airportCost: el('build-airport-cost'),
@@ -639,6 +661,8 @@ export class Hud {
   private open: TabKey = 'build';
   /** One control per TAX_STEPS entry, built once. */
   private readonly taxButtons: HTMLButtonElement[] = [];
+  /** The same, per POWER_TRADES entry. Two tables, one idiom. */
+  private readonly powerButtons: HTMLButtonElement[] = [];
 
   /**
    * The building the card is showing, or null.
@@ -838,6 +862,28 @@ export class Hud {
       this.taxButtons.push(button);
       n.taxSteps.append(button);
     }
+
+    // And the power agreement, from POWER_TRADES for the same reason. Off,
+    // import, export: one index in the save, so one radio group here.
+    for (let i = 0; i < POWER_TRADES.length; i++) {
+      const trade = POWER_TRADES[i] as PowerTrade;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'step';
+      button.setAttribute('role', 'radio');
+      button.textContent = trade.label;
+      button.addEventListener('click', () => {
+        this.game.setPowerTrade(i);
+        this.paint();
+      });
+      this.powerButtons.push(button);
+      n.powerSteps.append(button);
+    }
+
+    n.goodsTrade.addEventListener('click', () => {
+      this.game.setGoodsTrade(!this.game.state.goodsTrade);
+      this.paint();
+    });
 
     this.wireSheet();
     this.buildOverlays();
@@ -1529,8 +1575,11 @@ export class Hud {
         rows.push({
           zone: false,
           label: entry.term.label,
-          // The tax pressure is the one reading that is not a coverage, so it is
-          // shown signed rather than as a percentage of anything.
+          // The tax pressure is the one reading that is not a *share* of
+          // anything, so it is shown signed rather than as a percentage. The
+          // rival is not a coverage either, but it is a fraction — "the city
+          // next door is 30% established" is the sentence — so it reads like
+          // one. See `demandReading`.
           reads: entry.term.key === 'tax' ? entry.reading.toFixed(2) : pct(entry.reading),
           value: entry.value,
         });
@@ -1901,9 +1950,91 @@ export class Hud {
         : `${pct(share)} of the city's shopping`;
 
     n.portExports.textContent = fmt(exportMarket(s));
-    const lift = CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0);
+    const lift =
+      CARGO_EXPORT_LIFT * s.cargoTerminals +
+      (s.airport ? AIRPORT_EXPORT_LIFT : 0) +
+      (goodsTraded(s) ? GOODS_TRADE_LIFT : 0);
     n.portLift.textContent =
       lift <= 0 ? 'no freight yet' : `+${Math.round(lift * 100)}% on the tap`;
+
+    this.paintTreaties(s);
+  }
+
+  /**
+   * The lower half of the trade tab: the city next door, and the two agreements
+   * that answer it.
+   *
+   * On this tab rather than on the policy one, even though both switches are
+   * gated on the city hall exactly as the tax rate is. Policy is what the city
+   * does to itself; this is what it does with everybody else, and the rival is
+   * only legible next to the export tap it is competing for.
+   *
+   * The rival row is the first thing painted and it is the one that has to be
+   * there. A rival the player cannot find is indistinguishable from commerce
+   * being mysteriously expensive — so the row says how established it is *and*
+   * what that is costing, in the same points the demand tab is read in.
+   */
+  private paintTreaties(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    const why = policyBlocker(s);
+    const rival = rivalStrength(s);
+    n.rivalStrength.textContent = pct(rival);
+    // Both signals, because the rival takes more off industry than off commerce
+    // and a single averaged number would hide the one decision it informs.
+    n.rivalCost.textContent =
+      rival <= 0
+        ? s.districts >= RIVAL_MATCH_DISTRICTS
+          ? 'outgrown — a suburb now'
+          : 'not settled yet'
+        : `${signed(rivalDemand(s, 'shop'))} trade, ${signed(rivalDemand(s, 'industry'))} industry`;
+
+    // The step the city is *on*, not the one it stored — `powerTradeStep`
+    // answers with Off for a save that predates its own city hall, and the
+    // radio group has to agree with the grid rather than with the save.
+    const step = powerTradeStep(s);
+    const at = POWER_TRADES.indexOf(step);
+    for (let i = 0; i < this.powerButtons.length; i++) {
+      const button = this.powerButtons[i];
+      if (!button) continue;
+      const trade = POWER_TRADES[i] as PowerTrade;
+      button.setAttribute('aria-checked', String(i === at));
+      button.disabled = why !== null;
+      button.title =
+        why ??
+        (trade.imports > 0
+          ? `Buy ${Math.round(trade.imports * 100)}% of the draw at ${trade.price.toFixed(2)} a unit`
+          : trade.sells > 0
+            ? `Sell the spare at ${trade.sells.toFixed(2)} a unit`
+            : 'Neither buy nor sell');
+    }
+
+    const bought = powerImported(s);
+    const sold = step.sells > 0 ? powerSurplus(s) : 0;
+    n.powerTradeFlow.textContent =
+      bought > 0 ? `${fmt(bought)} bought`
+      : sold > 0 ? `${fmt(sold)} sold`
+      : step.sells > 0 ? 'nothing spare'
+      : 'none traded';
+    // What it is worth per second, which is the number the switch is decided
+    // on. A city exporting with no surplus reads nothing rather than reading a
+    // price it is not being paid.
+    n.powerTradeWorth.textContent =
+      bought > 0 ? `${fmt(powerTradeCost(s))}/s on the bill`
+      : sold > 0 ? `${fmt(powerTradeIncome(s))}/s earned`
+      : why ?? 'no agreement';
+
+    // `goodsTraded` rather than the stored flag, for the reason `faresWaived` is
+    // read that way: the flag is what the player chose and this is whether the
+    // city can act on it.
+    const treaty = goodsTraded(s);
+    n.goodsTrade.textContent = `Goods agreement · ${treaty ? 'on' : 'off'}`;
+    n.goodsTrade.setAttribute('aria-pressed', String(treaty));
+    n.goodsTrade.disabled = why !== null;
+    n.goodsTrade.title = why ?? 'Open the market next door';
+    n.goodsFee.textContent = treaty ? `${fmt(tradeUpkeep(s))}/s to keep` : 'nothing to keep';
+    n.goodsEffect.textContent = `tap +${Math.round(GOODS_TRADE_LIFT * 100)}%, rival \u2212${Math.round(
+      GOODS_TRADE_ANSWER * 100,
+    )}%`;
   }
 
   /**

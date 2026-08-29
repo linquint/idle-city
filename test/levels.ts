@@ -9,7 +9,7 @@ import {
   type CityRank,
 } from '../src/sim/config';
 import { districtLand, type Zoning } from '../src/sim/layout';
-import { cohortOf, type GameState, type LevelCohort } from '../src/sim/state';
+import { cohortOf, createState, type GameState, type LevelCohort } from '../src/sim/state';
 
 /**
  * Test helpers for building states with a known level mix.
@@ -217,5 +217,40 @@ export function atRank(index: number, districts?: number): Partial<GameState> {
   return {
     districts: Math.max(rank.districts, districts ?? 0),
     ...(homes > 0 ? housed(homes, LEVELS - 1) : {}),
+  };
+}
+
+/**
+ * A city built out to its own frontage at one level, in every zone.
+ *
+ * The shape every calibrator builds by hand and no test could say: `built`
+ * takes three counts and the counts that matter are the ones FRONTAGE_TARGET
+ * implies, which move with the level's footprint. What it is for is the sweeps
+ * — a property asserted over "every district count and every level" is only
+ * worth asserting on cities that are actually the size they claim, and a
+ * fixture with eight houses in a district is not one.
+ *
+ * `districts` and the cohort, and nothing else. A caller that wants the city
+ * served, lit or governed says so; this says how much of it there is.
+ */
+export function atFrontage(
+  districts: number,
+  level = 0,
+  patch: Partial<GameState> = {},
+): GameState {
+  const clamped = Math.max(0, Math.min(LEVELS - 1, level));
+  const foot = LEVEL_FOOTPRINT[clamped] ?? 1;
+  const fit = (per: number): number => Math.floor((Math.max(1, districts) * per) / foot);
+  return {
+    ...createState(0),
+    districts,
+    ...built(
+      fit(FRONTAGE_TARGET.residential),
+      fit(FRONTAGE_TARGET.commercial),
+      fit(FRONTAGE_TARGET.industrial),
+      clamped,
+    ),
+    happiness: 1,
+    ...patch,
   };
 }

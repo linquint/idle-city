@@ -26,6 +26,7 @@
     "ascension:calibrate": "node tools/ascension.calibrate.mjs",
     "crime:calibrate": "node tools/crime.calibrate.mjs",
     "garbage:calibrate": "node tools/garbage.calibrate.mjs",
+    "rival:calibrate": "node tools/rival.calibrate.mjs",
     "pedestrians:calibrate": "node --experimental-transform-types tools/pedestrians.calibrate.mjs",
     "lod:calibrate": "node --experimental-transform-types tools/lod.calibrate.mjs"
   },

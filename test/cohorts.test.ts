@@ -447,7 +447,15 @@ describe('abandonment', () => {
     assertBalanced(game.state);
   });
 
-  it('leaves a written-off city something to climb out on', () => {
+  /**
+   * Seven simulated hours at a tenth of a second is 252,000 steps, which is the
+   * longest run in the suite and was already at 86% of vitest's default budget
+   * before the rival term touched `demandTargets`. Its own timeout rather than
+   * a global one, so the next feature that adds a term to the step gets a
+   * failure that says which test is long rather than one that says which
+   * machine was busy.
+   */
+  it('leaves a written-off city something to climb out on', { timeout: 20_000 }, () => {
     const game = at({
       ...housed(2 * COVERAGE_GRACE_PLOTS),
       ...trading(15),
