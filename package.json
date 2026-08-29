@@ -29,7 +29,10 @@
     "rival:calibrate": "node tools/rival.calibrate.mjs",
     "pedestrians:calibrate": "node --experimental-transform-types tools/pedestrians.calibrate.mjs",
     "lod:calibrate": "node --experimental-transform-types tools/lod.calibrate.mjs",
-    "scaffold:calibrate": "node --experimental-transform-types tools/scaffold.calibrate.mjs"
+    "scaffold:calibrate": "node --experimental-transform-types tools/scaffold.calibrate.mjs",
+    "budget": "npm run budget:size && npm run budget:tick",
+    "budget:size": "node tools/budget.size.mjs",
+    "budget:tick": "node --experimental-transform-types tools/budget.tick.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

@@ -1,0 +1,196 @@
+/**
+ * What the build is allowed to weigh, per chunk, and what it actually weighs.
+ *
+ * Unlike the calibrators beside it this one **asserts**: it exits non-zero on a
+ * breach, and CI runs it after `vite build`. A budget that prints a warning
+ * nobody reads is not a budget.
+ *
+ *   npm run build && npm run budget:size
+ *
+ * ---
+ *
+ * **Why per chunk and not one total.** `vite.config.ts` splits three into a
+ * chunk of its own so the game code can be re-downloaded without re-downloading
+ * the renderer. A single total would let the game code grow into the headroom
+ * three leaves — 484 kB of it — and the split would quietly stop meaning
+ * anything while every number still looked fine. So each chunk carries its own
+ * budget and its own argument for the headroom, and an asset that matches no
+ * budget is itself a failure: adding a fourth chunk must be a decision someone
+ * writes down, not something that slips past every existing number.
+ *
+ * **Why raw and gzip both.** Gzip is what the player waits for and raw is what
+ * their browser then has to parse and compile, which on a phone is the larger
+ * half of the wait. A change that leaves gzip alone and doubles raw — a build
+ * that stopped minifying, say — is a real regression and only one of the two
+ * columns can see it.
+ *
+ * **Why sourcemaps are excluded.** `dist/assets/*.map` is 4 MB and no player
+ * ever downloads a byte of it: a browser fetches a sourcemap only when devtools
+ * is open and asks for one. Budgeting it would be budgeting a debugging aid,
+ * and the numbers would swamp everything the player actually waits for.
+ */
+import { gzipSync } from 'node:zlib';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+
+const DIST = 'dist';
+
+/**
+ * The budgets, measured against the build at the commit that added them and
+ * then given the headroom each entry argues for.
+ *
+ * Measured (`vite build`, gzip level 9):
+ *
+ *   index.html                25,977 raw    5,922 gzip
+ *   assets/index-*.css        18,883 raw    4,319 gzip
+ *   assets/index-*.js        192,473 raw   63,576 gzip
+ *   assets/three-*.js        484,540 raw  121,158 gzip
+ *
+ * A build is deterministic for a fixed input, so there is no measurement noise
+ * for the headroom to absorb — the only thing it is for is how often the number
+ * has to be argued about again. Each entry says how much and why, and a breach
+ * is meant to be answered by *either* trimming the chunk or raising the number
+ * in the same commit with the delta written down. The second is not cheating;
+ * it is the whole mechanism.
+ */
+const BUDGETS = [
+  {
+    name: 'index.html',
+    match: /^index\.html$/,
+    // +10%. The HUD's markup, and it grows a panel at a time — nine tab panels
+    // and their rows are all in here. 10% is about one more panel, so a feature
+    // that adds one lands inside the budget and a feature that adds three does
+    // not, which is the granularity worth being told about.
+    raw: 28_600,
+    gzip: 6_520,
+  },
+  {
+    name: 'assets/index-*.css',
+    match: /^assets\/index-[\w-]+\.css$/,
+    // +15%. Small in absolute terms — 650 gzipped bytes of headroom, about a
+    // panel's worth of rules — and the percentage is loose because the base is
+    // small enough that a tighter one would trip on a rounded corner. It is
+    // also the number self-hosted web fonts have to be checked against: an
+    // @font-face block per family per weight is what would eat this.
+    raw: 21_700,
+    gzip: 4_970,
+  },
+  {
+    name: 'assets/index-*.js',
+    match: /^assets\/index-[\w-]+\.js$/,
+    // +12%. This is the chunk that is *supposed* to move: it is the game. 12%
+    // is 7.6 kB gzipped, which is roughly one substantial feature — so one
+    // lands inside the budget and the second in a row has to be argued for.
+    // That is the right place for the conversation to happen.
+    raw: 215_600,
+    gzip: 71_200,
+  },
+  {
+    name: 'assets/three-*.js',
+    match: /^assets\/three-[\w-]+\.js$/,
+    // +5%, and it is deliberately the tightest number here. The whole reason
+    // this chunk exists is that it does *not* move: it changes when three's
+    // version changes, or when the game reaches into a part of three it was not
+    // using. 5% absorbs a minor release and trips on a new subsystem — a
+    // loader, a controls module, BufferGeometryUtils — which is exactly the
+    // change that should require someone to say out loud that it is worth it.
+    raw: 508_800,
+    gzip: 127_200,
+  },
+];
+
+/** Everything the build put in `dist`, bar the sourcemaps. See the header. */
+function assets(dir = DIST, out = []) {
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) {
+      assets(path, out);
+      continue;
+    }
+    if (path.endsWith('.map')) continue;
+    const bytes = readFileSync(path);
+    out.push({
+      path: relative(DIST, path).split('\\').join('/'),
+      raw: bytes.length,
+      gzip: gzipSync(bytes, { level: 9 }).length,
+    });
+  }
+  return out;
+}
+
+const pad = (v, w) => String(v).padStart(w);
+const thou = (v, w) => pad(Number(v).toLocaleString('en-GB'), w);
+const pct = (actual, budget) => `${actual > budget ? '+' : ''}${(((actual - budget) / budget) * 100).toFixed(1)}%`;
+
+let built;
+try {
+  built = assets();
+} catch {
+  console.error(`\n  No ${DIST}/ to measure. Run \`npm run build\` first.\n`);
+  process.exit(2);
+}
+
+const failures = [];
+const rows = [];
+const claimed = new Set();
+
+for (const budget of BUDGETS) {
+  const found = built.filter((asset) => budget.match.test(asset.path));
+  if (found.length === 0) {
+    failures.push(`${budget.name}: no asset in ${DIST}/ matches it — did the build output change?`);
+    continue;
+  }
+  for (const asset of found) claimed.add(asset.path);
+  // Summed rather than "the first one": a budget that matched two chunks and
+  // measured one would be a budget with a hole in it.
+  const raw = found.reduce((n, a) => n + a.raw, 0);
+  const gzip = found.reduce((n, a) => n + a.gzip, 0);
+  rows.push({ name: budget.name, raw, gzip, budget });
+  for (const [what, actual, allowed] of [
+    ['raw', raw, budget.raw],
+    ['gzip', gzip, budget.gzip],
+  ]) {
+    if (actual <= allowed) continue;
+    failures.push(
+      `${budget.name} (${what}): budget ${allowed.toLocaleString('en-GB')} B, ` +
+        `actual ${actual.toLocaleString('en-GB')} B, ` +
+        `over by ${(actual - allowed).toLocaleString('en-GB')} B (${pct(actual, allowed)})`,
+    );
+  }
+}
+
+// An asset nobody budgeted is a hole in the whole scheme, so it is a breach in
+// its own right: a fourth chunk would otherwise arrive weighing anything at all
+// and every existing number would still read green.
+for (const asset of built) {
+  if (claimed.has(asset.path)) continue;
+  failures.push(
+    `${asset.path}: no budget covers it (${asset.raw.toLocaleString('en-GB')} B raw, ` +
+      `${asset.gzip.toLocaleString('en-GB')} B gzip). Add one to tools/budget.size.mjs.`,
+  );
+}
+
+console.log('\nBundle budgets\n');
+console.log('  chunk                        raw     budget      gzip     budget    headroom');
+console.log('  ---------------------------------------------------------------------------');
+for (const row of rows) {
+  const worst = Math.max(row.raw / row.budget.raw, row.gzip / row.budget.gzip);
+  console.log(
+    `  ${row.name.padEnd(22)} ${thou(row.raw, 9)} ${thou(row.budget.raw, 10)}` +
+      ` ${thou(row.gzip, 9)} ${thou(row.budget.gzip, 10)} ${pad(`${((1 - worst) * 100).toFixed(1)}%`, 11)}`,
+  );
+}
+
+if (failures.length === 0) {
+  console.log('\n  Every chunk inside its budget.\n');
+  process.exit(0);
+}
+
+console.error('\n  Over budget:\n');
+for (const line of failures) console.error(`    ${line}`);
+console.error(
+  '\n  Either trim the chunk or raise the number in tools/budget.size.mjs — in the\n' +
+    '  same commit, with the delta and the reason written down. The budget exists\n' +
+    '  to make growth deliberate, not to make it impossible.\n',
+);
+process.exit(1);
