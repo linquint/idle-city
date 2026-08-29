@@ -35,7 +35,11 @@ import {
   shopCapacity,
   siteCapacity,
 } from '../src/sim/economy';
-import { BUILDABLE_PARKS_PER_DISTRICT } from '../src/sim/layout';
+import {
+  BUILDABLE_PARKS_PER_DISTRICT,
+  LANDMARK_LARGE_SITES_PER_DISTRICT,
+  LANDMARK_SMALL_SITES_PER_DISTRICT,
+} from '../src/sim/layout';
 import { load, migrate, save, SAVE_KEY, secondsAway } from '../src/sim/save';
 import { Game } from '../src/sim/game';
 import { createState, SAVE_VERSION, type GameState } from '../src/sim/state';
@@ -208,6 +212,7 @@ describe('migration', () => {
       schools: 1e9,
       universities: 1e9,
       depots: 1e9,
+      wasteDepots: 1e9,
       homes: 1e9,
       industry: 1e9,
     })!;
@@ -691,8 +696,15 @@ describe('the v6 migration', () => {
       savedAt: 1_000,
     };
     const back = migrate(v5, 2_000)!;
+    // The cash is *not* 4,321, and that is v15's refund rather than a leak. The
+    // sixth civic type moved the hospital's `plots` from 20 to 24, so a city of
+    // twenty housing plots is allowed one hospital where it was allowed two —
+    // `serviceAllowed` is `floor(plots / 24) + 1` — and the second is handed
+    // back at what it cost. 130 x 1.35 is 175.50, and 4,321 + 175.50 is
+    // 4,496.50. See the clamp in `migrate`, which refunds rather than deleting.
+    expect(back.hospitals).toBe(1);
+    expect(back.cash).toBeCloseTo(4_321 + 130 * 1.35, 6);
     expect(back).toMatchObject({
-      cash: 4_321,
       homes: 20,
       shops: 12,
       industry: 5,
@@ -792,11 +804,15 @@ describe('landmarks across a save', () => {
     expect(kept.museums).toBe(3);
     expect(kept.stadiums).toBe(2);
 
-    // One of each size a district, so a doctored save gets the land's answer.
+    // Two small sites and one large a district, so a doctored save gets the
+    // land's answer. Read off the constants rather than typed, because the
+    // small count moved when culture took the eleventh square — see
+    // FRONTAGE_TARGET.landmarkSmallSites.
     const stuffed = migrate({ homes: 9, districts: 2, museums: 900, stadiums: 900 }, 0)!;
     expect(stuffed.museums).toBe(landmarkSiteCapacity(stuffed, 'museum'));
     expect(stuffed.stadiums).toBe(landmarkSiteCapacity(stuffed, 'stadium'));
-    expect(stuffed.museums).toBe(2);
+    expect(stuffed.museums).toBe(2 * LANDMARK_SMALL_SITES_PER_DISTRICT);
+    expect(stuffed.stadiums).toBe(2 * LANDMARK_LARGE_SITES_PER_DISTRICT);
   });
 
   it('survives a round trip with the rest of the city', () => {

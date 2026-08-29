@@ -282,10 +282,10 @@ draw calls for what is fundamentally the same box.
   other two zones.
 - What it costs is **triangles rather than draw calls, and it is the largest
   single cost in the renderer**: 49 districts of nothing but first-rung
-  buildings go from 597k triangles to 1.49M, of which 1.2M is also in the shadow
+  buildings go from 572k triangles to 1.42M, of which 1.2M is also in the shadow
   pass. Commerce is most of it and industry the least — that is the plot count
-  rather than the models, 45 commercial against 24 residential and 13
-  industrial. `npm run lod:calibrate` part 1b is the measurement, and the note
+  rather than the models, 45 commercial plots a district against 24 residential
+  and 9 industrial. `npm run lod:calibrate` part 1b is the measurement, and the note
   on `ModelMeshes` sets out the two optimisations — a casting/flat split, and a
   silhouette geometry driven by `DetailMask` — that are deliberately not made
   until a GPU says which is needed.

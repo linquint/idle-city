@@ -23,7 +23,9 @@ import {
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
   IGNITION_HAZARD_CAP,
+  MAX_ACTIVE_CALLS,
   MAX_ACTIVE_FIRES,
+  POLICE_RESPONSE,
   LEVEL_EDUCATION,
   LEVELS,
   MERGE_LEVEL,
@@ -36,6 +38,8 @@ import {
   type Landmark,
   type Service,
   type Terminal,
+  type TransitLine,
+  type Culture,
 } from './config.ts';
 import {
   annexCost,
@@ -63,6 +67,10 @@ import {
   canBuildHighway,
   canBuildShop,
   canBuildTerminal,
+  canBuildLine,
+  lineCost,
+  canBuildCulture,
+  cultureCost,
   canMergeParcel,
   cityHallCost,
   civicBuildings,
@@ -107,6 +115,9 @@ import {
   residents,
   housingPlots,
   resolvesAt,
+  responseResolvesAt,
+  missesDeadline,
+  callRate,
   standingOf,
   cohortTotal,
   countOf,
@@ -126,6 +137,7 @@ import {
 } from './economy.ts';
 import {
   createState,
+  type Call,
   type Fire,
   type GameState,
   type LevelCohort,
@@ -142,6 +154,16 @@ import {
 const FIRE_STREAM = 0x1f5e3d;
 
 /**
+ * The call process's own stream.
+ *
+ * A different salt rather than a shared cursor, and that is what keeps the two
+ * emergencies independent: on one stream, a city that had a fire would find its
+ * next call drawn from a different place in the sequence than a city that had
+ * not, and the two mechanics would be silently coupled through the hash.
+ */
+const CALL_STREAM = 0x2b91c7;
+
+/**
  * Waiting time, in expected fires, before the ignition after `cursor`.
  *
  * `-ln(U)` is the exponential waiting time of a Poisson process and has mean 1,
@@ -152,6 +174,10 @@ const FIRE_STREAM = 0x1f5e3d;
  */
 const ignitionWait = (cursor: number): number =>
   -Math.log(1 - hash01(mixSeed(FIRE_STREAM, cursor)));
+
+/** The same exponential waiting time, on the call stream. */
+const callWait = (cursor: number): number =>
+  -Math.log(1 - hash01(mixSeed(CALL_STREAM, cursor)));
 
 /** Backstop on the ignition loop. Well above what IGNITION_HAZARD_CAP can spend. */
 const IGNITION_GUARD = IGNITION_HAZARD_CAP * 4;
@@ -302,6 +328,17 @@ export interface AwayReport {
   firesExtinguished: number;
   firesLost: number;
   /**
+   * What the police were called to, and how that went.
+   *
+   * The same three lines as the fires and reported for the same reason: an
+   * absence that raised the crime bar and said nothing about why is an absence
+   * the player cannot learn from. The difference is that no building is ever
+   * named — a missed call costs the crime it carried and nothing else.
+   */
+  callsRaised: number;
+  callsAnswered: number;
+  callsMissed: number;
+  /**
    * Buildings boarded up while away, and buildings brought back.
    *
    * Reported for the same reason fires are: a player who returns to a city with
@@ -362,6 +399,9 @@ export class Game {
   private firesStarted = 0;
   private firesExtinguished = 0;
   private firesLost = 0;
+  private callsRaised = 0;
+  private callsAnswered = 0;
+  private callsMissed = 0;
   /** Lifetime decay tallies. `catchUp` differences them like the fire ones. */
   private abandoned = 0;
   private recovered = 0;
@@ -554,6 +594,14 @@ export class Game {
     // building was lost in rather than a tenth of a second later.
     this.resolveFires();
     this.igniteFires(dt);
+    // The calls next, in the same order and for the same reason: resolve what
+    // was open at the top of the tick against the coverage that was standing,
+    // then take the new ones. They come after the fires rather than before
+    // because `crime` is read by `integrateHappiness` above and a call raised
+    // here is a call the *next* tick's mood answers — which is the same one
+    // tick of lag every event in this loop has.
+    this.resolveCalls();
+    this.raiseCalls(dt);
     // The surveyor before annexation, so a district that is about to freeze gets
     // the last word on its own split before the next one arrives and fixes it.
     this.survey(dt);
@@ -808,6 +856,114 @@ export class Game {
     setMerged(s, kind, Math.min(mergedOf(s, kind), countOf(s, kind)));
   }
 
+  /**
+   * Closes every call whose clock has run out, and says which way it went.
+   *
+   * `resolveFires`'s shape with the consequence taken out, and the missing
+   * consequence is the design rather than an omission: a fire the brigade
+   * misses costs a building, and a call the police miss costs the crime it
+   * carried while it sat. Nothing is destroyed, because `abandonedR` has
+   * already settled what permanent loss does to an idle game.
+   *
+   * The response time is read fresh here too, so a station opened while a call
+   * is waiting turns a missed call into an answered one — the property fire's
+   * own comment defends and the one that makes buying a station mid-crisis
+   * worth doing.
+   */
+  private resolveCalls(): void {
+    const s = this.inner;
+    if (s.calls.length === 0) return;
+    const limit = responseResolvesAt(s, POLICE_RESPONSE);
+    const missed = missesDeadline(s, POLICE_RESPONSE);
+
+    let write = 0;
+    for (let i = 0; i < s.calls.length; i++) {
+      const call = s.calls[i] as Call;
+      if (s.elapsed - call.startedAt < limit) {
+        s.calls[write++] = call;
+        continue;
+      }
+      // Only the miss is announced. An answered call is the system working,
+      // and a log that said so would be the one stream loud enough to fragment
+      // every other — see the `call-missed` note in `events.ts`. Both halves
+      // are still counted, because the away sheet reports both.
+      if (missed) {
+        this.callsMissed++;
+        this.emit({ kind: 'call-missed', at: s.elapsed, zone: call.kind, count: 1 });
+      } else {
+        this.callsAnswered++;
+      }
+    }
+    s.calls.length = write;
+    this.pruneCalls();
+  }
+
+  /** A call about a building the city no longer owns stops being a call. */
+  private pruneCalls(): void {
+    const s = this.inner;
+    let write = 0;
+    for (const call of s.calls) {
+      if (call.index < burnableOf(s, call.kind)) s.calls[write++] = call;
+    }
+    s.calls.length = write;
+  }
+
+  /**
+   * Accumulates call pressure and spends it.
+   *
+   * `igniteFires` exactly: a hazard integrated at `rate x dt` and spent against
+   * exponential waiting times, which is the one form of a Poisson process that
+   * gives the same answer at any step size. A Bernoulli trial per tick would
+   * make a 60-second catch-up a different distribution from 600 tenth-second
+   * ticks, and the away report would describe a city the player never had.
+   */
+  private raiseCalls(dt: number): void {
+    const s = this.inner;
+    const rate = callRate(s);
+    if (rate <= 0 || burnableBuildings(s) <= 0) return;
+    s.callHazard = Math.min(IGNITION_HAZARD_CAP, s.callHazard + rate * dt);
+
+    for (let guard = 0; guard < IGNITION_GUARD; guard++) {
+      const wait = callWait(s.callCursor);
+      if (s.callHazard < wait) break;
+      s.callHazard -= wait;
+      s.callCursor++;
+      this.raise();
+    }
+  }
+
+  /**
+   * Takes one call, about a building drawn in proportion to how many there are.
+   *
+   * The draws are spent even when the call cannot be placed — the same rule
+   * `ignite` states and for the same reason: a city sitting at
+   * MAX_ACTIVE_CALLS for an hour would otherwise bank an hour of pressure and
+   * let all of it go the moment a slot opened.
+   *
+   * Two calls to the same building are allowed where two fires are not. A house
+   * cannot burn down twice; a street where something happens twice is a street
+   * with a problem, and refusing the second draw would quietly cap the rate at
+   * one call per building.
+   */
+  private raise(): void {
+    const s = this.inner;
+    const kindRoll = hash01(mixSeed(CALL_STREAM, s.callCursor));
+    s.callCursor++;
+    const slotRoll = hash01(mixSeed(CALL_STREAM, s.callCursor));
+    s.callCursor++;
+    if (s.calls.length >= MAX_ACTIVE_CALLS) return;
+
+    const pick = kindRoll * burnableBuildings(s);
+    const kind: ZoneKind =
+      pick < s.homes ? 'home' : pick < s.homes + s.shops ? 'shop' : 'industry';
+    const of = burnableOf(s, kind);
+    if (of <= 0) return;
+    const index = Math.min(of - 1, Math.floor(slotRoll * of));
+
+    s.calls.push({ kind, index, startedAt: s.elapsed });
+    this.callsRaised++;
+  }
+
   /** A fire whose building no longer exists stops being a fire. */
   private pruneFires(): void {
     const s = this.inner;
@@ -901,6 +1057,7 @@ export class Game {
     s.schoolStaff = fill(s.schoolStaff, s.schools);
     s.universityStaff = fill(s.universityStaff, s.universities);
     s.depotStaff = fill(s.depotStaff, s.depots);
+    s.wasteStaff = fill(s.wasteStaff, s.wasteDepots);
     // Plants ramp like everything else on the payroll, so a plant opened this
     // instant is not yet carrying the grid — and an unpaid wage bill takes it
     // back the same way. See `powerSupply`, which reads this.
@@ -1303,6 +1460,43 @@ export class Game {
   }
 
   /**
+   * A library or a theatre, on the culture square its district reserves.
+   *
+   * Neither carries mood, which is the whole of what makes them two buildings
+   * rather than one: a library answers the idleness half of `crimePressure` and
+   * a theatre lands an audience on `berthsLanding`. See CULTURE, which costs
+   * the fourth-weight and bracket-modifier readings that were refused.
+   */
+  buildCulture(culture: Culture): boolean {
+    const s = this.inner;
+    if (!canBuildCulture(s, culture)) return false;
+    s.cash -= cultureCost(s, culture);
+    if (culture.key === 'library') s.libraries++;
+    else s.theatres++;
+    return true;
+  }
+
+  /**
+   * A line joins two districts, on the k-th pair `linePairAt` enumerates.
+   *
+   * Nothing about where it runs is stored: the count is the whole of it, and
+   * the route falls out of the ordinal, the district count and the seed exactly
+   * as a landmark's site falls out of its ordinal. What it buys is freight —
+   * `exportMarket` — and quieter roads, and neither is a happiness weight: the
+   * three sum to exactly 1 and the network lands in the modifier bracket
+   * through congestion, which is the route every mood term since the police
+   * re-calibration has taken. See TRANSIT_LINES.
+   */
+  buildLine(line: TransitLine): boolean {
+    const s = this.inner;
+    if (!canBuildLine(s, line)) return false;
+    s.cash -= lineCost(s, line);
+    if (line.key === 'tram') s.tramLines++;
+    else s.railLines++;
+    return true;
+  }
+
+  /**
    * A terminal takes one of the berths the city's coastal districts carry.
    *
    * The two halves pay back in different currencies and neither is rent: a
@@ -1425,6 +1619,9 @@ export class Game {
     } else if (service.key === 'transit') {
       s.depotStaff = staffAfterBuild(s.depotStaff, s.depots);
       s.depots++;
+    } else if (service.key === 'waste') {
+      s.wasteStaff = staffAfterBuild(s.wasteStaff, s.wasteDepots);
+      s.wasteDepots++;
     } else {
       s.universityStaff = staffAfterBuild(s.universityStaff, s.universities);
       s.universities++;
@@ -1658,6 +1855,9 @@ export class Game {
     this.firesStarted = 0;
     this.firesExtinguished = 0;
     this.firesLost = 0;
+    this.callsRaised = 0;
+    this.callsAnswered = 0;
+    this.callsMissed = 0;
     this.abandoned = 0;
     this.recovered = 0;
     this.annexed = 0;
@@ -1871,6 +2071,9 @@ export class Game {
       started: this.firesStarted,
       extinguished: this.firesExtinguished,
       lost: this.firesLost,
+      called: this.callsRaised,
+      answered: this.callsAnswered,
+      missed: this.callsMissed,
       abandoned: this.abandoned,
       recovered: this.recovered,
       merged: this.merged,
@@ -1941,6 +2144,9 @@ export class Game {
       firesStarted: this.firesStarted - before.started,
       firesExtinguished: this.firesExtinguished - before.extinguished,
       firesLost: this.firesLost - before.lost,
+      callsRaised: this.callsRaised - before.called,
+      callsAnswered: this.callsAnswered - before.answered,
+      callsMissed: this.callsMissed - before.missed,
       abandoned: this.abandoned - before.abandoned,
       recovered: this.recovered - before.recovered,
       merges: this.merged - before.merged,

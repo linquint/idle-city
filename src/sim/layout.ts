@@ -7,21 +7,38 @@ import {
   FRONTAGE_TARGET,
   ZONE_FLOOR,
   LANDMARKS,
+  MAX_DISTRICTS,
   SEED,
   TARGET_PLOTS,
   type Landmark,
 } from './config.ts';
 
 /**
- * How many types share the 2x2 civic sites: hospital, police, fire, school and
- * the transit depot.
+ * How many types share the 2x2 civic sites: hospital, police, fire, school, the
+ * transit depot and the waste depot.
  *
  * A number rather than an import of CIVIC_SERVICES, because `layout.ts` is the
  * bottom of the simulation and `economy.ts` already depends on it — taking the
  * list from config here would work, but the count is the only part of it this
  * file needs and `civicSiteFor` is called with the offset anyway.
+ *
+ * Six since the waste depot, and it has to move with `CIVIC_SERVICES.length` or
+ * the two halves of the interleave disagree: `siteCapacity` divides by the
+ * table's length to say how many sites a type may have, and this multiplies to
+ * say which square the i-th of them stands on. At five here and six there, two
+ * types are handed the same square — which is exactly what
+ * `test/services.test.ts` caught.
  */
-const CIVIC_TYPES = 5;
+const CIVIC_TYPES = 6;
+
+/**
+ * How many types share the 2x2 culture sites: the library and the theatre.
+ *
+ * A number rather than an import for the reason CIVIC_TYPES is one — this file
+ * is the bottom of the simulation and the count is the only part of the table
+ * it needs.
+ */
+const CULTURE_TYPES = 2;
 
 export interface Coord {
   /** Global grid column. Districts tile this space, so it goes negative. */
@@ -626,6 +643,17 @@ export interface DistrictPlan {
   readonly landmarksSmall: readonly CivicSite[];
   readonly sites: readonly CivicSite[];
   /**
+   * 2x2 culture sites: the library and the theatre, sliced after the civic six
+   * and before the city hall.
+   *
+   * A class of its own rather than a second entry on `landmarksSmall`, and the
+   * measurement is in FRONTAGE_TARGET.cultureSites: two small-landmark sites a
+   * district would have doubled the museum's allowance and taken museums-only
+   * coverage from 46% of a one-district city to 83%, which is LANDMARK_MOOD
+   * becoming a way to skip the hospital.
+   */
+  readonly cultures: readonly CivicSite[];
+  /**
    * 2x2 city hall sites, sliced *after* the civic six.
    *
    * After, and that is the whole of house rule four made concrete: `siteCapacity`
@@ -700,14 +728,21 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
   for (const site of universities) for (const c of site.cells) reserved.add(c);
   for (const site of landmarksLarge) for (const c of site.cells) reserved.add(c);
   const squares = civicSites(layout, reserved);
+  // Sliced in the order the claim has always been sliced, with culture appended
+  // *after* the city hall rather than beside the small landmark. That ordering
+  // is deliberate: it leaves the museum on square 0 and the civic six on 1..6
+  // exactly where they were, so the only thing the eleventh square moves inside
+  // a plan is the hall, the plant and the spare.
   const landmarksSmall = squares.slice(0, FRONTAGE_TARGET.landmarkSmallSites);
   const sites = squares.slice(
     FRONTAGE_TARGET.landmarkSmallSites,
     FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites,
   );
   const afterCivic = FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites;
-  const cityHalls = squares.slice(afterCivic, afterCivic + FRONTAGE_TARGET.cityHallSites);
-  const afterHall = afterCivic + FRONTAGE_TARGET.cityHallSites;
+  const cultures = squares.slice(afterCivic, afterCivic + FRONTAGE_TARGET.cultureSites);
+  const afterCulture = afterCivic + FRONTAGE_TARGET.cultureSites;
+  const cityHalls = squares.slice(afterCulture, afterCulture + FRONTAGE_TARGET.cityHallSites);
+  const afterHall = afterCulture + FRONTAGE_TARGET.cityHallSites;
   const powerPlants = squares.slice(afterHall, afterHall + FRONTAGE_TARGET.powerSites);
   const spareSquares = squares.slice(afterHall + FRONTAGE_TARGET.powerSites);
 
@@ -730,6 +765,7 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
     landmarksLarge,
     landmarksSmall,
     sites,
+    cultures,
     cityHalls,
     powerPlants,
     spareSquares,
@@ -758,12 +794,14 @@ function onTarget(plan: DistrictPlan): boolean {
     plan.industrial.length === FRONTAGE_TARGET.industrial &&
     plan.sites.length === FRONTAGE_TARGET.civicSites &&
     plan.landmarksSmall.length === FRONTAGE_TARGET.landmarkSmallSites &&
+    plan.cultures.length === FRONTAGE_TARGET.cultureSites &&
     plan.cityHalls.length === FRONTAGE_TARGET.cityHallSites &&
     plan.powerPlants.length === FRONTAGE_TARGET.powerSites &&
     plan.spareSquares.length ===
       FRONTAGE_TARGET.squares -
         FRONTAGE_TARGET.civicSites -
         FRONTAGE_TARGET.landmarkSmallSites -
+        FRONTAGE_TARGET.cultureSites -
         FRONTAGE_TARGET.cityHallSites -
         FRONTAGE_TARGET.powerSites &&
     plan.universities.length === FRONTAGE_TARGET.universitySites &&
@@ -779,7 +817,7 @@ function onTarget(plan: DistrictPlan): boolean {
  * probability of exhausting them is 3.9e-8 per district, or about 2e-6 across a
  * full 49-district city — measured over 20,000 plans, not assumed.
  */
-export const FRONTAGE_MAX_ATTEMPTS = 512;
+export const FRONTAGE_MAX_ATTEMPTS = 1_024;
 
 export function planFor(seed: number): DistrictPlan {
   for (let i = 0; i < FRONTAGE_MAX_ATTEMPTS; i++) {
@@ -912,6 +950,7 @@ export const SPARE_PLOTS_PER_DISTRICT =
   (FRONTAGE_TARGET.squares -
     FRONTAGE_TARGET.civicSites -
     FRONTAGE_TARGET.landmarkSmallSites -
+    FRONTAGE_TARGET.cultureSites -
     FRONTAGE_TARGET.cityHallSites -
     FRONTAGE_TARGET.powerSites) *
     4;
@@ -939,6 +978,7 @@ export const CIVIC_SITES_PER_DISTRICT = FRONTAGE_TARGET.civicSites;
 export const UNIVERSITY_SITES_PER_DISTRICT = FRONTAGE_TARGET.universitySites;
 export const LANDMARK_LARGE_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkLargeSites;
 export const LANDMARK_SMALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkSmallSites;
+export const CULTURE_SITES_PER_DISTRICT = FRONTAGE_TARGET.cultureSites;
 export const CITY_HALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.cityHallSites;
 export const POWER_SITES_PER_DISTRICT = FRONTAGE_TARGET.powerSites;
 
@@ -1085,6 +1125,192 @@ export function coastalDistrictAt(i: number, districts: number): number {
  */
 export function portDistrict(districts: number): number {
   return coastalDistrictAt(0, districts);
+}
+
+// ------------------------------------------------------------- the network
+
+/**
+ * The two rungs of the network above the depot.
+ *
+ * A depot covers plots inside a district; a line joins one district to another.
+ * The whole of the difference between the two rungs is geometry: a tram runs
+ * along a street, so its two ends are neighbours, and a train runs on its own
+ * alignment, so its two ends need not be. Everything else about them — cost,
+ * what they carry — lives in TRANSIT_LINES, because it is balance rather than
+ * shape.
+ */
+export type LineKind = 'tram' | 'rail';
+
+/** One line, as the two districts it joins. Never stored; always derived. */
+export interface LinePair {
+  readonly a: number;
+  readonly b: number;
+}
+
+/**
+ * Which districts the k-th line of a kind joins.
+ *
+ * The same rule `civicSiteFor` follows and for the same reason: the save holds
+ * a count, so the k-th line's route has to be recoverable from the count, the
+ * district count and the seed alone. A stored route would be the fourth
+ * exception to "the save is counts" and, unlike the three that exist, it would
+ * grow with the thing the player buys.
+ *
+ * The enumeration is ordered by the *later* district of each pair, then by a
+ * seeded hash inside that group. Ordering that way is what makes it stable
+ * under growth: annexing a district appends pairs to the end of the list and
+ * reorders nothing before them, which is exactly the property `surveyedR` needs
+ * of the zoning arrays and `ParcelBook` needs of the plot lists. A single
+ * seeded shuffle over the whole list would have been simpler to write and would
+ * have re-routed every existing line the moment the city annexed.
+ *
+ * Trams take neighbouring pairs — Manhattan distance 1 in district space, which
+ * is "there is a street between them". Rail takes everything else, longest
+ * first inside each group, so a train visibly crosses the map rather than
+ * running one stop.
+ */
+const pairCache = new Map<LineKind, (LinePair | null)[]>();
+
+/**
+ * The k-th line joins the k-th district the network has not reached yet.
+ *
+ * One pair per *later* district, and that single rule is what makes a network
+ * out of a list of pairs. Every candidate pair a district offers would have
+ * given rail a hub: the enumeration is ordered by the later end, so the first
+ * dozen rail lines would all have hung off the oldest districts and sixteen
+ * lines would have touched eight places. One pair per later end grows the
+ * network outward instead — line k reaches district k+1 — so the lines form a
+ * tree, the union of their ends is a connected network rather than an accident,
+ * and `networkedDistricts` needs no graph walk to say so.
+ *
+ * It is also what keeps the list stable under annexation, which is the property
+ * the save actually needs: a district appends its own pair to the end and
+ * reorders nothing before it, exactly as `surveyedR` appends and `ParcelBook`
+ * appends. A seeded shuffle over the whole list would have re-routed every line
+ * the city owned the moment it bought land.
+ *
+ * Which earlier district the pair takes is where the two rungs differ, and it is
+ * geometry rather than balance: a tram runs along a street, so it takes a
+ * *neighbour* — Manhattan distance 1 in district space — and a train runs on its
+ * own alignment, so it takes the *furthest* earlier district there is. A
+ * district the water has cut off from every earlier neighbour offers no tram
+ * pair at all and the list skips it; only district 0 offers no pair of either
+ * kind, because it has nothing earlier to join.
+ *
+ * "Furthest" rather than "furthest, and at least two districts away", which is
+ * what this took at first and what left the oldest district off the railway
+ * forever: the centre of the spiral is rarely the furthest thing from anywhere,
+ * so nothing ever picked it and a complete network read 11 districts out of 12.
+ * Rail *may* cross the map; forbidding it the one short hop it is ever offered
+ * bought a rule and cost the city centre its station.
+ */
+function scanPairs(kind: LineKind, districts: number): (LinePair | null)[] {
+  let pairs = pairCache.get(kind);
+  if (pairs === undefined) {
+    pairs = [];
+    pairCache.set(kind, pairs);
+  }
+  const salt = kind === 'tram' ? 0x7a11 : 0x9a11;
+  while (pairs.length < districts - 1) {
+    const b = pairs.length + 1;
+    const far = districtCoord(b);
+    let best: LinePair | null = null;
+    let bestRank = Infinity;
+    for (let a = 0; a < b; a++) {
+      const near = districtCoord(a);
+      const gap = Math.abs(far.x - near.x) + Math.abs(far.z - near.z);
+      if (kind === 'tram' && gap !== 1) continue;
+      // Rail takes the longest span it can; the hash breaks ties and is the
+      // whole of the tram ordering. Both are pure in (a, b, SEED).
+      const jitter = (mixSeed(SEED ^ salt, a * 131 + b) >>> 8) / 0x1000000;
+      const rank = kind === 'rail' ? -gap + jitter : jitter;
+      if (rank < bestRank) {
+        bestRank = rank;
+        best = { a, b };
+      }
+    }
+    pairs.push(best);
+  }
+  return pairs;
+}
+
+/**
+ * How many lines of a kind the city's land could ever carry.
+ *
+ * The bound is the pair list, which is the same kind of bound
+ * `terminalCapacity` has: a line needs two districts to join, so a village has
+ * nowhere to run one. It grows with the district count and never with anything
+ * the player buys.
+ */
+export function linePairCapacity(kind: LineKind, districts: number): number {
+  const d = Math.max(0, Math.min(MAX_DISTRICTS, Math.floor(districts)));
+  const pairs = scanPairs(kind, d);
+  // Bounded on every read rather than trusted to the cache's length, which is
+  // the property `coastalDistricts` states in its own comment and needs for the
+  // same reason: the list only ever grows, and `reset` takes the city back to
+  // one district. Entry i joins district i + 1, so the city's own pairs are the
+  // first d - 1 of them however far the scan has run for a larger city.
+  let n = 0;
+  for (let i = 0; i < d - 1 && i < pairs.length; i++) if (pairs[i] !== null) n++;
+  return n;
+}
+
+/** The k-th line of a kind, or null when the city has no such pair to join. */
+export function linePairAt(kind: LineKind, k: number, districts: number): LinePair | null {
+  if (k < 0) return null;
+  const d = Math.max(0, Math.min(MAX_DISTRICTS, Math.floor(districts)));
+  const pairs = scanPairs(kind, d);
+  let seen = 0;
+  for (let i = 0; i < d - 1 && i < pairs.length; i++) {
+    const pair = pairs[i];
+    if (pair === undefined || pair === null) continue;
+    if (seen === k) return pair;
+    seen++;
+  }
+  return null;
+}
+
+/**
+ * Districts with at least one line touching them, out of the first `districts`.
+ *
+ * Memoised against the three counts it depends on, exactly as
+ * `landmarkPlotsCovered` is and for the same reason: `networkReach` is read
+ * from `demandTargets` ten times a second and this walks the line list.
+ *
+ * The union of endpoints rather than the largest connected component, and that
+ * is a decision rather than a shortcut. A component walk would be the more
+ * literal reading of "connected", but two lines at opposite ends of the city
+ * genuinely serve four districts whether or not a train can run between them —
+ * and the walk would put a graph traversal on the 10 Hz path to say something
+ * the player cannot see. What the union cannot express is a network one line
+ * short of joining up, and nothing in the model reads that.
+ */
+let networkStamp = '';
+let networkCached = 0;
+
+export function networkedDistricts(
+  tramLines: number,
+  railLines: number,
+  districts: number,
+): number {
+  const stamp = `${tramLines}:${railLines}:${districts}`;
+  if (stamp === networkStamp) return networkCached;
+  const touched = new Set<number>();
+  for (const [kind, lines] of [
+    ['tram', tramLines],
+    ['rail', railLines],
+  ] as const) {
+    const room = Math.min(lines, linePairCapacity(kind, districts));
+    for (let k = 0; k < room; k++) {
+      const pair = linePairAt(kind, k, districts);
+      if (pair === null) break;
+      touched.add(pair.a);
+      touched.add(pair.b);
+    }
+  }
+  networkStamp = stamp;
+  networkCached = touched.size;
+  return touched.size;
 }
 
 /**
@@ -1672,6 +1898,8 @@ interface DistrictPlots {
   readonly landmarksLarge: Coord[];
   /** Lower-left plot of each 2x2 landmark site, in site order. */
   readonly landmarksSmall: Coord[];
+  /** Lower-left plot of each 2x2 culture site, in site order. */
+  readonly cultures: Coord[];
   /** Lower-left plot of each 2x2 city hall site, in site order. */
   readonly cityHalls: Coord[];
   /** Lower-left plot of each 2x2 power plant site, in site order. */
@@ -1737,6 +1965,7 @@ function placeDistrict(index: number, z: Zoning): DistrictPlots {
     universities: plan.universities.map((site) => toGlobal(site.cell)),
     landmarksLarge: plan.landmarksLarge.map((site) => toGlobal(site.cell)),
     landmarksSmall: plan.landmarksSmall.map((site) => toGlobal(site.cell)),
+    cultures: plan.cultures.map((site) => toGlobal(site.cell)),
     cityHalls: plan.cityHalls.map((site) => toGlobal(site.cell)),
     powerPlants: plan.powerPlants.map((site) => toGlobal(site.cell)),
     spareSquares: plan.spareSquares.map((site) => toGlobal(site.cell)),
@@ -1801,6 +2030,14 @@ export class CityLayout {
    */
   private readonly _landmarksLarge: Coord[] = [];
   private readonly _landmarksSmall: Coord[] = [];
+  /**
+   * Culture sites, one a district, appended exactly as the others are.
+   *
+   * Its own list rather than a second small-landmark entry, so the museum's
+   * allowance does not double — see FRONTAGE_TARGET.cultureSites, which carries
+   * the coverage measurement that decided it.
+   */
+  private readonly _cultures: Coord[] = [];
   /**
    * City hall sites, one per district and only ever one of them built on.
    *
@@ -1918,7 +2155,8 @@ export class CityLayout {
     for (const list of [
       this._residential, this._commercial, this._industrial, this._scrub,
       this._civic, this._universities, this._landmarksLarge, this._landmarksSmall,
-      this._cityHalls, this._powerPlants, this._spareSquares, this._parks, this._spare,
+      this._cultures, this._cityHalls, this._powerPlants, this._spareSquares,
+      this._parks, this._spare,
     ]) {
       list.length = 0;
     }
@@ -1970,6 +2208,7 @@ export class CityLayout {
     this._universities.push(...plan.universities.map((site) => toGlobal(site.cell)));
     this._landmarksLarge.push(...plan.landmarksLarge.map((site) => toGlobal(site.cell)));
     this._landmarksSmall.push(...plan.landmarksSmall.map((site) => toGlobal(site.cell)));
+    this._cultures.push(...plan.cultures.map((site) => toGlobal(site.cell)));
     this._cityHalls.push(...plan.cityHalls.map((site) => toGlobal(site.cell)));
     this._powerPlants.push(...plan.powerPlants.map((site) => toGlobal(site.cell)));
     this._spareSquares.push(...plan.spareSquares.map((site) => toGlobal(site.cell)));
@@ -2085,8 +2324,9 @@ export class CityLayout {
   }
 
   /**
-   * Which site each 2x2 type draws on: hospitals take 5k, police 5k+1, fire
-   * 5k+2, schools 5k+3 and depots 5k+4, out of one fixed city-wide list.
+   * Which site each 2x2 type draws on: hospitals take 6k, police 6k+1, fire
+   * 6k+2, schools 6k+3, transit depots 6k+4 and waste depots 6k+5, out of one
+   * fixed city-wide list.
    *
    * A fixed interleave, not "whichever district is worst covered". Assigning
    * greedily against coverage would make the i-th hospital's position depend on
@@ -2094,10 +2334,11 @@ export class CityLayout {
    * — so the city would rearrange itself on the next refresh. Indexing is the
    * only rule that survives a reload.
    *
-   * Five types over six sites a district: the university took a 3x3 out of the
-   * land before the 2x2 pass ran, and schools and then transit joined the pool
-   * that was left. The first district gets 2/1/1/1/1, so a young city can open
-   * one of everything and a second hospital before it needs more land.
+   * Six types over six sites a district, so every type gets exactly one a
+   * district and the first district gets 1/1/1/1/1/1. It was five over six —
+   * 2/1/1/1/1, a young city's second hospital — until the waste depot joined
+   * them, and that divisor change is the expensive half of its cycle: see
+   * SERVICES, which carries what it costs a save that already exists.
    */
   civicSiteFor(offset: number, i: number): Coord {
     return this.civicSiteCell(i * CIVIC_TYPES + offset);
@@ -2159,6 +2400,32 @@ export class CityLayout {
 
   get landmarkSmallSites(): number {
     return this._landmarksSmall.length;
+  }
+
+  /**
+   * Lower-left plot of the i-th culture site. One a district, so the i-th is the
+   * i-th district's — and the library and the theatre interleave across them the
+   * way the civic types interleave across theirs. See `cultureSiteFor`.
+   */
+  cultureSiteCell(i: number): Coord {
+    return this._cultures[i] as Coord;
+  }
+
+  get cultureSites(): number {
+    return this._cultures.length;
+  }
+
+  /**
+   * Which culture site the i-th building of a kind stands on.
+   *
+   * `civicSiteFor` in miniature, and the same rule for the same reason: a fixed
+   * interleave is the only assignment that survives a reload, because the save
+   * holds a count and the position has to fall out of the ordinal. Two types
+   * over one site a district, so each gets half a district's worth — culture is
+   * scarcer than a museum by construction.
+   */
+  cultureSiteFor(offset: number, i: number): Coord {
+    return this.cultureSiteCell(i * CULTURE_TYPES + offset);
   }
 
   /**

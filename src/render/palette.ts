@@ -163,6 +163,18 @@ export const PALETTE = {
   // because distance culling reshuffles which slot holds which car.
   car: 0x39465e,
   headlight: 0xffe6b0,
+  // The network above the depot. Two vehicles and the structure one of them
+  // runs on, and the three have to be told apart at play distance from a car,
+  // a bus and a lorry — so a tram takes the depot's own yellow-green rather
+  // than a fourth hue nothing else wears, and a train takes a cold pale metal
+  // that reads against both the asphalt under it and the sky behind it.
+  //
+  // The viaduct is a shade of the parapet rather than of the asphalt: it is a
+  // structure the city built and not a road, and at this distance the one cue
+  // that says so is that it is the colour of the things that hold bridges up.
+  tram: 0x9db83f,
+  train: 0xb7c3ce,
+  viaduct: 0x3a4c63,
   // People. One shared colour for the same reason the cars have one: a walker
   // is a third of a world unit across, so a per-instance tint would not read
   // and the distance cull reshuffles which slot holds which walker every frame.

@@ -36,6 +36,7 @@ import {
   LEVEL_CAPACITY,
   LEVEL_FOOTPRINT,
   LEVEL_NAMES,
+  TRANSIT_LINES,
 } from '../src/sim/config.ts';
 import {
   canAnnex,
@@ -48,6 +49,9 @@ import {
   canBuildIndustry,
   canBuildPark,
   canBuildService,
+  canBuildLine,
+  lineCost,
+  networkService,
   canBuildShop,
   civicBuildings,
   cohortTotal,
@@ -181,6 +185,34 @@ const disciplined = (game) => {
 };
 
 /**
+ * The disciplined player again, with the network switched on.
+ *
+ * A fifth policy rather than a change to the four above, so every reading this
+ * file has ever printed stays comparable. What it is for is the one question
+ * TRANSIT_LABOUR_DRAW's comment says to keep asking: the *combined* transit
+ * contribution to commerce. A depot reaches commerce through two channels
+ * already, and a network that reached it through a third would be a depot worth
+ * more than a depot is — so this policy buys every line the land offers and the
+ * pin columns are what decides whether that is affordable.
+ */
+const networked = (game) => {
+  const s = game.state;
+  for (let guard = 0; guard < 16; guard++) {
+    let bought = false;
+    if (networkService(s) < 1) {
+      const options = [];
+      for (const line of TRANSIT_LINES) {
+        if (canBuildLine(s, line)) options.push([lineCost(s, line), () => game.buildLine(line)]);
+      }
+      options.sort((a, b) => a[0] - b[0]);
+      if (options.length > 0) bought = options[0][1]();
+    }
+    if (!bought) break;
+  }
+  disciplined(game);
+};
+
+/**
  * The exploit policy: always buy whatever is most discounted right now, and
  * keep services just covered so the happiness cap never closes the discount.
  * If demand-responsive pricing can be farmed, this is the policy that finds it.
@@ -213,6 +245,7 @@ const POLICIES = [
   ['idle only', idle],
   ['auto-develop', auto],
   ['greedy discount-chasing', greedy],
+  ['disciplined + network', networked],
   ['disciplined (extra)', disciplined],
 ];
 

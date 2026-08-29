@@ -308,15 +308,16 @@ export function modelFacing(x: number, z: number, pick: number): number {
  *
  *     1,176 houses   266,904 triangles     (227 each)
  *     2,205 shops    564,024 triangles     (256 each)
- *       637 works    153,348 triangles     (241 each)
- *     massed, the same 4,018 would be 96,432 — a box and a roof each
+ *       441 works    105,336 triangles     (239 each)
+ *     massed, the same 3,822 would be 91,728 — a box and a roof each
  *
- * so the scene goes from 597,300 triangles to 1,485,144. It is 2.5x, 66% of
+ * so the scene goes from 571,680 triangles to 1,416,216. It is 2.5x, 66% of
  * everything that city submits, and 1.2M of it is also in the shadow pass.
  * Commerce is most of it and industry is the least, and that is the *plot*
  * count rather than the models: a district carries 45 commercial plots against
- * 24 residential and 13 industrial, so the zone with the fewest buildings costs
- * the least however elaborate its models are.
+ * 24 residential and 9 industrial once the eleventh square is taken out of the
+ * works reserve, so the zone with the fewest buildings costs the least however
+ * elaborate its models are.
  *
  * That is a real number and it is deliberately not hidden: the three rungs the
  * game is played on are now the most expensive thing in it. Whether it
