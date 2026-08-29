@@ -2586,6 +2586,176 @@ export const FREE_TRANSPORT_RIDERSHIP = 0.35;
  */
 export const CONGESTION_MOOD = 0.14;
 
+// ------------------------------------------------------------- the network
+
+/**
+ * The network above the depot: two rungs, one table.
+ *
+ * A depot covers plots *inside* a district — `Service.plots` is 24, which is a
+ * district's whole housing frontage — and there has never been anything in this
+ * game that joins one district to the next. That is what a line is. Where its
+ * two ends are is geometry and lives in `linePairAt`; what it costs and what it
+ * carries is balance and lives here.
+ *
+ * Two rows rather than two systems, in the shape LANDMARKS and TERMINALS
+ * already use, and the brief's own framing is the reason: there is no metro in
+ * this game, so "cheaper and slower than a metro" has no referent. What the two
+ * rungs are against each other is the whole of what they are — a tram is
+ * cheaper, joins neighbouring districts because it runs along a street, and
+ * carries less; a train is dearer, joins districts across the map because it
+ * runs on its own alignment, and carries more.
+ *
+ * `carries` is in *districts*, which is the unit that makes the pair a decision
+ * rather than a ladder. A network serves the lesser of what it reaches and what
+ * it can carry — see `networkService` — so a city of trams saturates on
+ * capacity long before it runs out of places to go, and a city of trains
+ * saturates on reach. Buying the wrong rung is visible in the panel as one of
+ * the two numbers standing still.
+ *
+ * The prices are set against LANDMARKS rather than against TERMINALS, and the
+ * choice is about the *bound* rather than about the fiction. A terminal's count
+ * stops at a handful of berths, so it can afford a growth of 1.8; a line's
+ * stops at the district count less one, which is 48, and a museum's stops at 49
+ * sites. A curve you buy fifty of is a museum's curve — so the tram sits
+ * between a museum and a cruise berth at 1.5, and rail past a cargo terminal at
+ * 1.6. Measured in tools/phase7.calibrate.mjs: what the 1st, 4th, 8th and 16th
+ * of each cost, against what a played run is holding.
+ */
+export interface TransitLine {
+  readonly key: 'tram' | 'rail';
+  readonly name: string;
+  readonly buildLabel: string;
+  readonly base: number;
+  readonly growth: number;
+  /** Districts of traffic one line of this kind can carry. */
+  readonly carries: number;
+}
+
+export const TRANSIT_LINES: readonly TransitLine[] = [
+  { key: 'tram', name: 'Tram', buildLabel: 'Lay tram line', base:  9_000, growth: 1.5, carries: 0.6 },
+  { key: 'rail', name: 'Rail', buildLabel: 'Lay rail line', base: 30_000, growth: 1.6, carries: 2.4 },
+];
+
+/**
+ * The most any transport the city runs can take off its roads.
+ *
+ * Derived rather than typed, and the derivation is the design statement:
+ * TRANSIT_ROAD_SHARE x (1 + FREE_TRANSPORT_RIDERSHIP) is 94.5%, which is
+ * exactly what a fully covered, fare-free city already reaches — and
+ * FREE_TRANSPORT_RIDERSHIP's own comment says why the last twentieth is left
+ * alone: it is the freight and the people who will drive whatever is running.
+ *
+ * So **a network cannot take a single trip off the road that free transport
+ * could not already take.** What it buys is reaching that figure while still
+ * charging fares, which is a real choice — the fare line is most of a depot's
+ * direct return — rather than a second helping of the same relief. A typed
+ * constant here would have been a second number to keep in step with the two it
+ * is made of; this way a change to either moves the ceiling with it.
+ */
+export const TRANSIT_MAX_SHARE = TRANSIT_ROAD_SHARE * (1 + FREE_TRANSPORT_RIDERSHIP);
+
+/**
+ * Share of the city's trips a complete network takes off the road.
+ *
+ * Under TRANSIT_ROAD_SHARE's 0.70 on purpose. A depot is the network the whole
+ * city can reach — one to a district, `plots` 24, so a covered city has one
+ * everywhere — and a line joins two districts, so a fully-served network is
+ * doing less of the daily work than a fully-covered bus service is. Set so a
+ * fare-charging city with a complete network lands at 0.60 of its trips carried
+ * against the 0.70 a fare-charging covered bus city reaches, and the two
+ * together clamp at TRANSIT_MAX_SHARE rather than adding past it.
+ *
+ * Measured in tools/phase7.calibrate.mjs: the congestion figure with and
+ * without, at every district count and every rung.
+ */
+export const NETWORK_ROAD_SHARE = 0.6;
+
+/**
+ * How much further a complete network lets the workforce reach for a job.
+ *
+ * TRANSIT_WORKFORCE's 0.25 is what a bus does inside a district; this is what a
+ * line would do between them, and it lands on the same expression
+ * (`reachableWorkers`) for the same reason TRANSIT_LABOUR_DRAW was cut from
+ * 0.35 to 0.30: two channels through one set of vehicles is one thing counted
+ * twice unless somebody measures the combined figure.
+ *
+ * **So it was measured, and it is 0, and the reason is not the one expected.**
+ * The pin was: on a built-out city the depots alone already take
+ * `demandTargets.c` to its +1 bound at 12 districts and up, so anything added
+ * on the same channel is a number nobody can see moving. But a played run does
+ * not pin at all — `tools/economy.calibrate.mjs` at 12, 24 and 48 hours reports
+ * R 0.0m C 0.0m I 0.0m under every policy including one that buys the whole
+ * network — so the pin was never the thing that decided it.
+ *
+ * What decided it is that at 0.25 the network makes the city *worse*. The same
+ * policy, 24 hours, the only difference this constant:
+ *
+ *          residents   homes   civic   treasury   demand R      C
+ *   0.00      83,585      54      30    1.25e12     -0.46   -0.03
+ *   0.25      76,598      49      27    1.19e12     -0.53   -0.05
+ *
+ * `reachableWorkers` is subtracted in `demandTargets.r` and added, through
+ * `labourReach`, to the other two — and in the half of the game a city actually
+ * plays, the subtraction is the larger of the two. A player who laid the whole
+ * network would have been paying for eight per cent fewer people. That is a
+ * worse failure than double-counting and it is invisible on a bar.
+ *
+ * Kept at 0 rather than deleted: the question is live — a later cycle that
+ * makes housing demand less sensitive to the labour pool can size it here — and
+ * zero with the measurement beside it is a decision where no constant at all is
+ * an omission.
+ *
+ * What the network does instead is freight, shoppers and quieter roads, which
+ * are three channels no depot touches. See NETWORK_EXPORT_LIFT, RAIL_VISITORS
+ * and NETWORK_ROAD_SHARE.
+ */
+export const NETWORK_WORKFORCE = 0;
+
+/**
+ * What a complete network lifts the export tap by.
+ *
+ * The freight half, and the one thing on this table that no depot has ever
+ * done: `RAIL_SIDE` has said since the first cycle that industry clusters
+ * toward the freight line, and until now there was no freight line. It *adds*
+ * inside `exportMarket`'s existing bracket rather than multiplying it, exactly
+ * as CARGO_EXPORT_LIFT, AIRPORT_EXPORT_LIFT and GOODS_TRADE_LIFT do, so the
+ * city still has one tap raised several ways rather than several taps.
+ *
+ * Sized against AIRPORT_EXPORT_LIFT rather than against a berth, because the
+ * airport is the thing it is actually like: both are an inland city's only
+ * route to an export lift, where CARGO_EXPORT_LIFT's 0.4 needs a coastal
+ * district the seed may never have offered. A complete network is worth a
+ * little more than a runway and a good deal less than the 0.55 the goods treaty
+ * buys, which is the ordering the three should have — a treaty is the whole
+ * outside world agreeing to trade, and this is the city being able to shift
+ * what it makes.
+ */
+export const NETWORK_EXPORT_LIFT = 0.6;
+
+/**
+ * What a complete network is worth in arrivals, in cruise berths.
+ *
+ * The shoppers half, and the one channel a line has to commercial demand that
+ * is not the depot's. `visitors` is one expression — residents x
+ * VISITORS_PER_RESIDENT x happiness, per berth — and a terminus is a berth that
+ * arrives by rail, exactly as ROAD_VISITORS' coach is one that arrives by road
+ * and AIRPORT_VISITORS' flight is one that arrives by air. Stating it in berths
+ * is what keeps the happiness scaling in one place rather than in four.
+ *
+ * Riding on `networkService` rather than on the line count, so it ramps in over
+ * the same purchases that were already buying freight and quieter streets, and
+ * so a network of trams that cannot carry the city lands proportionally fewer
+ * people than one of trains that can.
+ *
+ * Two berths at a complete network, which is the coach's figure rather than the
+ * runway's three. Both are the landlocked city's tourism, and a network is the
+ * dearer of the two to finish — but a runway is one purchase and a network is
+ * every district, so a city that has bought one has bought a great deal else
+ * besides. Against the six a full waterfront holds, a finished network is about
+ * a third of a coast.
+ */
+export const RAIL_VISITORS = 2;
+
 // ---------------------------------------------------------------------- port
 
 /**
@@ -3327,6 +3497,20 @@ export const RANK_GATES = {
   stadium: 2,
   /** Replaces HIGHWAY_MIN_DISTRICTS as the gate. See `highwayAllowed`. */
   highway: 3,
+  /**
+   * The two rungs of the network, gated on rank rather than on a district
+   * count — the same move the highway made, and for the same reason: a raw
+   * count is a second progression ladder beside the one that exists.
+   *
+   * A tram at Town and a train at City, which is one rung apart and is the
+   * whole of the pacing. Both are also gated by their own land — `linePairAt`
+   * has no pair to offer a one-district city and no *rail* pair to offer a
+   * two-district one — so the rank is what stops a city buying the network
+   * before it has anything to move, and the land is what stops it buying one
+   * it could not run.
+   */
+  tram: 1,
+  rail: 2,
   /**
    * Founding the city again. Not a building — a rank gate on the one button
    * that takes the city away — but the same ladder answers it, and a second

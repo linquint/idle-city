@@ -88,7 +88,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 14;
+export const SAVE_VERSION = 15;
 
 /**
  * The entire game, in a handful of fields.
@@ -208,6 +208,22 @@ export interface GameState {
    */
   museums: number;
   stadiums: number;
+  /**
+   * Lines of each kind the city has laid.
+   *
+   * Two counts and no routes, which is the whole of the network. The k-th line
+   * of a kind joins the k-th pair of districts `linePairAt` enumerates, and that
+   * enumeration is a pure function of the ordinal, the district count and the
+   * seed — the same rule `civicSiteFor` follows and the same reason: a stored
+   * route would be a fourth exception to "the save is counts" and, unlike the
+   * three that exist, it would grow with the thing the player buys.
+   *
+   * The enumeration is append-only in the district count, so annexing land adds
+   * pairs to the end and re-routes nothing the city already owns. See
+   * `networkedDistricts`, which is where the two counts become a reach.
+   */
+  tramLines: number;
+  railLines: number;
   /**
    * Terminals on the city's waterfront: one berth of each per coastal district.
    *
@@ -494,6 +510,8 @@ export function createState(now = Date.now()): GameState {
     stadiums: 0,
     cruiseTerminals: 0,
     cargoTerminals: 0,
+    tramLines: 0,
+    railLines: 0,
     plants: 0,
     plantStaff: 0,
     cityHall: false,

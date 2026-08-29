@@ -7,6 +7,7 @@ import {
   FRONTAGE_TARGET,
   ZONE_FLOOR,
   LANDMARKS,
+  MAX_DISTRICTS,
   SEED,
   TARGET_PLOTS,
   type Landmark,
@@ -1085,6 +1086,192 @@ export function coastalDistrictAt(i: number, districts: number): number {
  */
 export function portDistrict(districts: number): number {
   return coastalDistrictAt(0, districts);
+}
+
+// ------------------------------------------------------------- the network
+
+/**
+ * The two rungs of the network above the depot.
+ *
+ * A depot covers plots inside a district; a line joins one district to another.
+ * The whole of the difference between the two rungs is geometry: a tram runs
+ * along a street, so its two ends are neighbours, and a train runs on its own
+ * alignment, so its two ends need not be. Everything else about them — cost,
+ * what they carry — lives in TRANSIT_LINES, because it is balance rather than
+ * shape.
+ */
+export type LineKind = 'tram' | 'rail';
+
+/** One line, as the two districts it joins. Never stored; always derived. */
+export interface LinePair {
+  readonly a: number;
+  readonly b: number;
+}
+
+/**
+ * Which districts the k-th line of a kind joins.
+ *
+ * The same rule `civicSiteFor` follows and for the same reason: the save holds
+ * a count, so the k-th line's route has to be recoverable from the count, the
+ * district count and the seed alone. A stored route would be the fourth
+ * exception to "the save is counts" and, unlike the three that exist, it would
+ * grow with the thing the player buys.
+ *
+ * The enumeration is ordered by the *later* district of each pair, then by a
+ * seeded hash inside that group. Ordering that way is what makes it stable
+ * under growth: annexing a district appends pairs to the end of the list and
+ * reorders nothing before them, which is exactly the property `surveyedR` needs
+ * of the zoning arrays and `ParcelBook` needs of the plot lists. A single
+ * seeded shuffle over the whole list would have been simpler to write and would
+ * have re-routed every existing line the moment the city annexed.
+ *
+ * Trams take neighbouring pairs — Manhattan distance 1 in district space, which
+ * is "there is a street between them". Rail takes everything else, longest
+ * first inside each group, so a train visibly crosses the map rather than
+ * running one stop.
+ */
+const pairCache = new Map<LineKind, (LinePair | null)[]>();
+
+/**
+ * The k-th line joins the k-th district the network has not reached yet.
+ *
+ * One pair per *later* district, and that single rule is what makes a network
+ * out of a list of pairs. Every candidate pair a district offers would have
+ * given rail a hub: the enumeration is ordered by the later end, so the first
+ * dozen rail lines would all have hung off the oldest districts and sixteen
+ * lines would have touched eight places. One pair per later end grows the
+ * network outward instead — line k reaches district k+1 — so the lines form a
+ * tree, the union of their ends is a connected network rather than an accident,
+ * and `networkedDistricts` needs no graph walk to say so.
+ *
+ * It is also what keeps the list stable under annexation, which is the property
+ * the save actually needs: a district appends its own pair to the end and
+ * reorders nothing before it, exactly as `surveyedR` appends and `ParcelBook`
+ * appends. A seeded shuffle over the whole list would have re-routed every line
+ * the city owned the moment it bought land.
+ *
+ * Which earlier district the pair takes is where the two rungs differ, and it is
+ * geometry rather than balance: a tram runs along a street, so it takes a
+ * *neighbour* — Manhattan distance 1 in district space — and a train runs on its
+ * own alignment, so it takes the *furthest* earlier district there is. A
+ * district the water has cut off from every earlier neighbour offers no tram
+ * pair at all and the list skips it; only district 0 offers no pair of either
+ * kind, because it has nothing earlier to join.
+ *
+ * "Furthest" rather than "furthest, and at least two districts away", which is
+ * what this took at first and what left the oldest district off the railway
+ * forever: the centre of the spiral is rarely the furthest thing from anywhere,
+ * so nothing ever picked it and a complete network read 11 districts out of 12.
+ * Rail *may* cross the map; forbidding it the one short hop it is ever offered
+ * bought a rule and cost the city centre its station.
+ */
+function scanPairs(kind: LineKind, districts: number): (LinePair | null)[] {
+  let pairs = pairCache.get(kind);
+  if (pairs === undefined) {
+    pairs = [];
+    pairCache.set(kind, pairs);
+  }
+  const salt = kind === 'tram' ? 0x7a11 : 0x9a11;
+  while (pairs.length < districts - 1) {
+    const b = pairs.length + 1;
+    const far = districtCoord(b);
+    let best: LinePair | null = null;
+    let bestRank = Infinity;
+    for (let a = 0; a < b; a++) {
+      const near = districtCoord(a);
+      const gap = Math.abs(far.x - near.x) + Math.abs(far.z - near.z);
+      if (kind === 'tram' && gap !== 1) continue;
+      // Rail takes the longest span it can; the hash breaks ties and is the
+      // whole of the tram ordering. Both are pure in (a, b, SEED).
+      const jitter = (mixSeed(SEED ^ salt, a * 131 + b) >>> 8) / 0x1000000;
+      const rank = kind === 'rail' ? -gap + jitter : jitter;
+      if (rank < bestRank) {
+        bestRank = rank;
+        best = { a, b };
+      }
+    }
+    pairs.push(best);
+  }
+  return pairs;
+}
+
+/**
+ * How many lines of a kind the city's land could ever carry.
+ *
+ * The bound is the pair list, which is the same kind of bound
+ * `terminalCapacity` has: a line needs two districts to join, so a village has
+ * nowhere to run one. It grows with the district count and never with anything
+ * the player buys.
+ */
+export function linePairCapacity(kind: LineKind, districts: number): number {
+  const d = Math.max(0, Math.min(MAX_DISTRICTS, Math.floor(districts)));
+  const pairs = scanPairs(kind, d);
+  // Bounded on every read rather than trusted to the cache's length, which is
+  // the property `coastalDistricts` states in its own comment and needs for the
+  // same reason: the list only ever grows, and `reset` takes the city back to
+  // one district. Entry i joins district i + 1, so the city's own pairs are the
+  // first d - 1 of them however far the scan has run for a larger city.
+  let n = 0;
+  for (let i = 0; i < d - 1 && i < pairs.length; i++) if (pairs[i] !== null) n++;
+  return n;
+}
+
+/** The k-th line of a kind, or null when the city has no such pair to join. */
+export function linePairAt(kind: LineKind, k: number, districts: number): LinePair | null {
+  if (k < 0) return null;
+  const d = Math.max(0, Math.min(MAX_DISTRICTS, Math.floor(districts)));
+  const pairs = scanPairs(kind, d);
+  let seen = 0;
+  for (let i = 0; i < d - 1 && i < pairs.length; i++) {
+    const pair = pairs[i];
+    if (pair === undefined || pair === null) continue;
+    if (seen === k) return pair;
+    seen++;
+  }
+  return null;
+}
+
+/**
+ * Districts with at least one line touching them, out of the first `districts`.
+ *
+ * Memoised against the three counts it depends on, exactly as
+ * `landmarkPlotsCovered` is and for the same reason: `networkReach` is read
+ * from `demandTargets` ten times a second and this walks the line list.
+ *
+ * The union of endpoints rather than the largest connected component, and that
+ * is a decision rather than a shortcut. A component walk would be the more
+ * literal reading of "connected", but two lines at opposite ends of the city
+ * genuinely serve four districts whether or not a train can run between them —
+ * and the walk would put a graph traversal on the 10 Hz path to say something
+ * the player cannot see. What the union cannot express is a network one line
+ * short of joining up, and nothing in the model reads that.
+ */
+let networkStamp = '';
+let networkCached = 0;
+
+export function networkedDistricts(
+  tramLines: number,
+  railLines: number,
+  districts: number,
+): number {
+  const stamp = `${tramLines}:${railLines}:${districts}`;
+  if (stamp === networkStamp) return networkCached;
+  const touched = new Set<number>();
+  for (const [kind, lines] of [
+    ['tram', tramLines],
+    ['rail', railLines],
+  ] as const) {
+    const room = Math.min(lines, linePairCapacity(kind, districts));
+    for (let k = 0; k < room; k++) {
+      const pair = linePairAt(kind, k, districts);
+      if (pair === null) break;
+      touched.add(pair.a);
+      touched.add(pair.b);
+    }
+  }
+  networkStamp = stamp;
+  networkCached = touched.size;
+  return touched.size;
 }
 
 /**

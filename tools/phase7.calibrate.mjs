@@ -23,6 +23,13 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BURN_OUT_SECONDS,
+  NETWORK_EXPORT_LIFT,
+  NETWORK_ROAD_SHARE,
+  NETWORK_WORKFORCE,
+  RANKS,
+  RANK_GATES,
+  TRANSIT_LINES,
+  TRANSIT_MAX_SHARE,
   CIVIC_SERVICES,
   CONGESTION_DENSITY_EXPONENT,
   CONGESTION_MOOD,
@@ -54,6 +61,13 @@ import {
 } from '../src/sim/config.ts';
 import {
   activeOf,
+  cityRank,
+  lineAllowed,
+  lineCost,
+  lineRoute,
+  networkCapacity,
+  networkReach,
+  networkService,
   cityScale,
   congestion,
   coverage,
@@ -622,5 +636,180 @@ console.log('happiness: three weights summing to exactly 1, and a modifier brack
   console.log(`    transport  +${FREE_TRANSPORT_MOOD}`);
   console.log(`    fire       -${FIRE_UNHAPPINESS} each`);
   console.log('    tax        -0.14 .. +0.08');
+  console.log('');
+}
+
+// ==================================================================== 1
+
+console.log('='.repeat(78));
+console.log('1   rail and tram');
+console.log('='.repeat(78));
+console.log('');
+
+/** The same city, with `tram` tram lines and `rail` rail lines laid. */
+const wired = (districts, level, serve, tram, rail) => {
+  const s = city(districts, level, serve);
+  s.tramLines = tram;
+  s.railLines = rail;
+  return s;
+};
+
+console.log('the geometry: which districts the k-th line joins\n');
+{
+  console.log('  Ordered by the *later* district of each pair, one pair per later end, so');
+  console.log('  the list only ever grows at its end — annexing appends and re-routes');
+  console.log('  nothing. The k-th line is the same line at every city size:');
+  console.log('');
+  console.log('       k        tram at 12d / 25d / 49d        rail at 12d / 25d / 49d');
+  for (const k of [0, 1, 2, 5, 9]) {
+    const show = (kind, d) => {
+      const p = lineRoute({ districts: d }, kind, k);
+      return pad(p ? `${p.a}-${p.b}` : '—', 8);
+    };
+    console.log(
+      `  ${pad(k, 6)}  ${show('tram', 12)}${show('tram', 25)}${show('tram', 49)}` +
+        `      ${show('rail', 12)}${show('rail', 25)}${show('rail', 49)}`,
+    );
+  }
+  console.log('');
+  console.log('  pairs the land offers, and what one kind alone can reach');
+  console.log('  districts   tram pairs   rail pairs   tram lines to reach all   rail lines');
+  for (const d of [2, 4, 12, 25, MAX_DISTRICTS]) {
+    const bare = { districts: d, tramLines: 0, railLines: 0 };
+    const need = (kind) => {
+      for (let n = 0; n <= d + 2; n++) {
+        const s = { districts: d, tramLines: kind === 'tram' ? n : 0, railLines: kind === 'rail' ? n : 0 };
+        if (networkReach(s) >= 1) return n;
+      }
+      return '—';
+    };
+    console.log(
+      `  ${pad(d, 9)}${pad(lineAllowed({ ...bare }, TRANSIT_LINES[0]) >= 0 ? tramPairs(d) : 0, 13)}` +
+        `${pad(railPairs(d), 13)}${pad(need('tram'), 26)}${pad(need('rail'), 13)}`,
+    );
+  }
+  console.log('');
+}
+
+function tramPairs(d) {
+  let n = 0;
+  while (lineRoute({ districts: d }, 'tram', n) !== null) n++;
+  return n;
+}
+function railPairs(d) {
+  let n = 0;
+  while (lineRoute({ districts: d }, 'rail', n) !== null) n++;
+  return n;
+}
+
+console.log('reach against capacity: what separates the two rungs\n');
+{
+  console.log(`  tram carries ${TRANSIT_LINES[0].carries} districts, rail ${TRANSIT_LINES[1].carries}` +
+    ' — so a tram city saturates on capacity and a rail city on reach.');
+  console.log('');
+  for (const d of [12, 25]) {
+    console.log(`  ${d} districts        trams only                  rail only`);
+    console.log('    lines     reach  capacity   service      reach  capacity   service');
+    for (const n of [1, 2, 4, 8, 12, 20, 30]) {
+      const t = wired(d, 2, 0, n, 0);
+      const r = wired(d, 2, 0, 0, n);
+      console.log(
+        `  ${pad(n, 7)}` +
+          fixed(networkReach(t), 10, 2) + fixed(networkCapacity(t), 10, 2) + fixed(networkService(t), 10, 2) +
+          fixed(networkReach(r), 11, 2) + fixed(networkCapacity(r), 10, 2) + fixed(networkService(r), 10, 2),
+      );
+    }
+    console.log('');
+  }
+}
+
+console.log('what a line costs, against the rank it unlocks at\n');
+{
+  console.log(`  RANK_GATES.tram ${RANK_GATES.tram} (${RANKS[RANK_GATES.tram].name}),` +
+    ` RANK_GATES.rail ${RANK_GATES.rail} (${RANKS[RANK_GATES.rail].name})`);
+  console.log('');
+  console.log('  line   1st       4th        8th       16th      allowed at 12d / 25d / 49d');
+  for (const line of TRANSIT_LINES) {
+    const at = (n) => {
+      const s = city(25, 2, 0);
+      if (line.key === 'tram') s.tramLines = n; else s.railLines = n;
+      return lineCost(s, line);
+    };
+    const room = (d) => lineAllowed({ ...city(d, 2, 0), districts: d }, line);
+    console.log(
+      `  ${pad(line.key, 5)}${fixed(at(0), 7, 0)}${fixed(at(3), 10, 0)}${fixed(at(7), 11, 0)}` +
+        `${fixed(at(15), 11, 0)}      ${pad(room(12), 4)} /${pad(room(25), 5)} /${pad(room(49), 5)}`,
+    );
+  }
+  console.log('');
+  console.log('  against what a played run is holding (tools/economy.calibrate.mjs, 24h):');
+  console.log('    auto-develop 1.3e12 at 9 districts, discount-chasing 1.4e10 at 12,');
+  console.log('    disciplined 1.3e12 at 9. A museum is 4,000 and a cruise berth 20,000.');
+  console.log('');
+}
+
+console.log('congestion, with the network and without\n');
+{
+  console.log(`  NETWORK_ROAD_SHARE ${NETWORK_ROAD_SHARE}, clamped with the bus term at` +
+    ` TRANSIT_MAX_SHARE ${TRANSIT_MAX_SHARE.toFixed(3)}`);
+  console.log('  — which is TRANSIT_ROAD_SHARE x (1 + FREE_TRANSPORT_RIDERSHIP), so the');
+  console.log('    network cannot take a trip the fares could not already take.');
+  console.log('');
+  console.log('  12 districts, every depot open, fares charged');
+  console.log('    level   no network   half network   full network   + fares waived');
+  for (let level = 0; level < LEVELS; level++) {
+    const none = city(12, level, 1);
+    const half = wired(12, level, 1, 0, 3);
+    const full = wired(12, level, 1, 0, 12);
+    const free = wired(12, level, 1, 0, 12);
+    free.cityHall = true;
+    free.freeTransport = true;
+    console.log(
+      `    ${pad(level, 5)}` + fixed(congestion(none), 13, 3) + fixed(congestion(half), 15, 3) +
+        fixed(congestion(full), 15, 3) + fixed(congestion(free), 17, 3),
+    );
+  }
+  console.log('');
+  console.log('  and with no depots at all, which is what the network is worth on its own');
+  console.log('    level   nothing   full network');
+  for (let level = 0; level < LEVELS; level++) {
+    const none = city(12, level, 0);
+    const full = wired(12, level, 0, 0, 12);
+    console.log(`    ${pad(level, 5)}` + fixed(congestion(none), 10, 3) + fixed(congestion(full), 15, 3));
+  }
+  console.log('');
+}
+
+console.log('what a network is worth to commercial and industrial demand\n');
+{
+  console.log(`  NETWORK_WORKFORCE ${NETWORK_WORKFORCE} (the commerce channel),` +
+    ` NETWORK_EXPORT_LIFT ${NETWORK_EXPORT_LIFT} (the freight one)`);
+  console.log('');
+  console.log('  districts   level   depots   network      C before    C after     I before     I after');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const none = city(d, level, 1);
+      const full = wired(d, level, 1, 0, d);
+      const a = demandTargets(none);
+      const b = demandTargets(full);
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${pad('all', 9)}${fixed(networkService(full), 9, 2)}` +
+          fixed(a.c, 13, 3) + fixed(b.c, 11, 3) + fixed(a.i, 13, 3) + fixed(b.i, 12, 3),
+      );
+    }
+  }
+  console.log('');
+  console.log('  the same, on a city with no depots — where the freight lift is legible');
+  console.log('  districts   level   network      C before    C after     I before     I after');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    const none = city(d, 4, 0);
+    const full = wired(d, 4, 0, 0, d);
+    const a = demandTargets(none);
+    const b = demandTargets(full);
+    console.log(
+      `  ${pad(d, 9)}${pad(4, 8)}${fixed(networkService(full), 9, 2)}` +
+        fixed(a.c, 13, 3) + fixed(b.c, 11, 3) + fixed(a.i, 13, 3) + fixed(b.i, 12, 3),
+    );
+  }
   console.log('');
 }

@@ -126,6 +126,7 @@ import {
   SHOP_JOBS,
   SKILL_YIELD,
   ROAD_VISITORS,
+  RAIL_VISITORS,
   VISITOR_TRIPS,
   SHOP_SUPPLY,
   SHOP_TRIPS,
@@ -134,6 +135,12 @@ import {
   TAX_STEPS,
   TERMINALS,
   TRANSIT_LABOUR_DRAW,
+  TRANSIT_LINES,
+  TRANSIT_MAX_SHARE,
+  NETWORK_EXPORT_LIFT,
+  NETWORK_ROAD_SHARE,
+  NETWORK_WORKFORCE,
+  type TransitLine,
   TRANSIT_WORKFORCE,
   UPKEEP_ARREARS_TAU,
   UPKEEP_GROWTH,
@@ -167,6 +174,9 @@ import {
   housingCentralityBase,
   housingCentralityMean,
   landmarkPlotsCovered,
+  linePairAt,
+  linePairCapacity,
+  networkedDistricts,
   parcelBook,
   UNIVERSITY_SITES_PER_DISTRICT,
 } from './layout.ts';
@@ -1038,10 +1048,15 @@ export const transitShare = (s: GameState): number => busShare(s, transitCoverag
  */
 const busShare = (s: GameState, reach: number): number =>
   Math.min(
-    1,
+    // TRANSIT_MAX_SHARE rather than 1, and it costs an existing city nothing:
+    // it is TRANSIT_ROAD_SHARE x (1 + FREE_TRANSPORT_RIDERSHIP), which is
+    // exactly what the bus term alone could already reach, so the clamp only
+    // ever binds on the network added to it. See TRANSIT_MAX_SHARE.
+    TRANSIT_MAX_SHARE,
     TRANSIT_ROAD_SHARE *
       Math.max(0, Math.min(1, reach)) *
-      (faresWaived(s) ? 1 + FREE_TRANSPORT_RIDERSHIP : 1),
+      (faresWaived(s) ? 1 + FREE_TRANSPORT_RIDERSHIP : 1) +
+      NETWORK_ROAD_SHARE * networkService(s),
   );
 
 /** Trips actually on the road: what the network does not carry. */
@@ -1109,6 +1124,116 @@ export const congestionWithDepot = (s: GameState): number => {
  * `happinessTarget` sees one bracket of things added and this among them.
  */
 export const congestionMood = (s: GameState): number => -CONGESTION_MOOD * congestion(s);
+
+// ------------------------------------------------------------- the network
+
+/** How many lines of a kind the city has, through one key. */
+export const lineCount = (s: GameState, key: TransitLine['key']): number =>
+  key === 'tram' ? s.tramLines : s.railLines;
+
+/**
+ * Districts the network reaches, as a share of the ones the city owns.
+ *
+ * The geometry lives in `networkedDistricts`, which memoises against the counts
+ * it depends on — this is read from `demandTargets` ten times a second and must
+ * not walk the line list to answer.
+ *
+ * Zero rather than one for a city with no land, which is the same convention
+ * `landmarkCoverage` takes and the opposite of a service coverage: a coverage
+ * is the share a service *fails* and it fails nothing when nothing is built,
+ * where this is a thing the city has earned and an empty one has not.
+ */
+export const networkReach = (s: GameState): number => {
+  const districts = Math.max(0, s.districts);
+  if (districts <= 0) return 0;
+  return Math.min(1, networkedDistricts(s.tramLines, s.railLines, districts) / districts);
+};
+
+/**
+ * Districts of traffic the lines can carry, as a share of the ones the city
+ * owns.
+ *
+ * The second half of what a network is, and the whole of what separates the two
+ * rungs: `TransitLine.carries` is in districts, a tram carries a fraction of one
+ * and a train carries several, so a city of trams runs out of capacity long
+ * before it runs out of places to go.
+ */
+export const networkCapacity = (s: GameState): number => {
+  const districts = Math.max(1, s.districts);
+  let carried = 0;
+  for (const line of TRANSIT_LINES) carried += lineCount(s, line.key) * line.carries;
+  return Math.min(1, carried / districts);
+};
+
+/**
+ * What the network actually serves, in [0, 1]. The one number everything reads.
+ *
+ * The lesser of what it reaches and what it can carry, and the `min` is the
+ * design rather than an economy. Track to a district the trains cannot serve is
+ * track; capacity with nowhere to run it is rolling stock in a shed. Multiplying
+ * the two instead would charge a half-and-half network a quarter, which is the
+ * same double-jeopardy the food cap avoided in section 8 of NOTES.md: two
+ * shortfalls, one bar, and no way to tell which is biting. With `min`, the
+ * panel shows both numbers and the smaller one names the next purchase.
+ *
+ * Derived, never integrated: everything it feeds already lags. Congestion feeds
+ * happiness, which is integrated; the export lift feeds industrial demand,
+ * which is integrated. A fourth lag would be a lag on a lag — the argument
+ * `congestion` makes in its own comment.
+ */
+export const networkService = (s: GameState): number =>
+  Math.min(networkReach(s), networkCapacity(s));
+
+/**
+ * How many lines of a kind the city may lay.
+ *
+ * The pair list and nothing else, and it takes `canBuildLandmark`'s position
+ * rather than `serviceAllowed`'s for the same reason that one gives: a line
+ * joins districts rather than serving people, so there is no *need* for it to
+ * run one ahead of. The land is the only bound it has, and it is a tight one —
+ * a district offers exactly one pair of each kind, so the whole network is
+ * bounded by the district count however rich the city gets.
+ *
+ * A "one ahead of need" clamp was tried on top and taken out again. Need would
+ * have had to be the larger of the two halves `networkService` reads — the
+ * lines that carry the city and the lines that reach it — and the reaching half
+ * is the district count less one, which is the pair list. So the clamp bound
+ * nothing anywhere except on a rail-only city at exactly the point the player
+ * was still buying reach, where it read as the game refusing a purchase that
+ * was working.
+ */
+export const lineAllowed = (s: GameState, line: TransitLine): number =>
+  linePairCapacity(line.key, s.districts);
+
+/** What the next line of a kind costs. Compounded over its own count, like every
+ *  other civic curve, and not demand-priced: nobody haggles over a railway. */
+export const lineCost = (s: GameState, line: TransitLine): number =>
+  line.base * line.growth ** lineCount(s, line.key);
+
+export const canBuildLine = (s: GameState, line: TransitLine): boolean =>
+  rankAllows(s, line.key) &&
+  lineCount(s, line.key) < lineAllowed(s, line) &&
+  s.cash >= lineCost(s, line);
+
+/** The two districts the k-th line of a kind joins, for the renderer and the HUD. */
+export const lineRoute = (s: GameState, key: TransitLine['key'], k: number) =>
+  linePairAt(key, k, s.districts);
+
+export interface TransitLineReading {
+  readonly line: TransitLine;
+  readonly built: number;
+  readonly allowed: number;
+  readonly cost: number;
+}
+
+/** The whole network block, in one read, for the HUD. */
+export const transitLineReadings = (s: GameState): readonly TransitLineReading[] =>
+  TRANSIT_LINES.map((line) => ({
+    line,
+    built: lineCount(s, line.key),
+    allowed: lineAllowed(s, line),
+    cost: lineCost(s, line),
+  }));
 
 // --------------------------------------------------------------------- crime
 
@@ -1451,7 +1576,12 @@ export const berthsLanding = (s: GameState): number =>
   // And the road, which is the third source and folded in the same way rather
   // than opened beside it. Landmarks rather than a terminal, so a landlocked
   // city under HIGHWAY_MIN_DISTRICTS has tourism at all — see ROAD_VISITORS.
-  ROAD_VISITORS * landmarkCoverage(s);
+  ROAD_VISITORS * landmarkCoverage(s) +
+  // And the terminus, which is the fourth and the network's own route to
+  // commercial demand: a visitor shops, and `demandTargets.c` reads
+  // `visitors x VISITOR_TRIPS`. See RAIL_VISITORS for why it is the shoppers
+  // channel rather than the labour one.
+  RAIL_VISITORS * networkService(s);
 
 /** What those visitors spend, per second, before tax. */
 export const cruiseIncome = (s: GameState): number => visitors(s) * VISITOR_SPEND;
@@ -1469,18 +1599,20 @@ export interface VisitorSources {
   readonly quay: number;
   readonly air: number;
   readonly road: number;
+  readonly rail: number;
   readonly total: number;
 }
 
 export const visitorSources = (s: GameState): VisitorSources => {
   const berths = berthsLanding(s);
   const total = visitors(s);
-  if (berths <= 0) return { quay: 0, air: 0, road: 0, total: 0 };
+  if (berths <= 0) return { quay: 0, air: 0, road: 0, rail: 0, total: 0 };
   const per = total / berths;
   return {
     quay: per * s.cruiseTerminals,
     air: per * (s.airport ? AIRPORT_VISITORS : 0),
     road: per * ROAD_VISITORS * landmarkCoverage(s),
+    rail: per * RAIL_VISITORS * networkService(s),
     total,
   };
 };
@@ -2253,7 +2385,11 @@ export const exportMarket = (s: GameState): number =>
   (1 +
     CARGO_EXPORT_LIFT * s.cargoTerminals +
     (s.airport ? AIRPORT_EXPORT_LIFT : 0) +
-    (goodsTraded(s) ? GOODS_TRADE_LIFT : 0));
+    (goodsTraded(s) ? GOODS_TRADE_LIFT : 0) +
+    // The freight line is the fourth, and adds in the same bracket for the same
+    // reason the airport does: it is a way of shifting the goods the city
+    // already makes, not a fourth kind of goods. See NETWORK_EXPORT_LIFT.
+    NETWORK_EXPORT_LIFT * networkService(s));
 
 export const jobs = (s: GameState): number =>
   openOf(s, 'shop', SHOP_JOBS) +
@@ -2291,7 +2427,14 @@ export const workers = (s: GameState): number => residents(s) * WORKING_SHARE;
  * available than its population alone accounts for (TRANSIT_WORKFORCE).
  */
 export const reachableWorkers = (s: GameState): number =>
-  workers(s) * (1 + TRANSIT_WORKFORCE * transitCoverage(s));
+  workers(s) *
+  (1 +
+    TRANSIT_WORKFORCE * transitCoverage(s) +
+    // The network's own labour term, and it is 0. Two channels through one set
+    // of vehicles is one thing counted twice, and the measurement that decides
+    // it is in tools/phase7.calibrate.mjs — see NETWORK_WORKFORCE, which
+    // carries the reading and the reason.
+    NETWORK_WORKFORCE * networkService(s));
 
 /**
  * Spare labour the network can deliver to a new employer.
@@ -3519,6 +3662,22 @@ export function landmarkBlocker(s: GameState, landmark: Landmark): string | null
 export function terminalBlocker(s: GameState, terminal: Terminal): string | null {
   if (!hasCoast(s)) return 'No coast yet';
   return terminalCount(s, terminal.key) >= terminalCapacity(s) ? 'No berths left' : null;
+}
+
+/**
+ * Why a line cannot be laid, phrased for the HUD.
+ *
+ * Rank first, then land, in the order `landmarkBlocker` states and for the same
+ * reason: the most permanent thing first. The land answer is worth wording as
+ * districts rather than as "sites", because that is what a line actually runs
+ * out of — a district offers exactly one pair of each kind, so the honest thing
+ * to tell a player with a complete network is to go and annex.
+ */
+export function lineBlocker(s: GameState, line: TransitLine): string | null {
+  const rank = rankBlocker(s, line.key);
+  if (rank) return rank;
+  if (linePairCapacity(line.key, s.districts) <= 0) return 'Nowhere to run it yet';
+  return lineCount(s, line.key) >= lineAllowed(s, line) ? 'Every district joined' : null;
 }
 
 export function parkBlocker(s: GameState): string | null {

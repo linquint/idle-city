@@ -337,6 +337,34 @@
         <span class="covers" id="garbage-mood">no effect on mood</span></div>
     </div>
 
+    <!-- The network above the depot. A depot covers plots inside a district;
+         a line joins one district to another, and where it runs is derived
+         from the count and the seed rather than stored — see `linePairAt`. -->
+    <p class="cap">Network</p>
+    <div class="civic-row sheet-key">
+      <button class="civic" id="build-tram" type="button">
+        <span>Tram</span><span class="built" id="build-tram-built">0/0</span>
+        <span class="cost" id="build-tram-cost">9000</span>
+      </button>
+      <button class="civic" id="build-rail" type="button">
+        <span>Rail</span><span class="built" id="build-rail-built">0/0</span>
+        <span class="cost" id="build-rail-cost">30000</span>
+      </button>
+    </div>
+    <!-- Reach and capacity both, because `networkService` is the lesser of the
+         two and a single number would hide which one the next line should buy. -->
+    <div class="services" id="network" role="img">
+      <div class="svc"><span class="k">Reach</span>
+        <span class="built" id="network-reach">0%</span>
+        <span class="covers" id="network-where">no line laid</span></div>
+      <div class="svc"><span class="k">Capacity</span>
+        <span class="built" id="network-capacity">0%</span>
+        <span class="covers" id="network-service">carries nothing yet</span></div>
+      <div class="svc"><span class="k">Freight</span>
+        <span class="built" id="network-freight">—</span>
+        <span class="covers" id="network-arrivals">no arrivals by rail</span></div>
+    </div>
+
     <p class="cap">Education</p>
     <div class="services" id="education" role="img">
       <div class="svc"><span class="k">Schools</span>

@@ -36,6 +36,7 @@ import {
   type Landmark,
   type Service,
   type Terminal,
+  type TransitLine,
 } from './config.ts';
 import {
   annexCost,
@@ -63,6 +64,8 @@ import {
   canBuildHighway,
   canBuildShop,
   canBuildTerminal,
+  canBuildLine,
+  lineCost,
   canMergeParcel,
   cityHallCost,
   civicBuildings,
@@ -1299,6 +1302,26 @@ export class Game {
     s.cash -= landmarkCost(s, landmark);
     if (landmark.key === 'museum') s.museums++;
     else s.stadiums++;
+    return true;
+  }
+
+  /**
+   * A line joins two districts, on the k-th pair `linePairAt` enumerates.
+   *
+   * Nothing about where it runs is stored: the count is the whole of it, and
+   * the route falls out of the ordinal, the district count and the seed exactly
+   * as a landmark's site falls out of its ordinal. What it buys is freight —
+   * `exportMarket` — and quieter roads, and neither is a happiness weight: the
+   * three sum to exactly 1 and the network lands in the modifier bracket
+   * through congestion, which is the route every mood term since the police
+   * re-calibration has taken. See TRANSIT_LINES.
+   */
+  buildLine(line: TransitLine): boolean {
+    const s = this.inner;
+    if (!canBuildLine(s, line)) return false;
+    s.cash -= lineCost(s, line);
+    if (line.key === 'tram') s.tramLines++;
+    else s.railLines++;
     return true;
   }
 

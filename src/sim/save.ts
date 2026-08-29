@@ -11,6 +11,7 @@ import {
   POWER_TRADE_NEUTRAL,
   TAX_NEUTRAL,
   TAX_STEPS,
+  TRANSIT_LINES,
 } from './config';
 import {
   burnableOf,
@@ -26,6 +27,7 @@ import {
   plantCapacity,
   landmarkSiteCapacity,
   estateCapacity,
+  lineAllowed,
   serviceAllowed,
   shopCapacity,
   terminalCapacity,
@@ -352,6 +354,19 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     cruiseTerminals: count(r['cruiseTerminals']),
     cargoTerminals: count(r['cargoTerminals']),
     /**
+     * The network, and what a save written before v15 is entitled to.
+     *
+     * None, which is exactly the state a city that never laid a line is in —
+     * the same default every count in this file takes and the opposite of the
+     * city hall's, because a line gates nothing a returning player already had.
+     * Clamped against `lineAllowed` below with the rest of them, which is what
+     * a save that annexed and then ascended needs: the pair list is bounded by
+     * the district count, so a doctored `railLines: 900` buys the network of a
+     * city ninety times the size.
+     */
+    tramLines: count(r['tramLines']),
+    railLines: count(r['railLines']),
+    /**
      * Granted to every save written before there was one to build.
      *
      * The opposite default from every other new field in this file, and it is a
@@ -549,6 +564,17 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   const berths = terminalCapacity(state);
   state.cruiseTerminals = Math.min(state.cruiseTerminals, berths);
   state.cargoTerminals = Math.min(state.cargoTerminals, berths);
+  // Lines are bounded by the pairs of districts there are to join, which is the
+  // same shape as the berths above and needs the clamp for the same reason: the
+  // pair list grows with the district count, so a save trimmed above may claim
+  // more lines than its land can route. Nothing relocates — the enumeration is
+  // append-only in the district count, so the lines a shrunk city keeps are
+  // exactly the ones it had.
+  for (const line of TRANSIT_LINES) {
+    const allowed = lineAllowed(state, line);
+    if (line.key === 'tram') state.tramLines = Math.min(state.tramLines, allowed);
+    else state.railLines = Math.min(state.railLines, allowed);
+  }
   // Estates are bounded by the band, by the district count and by the road
   // being there at all — and a save that claims the works without the highway
   // gets neither, because a shed with no road to it is not an estate. The band

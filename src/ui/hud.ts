@@ -64,6 +64,9 @@ import {
   POWER_TRADES,
   RIVAL_MATCH_DISTRICTS,
   TERMINALS,
+  TRANSIT_LINES,
+  NETWORK_EXPORT_LIFT,
+  RAIL_VISITORS,
   type PowerTrade,
 } from '../sim/config';
 import {
@@ -89,6 +92,12 @@ import {
   canBuildCityHall,
   canBuildPlant,
   canBuildTerminal,
+  canBuildLine,
+  lineBlocker,
+  networkCapacity,
+  networkReach,
+  networkService,
+  transitLineReadings,
   ascendBlocker,
   canAscend,
   cityHallBlocker,
@@ -192,6 +201,7 @@ import {
   housingCentrality,
   portDistrict,
   type CityLayout,
+  networkedDistricts,
 } from '../sim/layout';
 import type { GameState, ZoneKind } from '../sim/state';
 
@@ -628,6 +638,13 @@ export class Hud {
     crimeMood: el('crime-mood'),
     garbageRate: el('garbage-rate'),
     garbageMood: el('garbage-mood'),
+    network: el('network'),
+    networkReach: el('network-reach'),
+    networkWhere: el('network-where'),
+    networkCapacity: el('network-capacity'),
+    networkService: el('network-service'),
+    networkFreight: el('network-freight'),
+    networkArrivals: el('network-arrivals'),
     transitCongestionMood: el('transit-congestion-mood'),
     landmarkShare: el('landmark-share'),
     landmarkMood: el('landmark-mood'),
@@ -693,6 +710,20 @@ export class Hud {
     button: el<HTMLButtonElement>(`build-${terminal.key}`),
     cost: el(`build-${terminal.key}-cost`),
     allowance: el(`build-${terminal.key}-built`),
+  }));
+
+  /**
+   * One row per rung of the network, in the same shape as the two above.
+   *
+   * In the Services tab rather than in Trade, because the thing a line is a
+   * rung *above* — the depot — lives there, and a player looking for what to do
+   * about their traffic should find both in one place.
+   */
+  private readonly lineNodes = TRANSIT_LINES.map((line) => ({
+    line,
+    button: el<HTMLButtonElement>(`build-${line.key}`),
+    cost: el(`build-${line.key}-cost`),
+    allowance: el(`build-${line.key}-built`),
   }));
 
   private readonly tabs = TAB_KEYS.map((key) => ({
@@ -850,6 +881,11 @@ export class Hud {
     for (const row of this.terminalNodes) {
       row.button.addEventListener('click', () =>
         this.act({ kind: 'terminal', key: row.terminal.key }, row.button),
+      );
+    }
+    for (const row of this.lineNodes) {
+      row.button.addEventListener('click', () =>
+        this.act({ kind: 'line', key: row.line.key }, row.button),
       );
     }
     n.airport.addEventListener('click', () => this.act({ kind: 'airport' }, n.airport));
@@ -2066,6 +2102,45 @@ export class Hud {
       bins <= 0
         ? 'no effect on mood'
         : `−${(GARBAGE_MOOD * bins * 100).toFixed(1)} points of mood`;
+    // And the network above it. Two numbers rather than one, because
+    // `networkService` is the *lesser* of reach and capacity and a single
+    // figure would leave the player unable to tell which line to lay next.
+    for (const { line, built, allowed, cost } of transitLineReadings(s)) {
+      const row = this.lineNodes.find((entry) => entry.line.key === line.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(cost);
+      row.button.disabled = !canBuildLine(s, line);
+      row.button.title = lineBlocker(s, line) ?? line.buildLabel;
+    }
+    const joined = networkReach(s);
+    const room = networkCapacity(s);
+    const served = networkService(s);
+    const lines = s.tramLines + s.railLines;
+    n.networkReach.textContent = pct(joined);
+    n.networkWhere.textContent =
+      lines <= 0
+        ? 'no line laid'
+        : `${fmtInt(networkedDistricts(s.tramLines, s.railLines, s.districts))} of ` +
+          `${fmtInt(s.districts)} districts joined`;
+    n.networkCapacity.textContent = pct(room);
+    n.networkService.textContent =
+      served <= 0 ? 'carries nothing yet'
+      : room < reach ? 'short of capacity — more lines'
+      : reach < room ? 'short of track — more districts'
+      : 'the whole city, carried';
+    n.networkFreight.textContent =
+      served <= 0 ? '—' : `+${Math.round(NETWORK_EXPORT_LIFT * served * 100)}%`;
+    n.networkArrivals.textContent =
+      served <= 0
+        ? 'no arrivals by rail'
+        : `${fmt(visitorSources(s).rail)} arriving by rail`;
+    n.network.setAttribute(
+      'aria-label',
+      `Network: ${lines} lines reaching ${Math.round(joined * 100)} percent of the city ` +
+        `and carrying ${Math.round(room * 100)} percent of it.`,
+    );
+
     n.transit.setAttribute(
       'aria-label',
       `Transport: ${s.depots} depots covering ${Math.round(transitCoverage(s) * 100)} percent, ` +
@@ -2228,7 +2303,8 @@ export class Hud {
     // road tourism is ROAD_VISITORS berths times a coverage, so a city with two
     // museums is landing a fraction of one and flooring it to zero would say it
     // had none. The allowance counts the road's two the same way.
-    const allowed = berths + (s.airport ? AIRPORT_VISITORS : 0) + ROAD_VISITORS;
+    const allowed =
+      berths + (s.airport ? AIRPORT_VISITORS : 0) + ROAD_VISITORS + RAIL_VISITORS;
     n.portBerths.textContent = `${fmt(berthsLanding(s))}/${fmt(allowed)}`;
     n.portWhere.textContent =
       first >= 0 ? `first quay on district ${fmtInt(first + 1)}`
@@ -2251,6 +2327,7 @@ export class Hud {
     if (from.quay > 0) parts.push(`${fmt(from.quay)} sea`);
     if (from.air > 0) parts.push(`${fmt(from.air)} air`);
     if (from.road > 0) parts.push(`${fmt(from.road)} road`);
+    if (from.rail > 0) parts.push(`${fmt(from.rail)} rail`);
     n.portSources.textContent = parts.length > 0 ? parts.join(' · ') : '—';
     const share = visitorShare(s);
     n.portShopping.textContent =
@@ -2262,7 +2339,8 @@ export class Hud {
     const lift =
       CARGO_EXPORT_LIFT * s.cargoTerminals +
       (s.airport ? AIRPORT_EXPORT_LIFT : 0) +
-      (goodsTraded(s) ? GOODS_TRADE_LIFT : 0);
+      (goodsTraded(s) ? GOODS_TRADE_LIFT : 0) +
+      NETWORK_EXPORT_LIFT * networkService(s);
     n.portLift.textContent =
       lift <= 0 ? 'no freight yet' : `+${Math.round(lift * 100)}% on the tap`;
 
