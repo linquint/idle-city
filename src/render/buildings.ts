@@ -2707,7 +2707,7 @@ class Outline {
 /**
  * The instanced meshes the three zone ladders are allowed to cost, all told.
  *
- * Seven bodies, eight shared detail parts, forty models and the construction
+ * Six bodies, eight shared detail parts, forty-five models and the construction
  * cage. The alternative the styles were designed against is 45 meshes: five
  * levels by three styles by three zones, each a draw call for what is
  * fundamentally the same box. Asserted in test/skyline.test.ts, so a later
@@ -2774,13 +2774,23 @@ class Outline {
  *     the rung on the far side of the first promotion a player makes to a
  *     shopping street, and the cliff there was the same one that justified the
  *     walk-ups. Five shop silhouettes along a kerb became copies of one 3.0 x
- *     3.2 box, in the hour after the one the shops were built for.
+ *     3.2 box, in the hour after the one the shops were built for;
+ *   - **+5 -1, the retail parks** and `shop:2`. Commerce's third, and the
+ *     paragraph below named this one in advance rather than being surprised by
+ *     it: commerce's third rung *is* the merge, and the merge is the one
+ *     argument that has overturned this note before. It is the same spend
+ *     housing's third was, one zone over and for the same reason — two plots
+ *     become one building, it is the most consequential thing a player does to
+ *     a district, and massed it read as the same shop stretched to twice the
+ *     width. It does not widen the test below, because it does not claim to
+ *     pass it: the merge is the named exception to it, and this is the second
+ *     and last zone that can invoke it.
  *
- * So 25 - 2 + 4 x 7 = 51... which is 56. The three first rungs a district is
- * made of get fifteen silhouettes for the price of thirteen boxes, and the five
- * rungs above them — housing's other four and commerce's second — get
- * twenty-five more for twenty. Housing is no bodies and twenty-five models;
- * commerce is three bodies and ten; industry is four bodies and five.
+ * So 25 - 2 + 4 x 8 = 55... which is 60. The three first rungs a district is
+ * made of get fifteen silhouettes for the price of thirteen boxes, and the six
+ * rungs above them — housing's other four and commerce's second and third — get
+ * thirty more for twenty-four. Housing is no bodies and twenty-five models;
+ * commerce is two bodies and fifteen; industry is four bodies and five.
  *
  * **The test this note has applied six times needs restating, and the high
  * streets are why.** It was "a rung earns models by being a rung players look
@@ -2791,17 +2801,24 @@ class Outline {
  * watches happen.** A first rung qualifies because a district is made of it; a
  * second qualifies because the player is looking straight at the street when it
  * arrives. Nothing above a second has ever qualified on that reading, and the
- * two rungs modelled above one — housing's third and fourth — were argued on
- * the merge and on the measurement instead, which is the exception being named
- * rather than hidden.
+ * three rungs modelled above one — housing's third and fourth and commerce's
+ * third — were argued on the merge and on the measurement instead, which is the
+ * exception being named rather than hidden.
  *
- * The open candidates now are commerce's rungs 3 to 5, industry's 2 to 5, and
- * the price has not moved: a district carries 45 commercial plots to 24
- * residential, so commerce is still the zone where a rung of models costs most
- * in triangles — see part 1b, where commerce is the largest single line in the
- * scene — and industry's upper rungs are the least-looked-at surfaces in the
- * game. Commerce's third is also the merge, which is the one argument that has
- * overturned this note before. The burden stays on the spend.
+ * The open candidates now are commerce's rungs 4 and 5 and industry's 2 to 5,
+ * and **both of the arguments that have ever carried a rung above a first are
+ * now spent.** The far-side-of-a-promotion test reaches a second rung and no
+ * further; the merge reaches a third, and both zones that merge into a modelled
+ * rung have now done it. What is left is four industrial rungs a player
+ * promotes last and looks at least, and commerce's top two — the rungs a settled
+ * city has climbed to, viewed from far enough out that a silhouette is most of
+ * what lands. Those two are also where a spend would be nearly *pure* draw
+ * calls: part 1f found housing's ladder turning over above the merge and part
+ * 1h found commerce's doing the same, so a rung above a merged one is worth
+ * little more than the difference between two models. That makes them cheap in
+ * geometry and no cheaper in the thing this budget actually counts. A spend
+ * there needs a new argument rather than another application of these two, and
+ * this note has no candidate for one.
  *
  * The cost that is *not* in this number is triangles rather than draw calls: a
  * modelled building is 14 to 241 boxes where the massed one was one, which is
@@ -2832,7 +2849,7 @@ class Outline {
  * ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
-export const BUILDING_MESH_BUDGET = 56;
+export const BUILDING_MESH_BUDGET = 60;
 
 /**
  * The building layer. It owns no game state: given counts, it reconciles the

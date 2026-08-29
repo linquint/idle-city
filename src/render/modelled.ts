@@ -23,6 +23,13 @@ import {
   HIGHSTREET_ORIEL_PARTS,
 } from './highStreetModels.ts';
 import {
+  RETAILPARK_COLONNADE_PARTS,
+  RETAILPARK_HALL_PARTS,
+  RETAILPARK_PILASTER_PARTS,
+  RETAILPARK_STAIR_PARTS,
+  RETAILPARK_STORE_PARTS,
+} from './retailParkModels.ts';
+import {
   INDUSTRY_DOCK_PARTS,
   INDUSTRY_MILL_PARTS,
   INDUSTRY_SHED_PARTS,
@@ -65,7 +72,8 @@ import type { ZoneKind } from '../sim/state.ts';
  * The modelled rungs of the three ladders, and the meshes that draw them.
  *
  * The first rung of housing, of commerce and of industry, plus housing's second
- * through fifth and commerce's second: the rungs the city is mostly *made* of.
+ * through fifth and commerce's second and third: the rungs the city is mostly
+ * *made* of.
  * Every plot a player buys starts on a first rung, a district that has not been
  * pushed up the ladder is nothing but them, and they are what a new player
  * spends their first hour looking at. They were a box with a cone on it, a box
@@ -77,7 +85,7 @@ import type { ZoneKind } from '../sim/state.ts';
  * along a kerb in the order the seed put them in. What it costs is five meshes
  * a rung, and most of this file is about keeping it to five.
  *
- * **Housing is modelled at every rung and commerce at its first two, and both
+ * **Housing is modelled at every rung and commerce at its first three, and both
  * are where the cliffs were rather than a step toward modelling everything.** A
  * player's first promotion turned a street of five house silhouettes into
  * twenty-four copies of one 2.6 x 4.6 box, and the second turned *that* into
@@ -88,10 +96,14 @@ import type { ZoneKind } from '../sim/state.ts';
  *
  * Commerce's second is the same cliff one zone over: a shopping street of five
  * silhouettes became copies of one 3.0 x 3.2 box, in the hour after the one the
- * shops were built for. It is the only rung outside housing modelled above a
- * first, and what it is *not* is the start of climbing commerce — the rung
- * above it is the merge, and nothing has argued for that yet. Industry is
- * modelled at its first rung only.
+ * shops were built for. Its third is the same *merge* one zone over, and the
+ * two arguments are worth keeping apart because they are the only two this file
+ * has: a second rung is earned by being the far side of a promotion the player
+ * watches happen, and a third only by being the merge — where two plots become
+ * one building and the massed answer is the rung below stretched to twice the
+ * width. Both zones that merge into a modelled rung have now done it, so
+ * commerce stops at three for the same reason housing did not stop at two.
+ * Industry is modelled at its first rung only.
  *
  * Nothing in housing is massed now. What finished it was the measurement rather
  * than an argument: the note that used to stand here said the top rung was the
@@ -101,12 +113,16 @@ import type { ZoneKind } from '../sim/state.ts';
  * being weighed. `ZONE_SHAPES.home` still states the ladder and still carries
  * the `beacon` flags, but not one of its widths or heights is drawn.
  *
- * The third rung is also the first modelled anything that stands on a **merged
- * parcel**, which is a genuinely different footprint rather than a bigger one:
- * oblong, 6.8 by 2.8, and fixed in the world by which way the parcel runs. Two
- * rules follow from it and both live in this file — `jitterCap`, which bounds
- * the two axes against different amounts of land, and `modelFacing`, which
- * narrows an oblong model to the two quarter turns that lie along its parcel.
+ * A third rung is where a model first stands on a **merged parcel**, which is a
+ * genuinely different footprint rather than a bigger one: oblong, `MERGED_SPAN`
+ * by its row's width, and fixed in the world by which way the parcel runs — 6.8
+ * by 2.8 for housing and 6.8 by 3.1 for commerce. Two rules follow from it and
+ * both live in this file: `jitterCap`, which bounds the two axes against
+ * different amounts of land, and `modelFacing`, which narrows an oblong model
+ * to the two quarter turns that lie along its parcel. They were written for the
+ * towers and took commerce's third rung without a change, which is the useful
+ * thing to know about them — they are properties of the *footprint* rather than
+ * of housing.
  *
  * Everything above is still massed, and that is the shape the ladder should
  * have: the rungs the game is played on get the geometry, and the rungs a
@@ -184,6 +200,13 @@ const MODELS: Readonly<Record<ModelledKind, readonly (readonly (readonly ModelPa
       HIGHSTREET_GABLE_PARTS,
       HIGHSTREET_ORIEL_PARTS,
       HIGHSTREET_LOFT_PARTS,
+    ],
+    [
+      RETAILPARK_PILASTER_PARTS,
+      RETAILPARK_COLONNADE_PARTS,
+      RETAILPARK_STORE_PARTS,
+      RETAILPARK_HALL_PARTS,
+      RETAILPARK_STAIR_PARTS,
     ],
   ],
   industry: [

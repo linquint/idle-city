@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 7, +8 shared parts, +40 models = 55 (asserted, plus the cage) | 11, +8, +45 = **64**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 6, +8 shared parts, +45 models = 59 (asserted, plus the cage) | 10, +8, +50 = **68**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -150,6 +150,26 @@ clothes.
 > plots to 24 residential, because the high street models are simpler than the
 > walk-ups. That is a fact about these five models rather than about commerce,
 > and it does not generalise to commerce's remaining rungs.
+>
+> A ninth, after commerce's *third*: six bodies and forty-five models, 56 -> 60,
+> floor for a fourth zone now 68. This is the last entry that can be written
+> without a new argument, and that is the thing worth recording rather than the
+> number. Two arguments have ever carried a rung above a first — the far side of
+> a promotion a player watches happen, which reaches a second, and the merge,
+> which reaches a third — and commerce's third was the second and final use of
+> the merge. Everything still massed is either an upper rung nobody has argued
+> for or a first rung nobody has seen, and Option A is squarely the latter.
+>
+> The measurement is recorded because it cuts against the budget's scarcity
+> rather than for it, and this row is not a case for the budget being soft:
+> commerce's merge came in at **-214,548 triangles**, 0.67x the rung below it
+> (`lod:calibrate` part 1h) — the same payback part 1e found for the arcologies,
+> because a merged rung halves the building count and a retail park is only
+> 1.33x the model a high street is. So commerce's ladder peaks at rung 2 where
+> housing's peaks at rung 3. That makes the geometry cheaper than this row has
+> ever assumed and the *draw calls* the whole of the cost, which is precisely
+> the part a fourth zone would pay in full: four bodies and five models, none of
+> it recoverable by a merge, on a rung nobody has seen.
 
 ### Option B — a second building type on the commercial frontage
 
