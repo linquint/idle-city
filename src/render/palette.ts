@@ -66,6 +66,10 @@ export const PALETTE = {
   // `flame`, so a burning roof still wins the eye over a painted marking.
   emergency: 0xd8453c,
   police: 0x1c2740,
+  // The station's head band and cell cap, and its blue lights — over the door,
+  // on the mast head and on each patrol car's roof bar. Paint and light in one
+  // colour, which is why the model keeps them apart by material name rather
+  // than by hex; see `policeStationSet`.
   policeRoof: 0x7fa8ff,
   fire: 0x6d2f2c,
   fireRoof: 0xe0574b,
@@ -76,10 +80,15 @@ export const PALETTE = {
   university: 0xd6c9a8,
   universityRoof: 0x9a7f4e,
   // Landmarks. Pale stone against every civic blue and teal on the map, because
-  // a landmark's job is to be picked out from across the city — and a lit band
-  // at its base, so it still reads after dark when its neighbours have gone
-  // dark. The two sizes share a palette and differ in silhouette.
+  // a landmark's job is to be picked out from across the city. The two sizes
+  // share a palette and differ in silhouette — a colonnaded hall against a bowl
+  // of stands — and each keeps a lit fitting of its own, the museum's roof
+  // lantern and the stadium's four floodlights, so both still say where they
+  // are after dark when their neighbours have gone flat.
   landmark: 0xe4dccb,
+  // The cornices and portico roof on the museum, the facade band and canopy on
+  // the stadium. Warm brown against the stone, which is what draws every
+  // horizontal line on a landmark from the play camera.
   landmarkRoof: 0x9c6f4f,
   // The city hall. Pale limestone like a landmark, on the one roof colour
   // nothing else in the city wears — the map already has mint, cornflower, red,
@@ -108,13 +117,17 @@ export const PALETTE = {
   quay: 0x8d939c,
   hull: 0x2b3644,
   container: 0xb4623f,
-  // Transport. The depot is a shed and an apron rather than a civic slab, and
-  // the buses that leave it wear the same colour so the two read as one system.
+  // Transport. The depot is a shed over an apron rather than a civic slab, so
+  // this is the shed and the fuel pump beside it and nothing else.
   depot: 0x3d5a52,
   // Not another teal: the hospital's roof is mint and the two 2x2 sheds would
   // read as the same building from the play camera. A transport livery instead
-  // — the one hue nothing else in the city wears.
+  // — the one hue nothing else in the city wears, and the only one worn by a
+  // building *and* by vehicles: the depot's cap and sign, and a band down each
+  // coach parked under it. See `busDepotSet`.
   depotRoof: 0xc2d24f,
+  // The fleet, on the streets and standing on the depot's own apron. One colour
+  // for both, because they are the same buses.
   bus: 0x5f8f5a,
   // Zoned land nobody will ever build on: the interior of a deep block, and the
   // civic sites still standing empty. Drawn, or the blocks read as holes.
@@ -124,6 +137,11 @@ export const PALETTE = {
   park: 0x3f8f57,
   trunk: 0x4a3524,
   canopy: 0x53a86a,
+  // Clipped planting: the hedge along the school's playground. Darker and
+  // greyer than a tree's canopy and flatter than the park's lawn, because it is
+  // neither — a hedge that borrowed either colour would read as a wall of park
+  // pushed up against a school.
+  hedge: 0x4a7a4e,
   // Traffic. One shared body colour rather than a per-instance tint: at the
   // distance this is played from a car is two world units long, so the variety
   // would not read, and instance colours would have to be rewritten every frame

@@ -10,10 +10,12 @@ import {
   type District,
 } from '../sim/layout.ts';
 import type { GameState } from '../sim/state.ts';
+import { BUS_PARTS } from './civicModels.ts';
 import { Glow } from './glow.ts';
 import { ROAD_H, ROAD_W } from './ground.ts';
 import { GrowableInstancedMesh } from './growable.ts';
 import { bandLane, spurLane, type Lane } from './highway.ts';
+import { mergeColoured, type ModelPart } from './model.ts';
 import { PALETTE } from './palette.ts';
 // The district's street graph, which the pavements read as well. Moved out of
 // this file rather than exported from it: a street belongs to neither fleet.
@@ -132,18 +134,22 @@ const HEADLIGHT_NIGHT = 0.15;
 /**
  * Buses, out of the same pool.
  *
- * Not a second fleet and not a second router: a bus is a car with a longer body
- * and a route that stops. It shares the pool, the lane offsets, the culling and
- * the headlights, and costs exactly one more instanced mesh — a separate
- * traffic layer for eight vehicles would be a second copy of all of that for
- * nothing anyone can see from the play camera.
+ * Not a second fleet and not a second router: a bus is a car with a modelled
+ * body and a route that stops. It shares the pool, the lane offsets and the
+ * culling, and it is the one vehicle that comes out of `models/` — see
+ * `BUS_PARTS`, and `mergeColoured` for why a thing that is rewritten every
+ * frame cannot be split into a mesh per material the way a building is.
+ *
+ * Three meshes rather than the box's one: the body, with every colour on it
+ * baked into its vertices; the destination blind; and its own headlights, which
+ * are in the model and so replace the shared lamp quad on a bus rather than
+ * doubling it. Two of those are lights and could not have been baked.
  *
  * Nothing about a bus reaches `GameState`. They are a readout of `depots` in
  * precisely the way a building is a readout of `homes`.
  */
-const BUS_LENGTH = 3.4;
-const BUS_HEIGHT = 0.95;
-const BUS_WIDTH = 0.95;
+/** How dim the destination blind sits at noon. It is a display, not paint. */
+const BLIND_FLOOR = 0.3;
 
 /** Buses put on the road per depot, once the depot is staffed. */
 const BUSES_PER_DEPOT = 3;
@@ -173,9 +179,10 @@ const BUS_CRAWL = BUS_SPEED * 0.55;
  *
  * A lorry is a car with a longer body and a route that is not in the city: it
  * runs the highway between the estates and the town, and it shares the pool,
- * the lane offsets, the culling and the headlights. One more instanced mesh,
- * for the same reason the buses cost one — a third traffic layer for a dozen
- * vehicles would be a third copy of all of that.
+ * the lane offsets, the culling and the headlights. One more instanced mesh and
+ * still a box, because nothing about a lorry needs to be told from a bus at
+ * this distance except that it is on the highway — a third traffic layer for a
+ * dozen vehicles would be a third copy of all of that.
  *
  * They take the *back* of the pool where the buses take the front, so a fleet
  * that shrinks with the population loses cars from the middle and keeps both
@@ -274,8 +281,12 @@ interface Car {
  */
 export class Cars {
   private readonly bodies: GrowableInstancedMesh;
-  /** The one extra mesh buses cost. Same pool, same lanes, a longer box. */
+  /** A bus's body: the model, less its two lit parts, in one geometry. */
   private readonly coaches: GrowableInstancedMesh;
+  /** Its destination blind, and its headlights. Written with the body. */
+  private readonly blinds: GrowableInstancedMesh;
+  private readonly busLamps: GrowableInstancedMesh;
+  private readonly blind = new Glow(PALETTE.sodium, BLIND_FLOOR);
   /** The one extra mesh lorries cost. Same pool, same lanes, a longer box. */
   private readonly lorries: GrowableInstancedMesh;
   private readonly lamps: GrowableInstancedMesh;
@@ -328,12 +339,33 @@ export class Cars {
       this.headlights.material,
       MAX_CARS,
     );
+    // The body is every part of the model that is not a light, welded into one
+    // geometry that carries its own colours. One mesh, so a bus still costs one
+    // matrix write a frame — see `mergeColoured`.
+    const lit = (part: ModelPart): boolean =>
+      part.mtl === 'destination-blind' || part.mtl === 'headlight';
     this.coaches = new GrowableInstancedMesh(
       scene,
-      new THREE.BoxGeometry(BUS_LENGTH, BUS_HEIGHT, BUS_WIDTH),
-      new THREE.MeshLambertMaterial({ color: PALETTE.bus }),
+      mergeColoured(BUS_PARTS.filter((part) => !lit(part))),
+      new THREE.MeshLambertMaterial({ vertexColors: true }),
       MAX_CARS,
       { castShadow: true, name: 'traffic:bus' },
+    );
+    this.blinds = new GrowableInstancedMesh(
+      scene,
+      mergeColoured(BUS_PARTS.filter((part) => part.mtl === 'destination-blind')),
+      this.blind.material,
+      MAX_CARS,
+      { name: 'traffic:bus:blind' },
+    );
+    // On the shared headlight glow, so a bus lights up with the traffic around
+    // it rather than on a ramp of its own.
+    this.busLamps = new GrowableInstancedMesh(
+      scene,
+      mergeColoured(BUS_PARTS.filter((part) => part.mtl === 'headlight')),
+      this.headlights.material,
+      MAX_CARS,
+      { name: 'traffic:bus:lamps' },
     );
     this.lorries = new GrowableInstancedMesh(
       scene,
@@ -727,14 +759,18 @@ export class Cars {
     if (this.lines.length === 0 || this.active === 0) {
       this.bodies.count = 0;
       this.coaches.count = 0;
+      this.blinds.count = 0;
+      this.busLamps.count = 0;
       this.lorries.count = 0;
       this.lamps.count = 0;
       return;
     }
 
     this.headlights.setNight(night);
+    this.blind.setNight(night);
     const lit = night > HEADLIGHT_NIGHT;
     this.lamps.mesh.visible = lit;
+    this.busLamps.mesh.visible = lit;
 
     const dummy = this.dummy;
     const fx = focus.x;
@@ -792,16 +828,26 @@ export class Cars {
       const dz = z - fz;
       if (dx * dx + dz * dz > VIEW_RADIUS * VIEW_RADIUS) continue;
 
-      const length = car.bus ? BUS_LENGTH : car.truck ? TRUCK_LENGTH : CAR_LENGTH;
-      const height = car.bus ? BUS_HEIGHT : car.truck ? TRUCK_HEIGHT : CAR_HEIGHT;
-      dummy.position.set(x, ROAD_H + height / 2, z);
+      const length = car.truck ? TRUCK_LENGTH : CAR_LENGTH;
+      const height = car.truck ? TRUCK_HEIGHT : CAR_HEIGHT;
+      // A box is centred on its own middle and the model stands on the road, so
+      // the two sit at different heights for the same vehicle on the same road.
+      dummy.position.set(x, car.bus ? ROAD_H : ROAD_H + height / 2, z);
       dummy.rotation.set(0, car.heading, 0);
       dummy.updateMatrix();
-      if (car.bus) this.coaches.setMatrixAt(coaches++, dummy.matrix);
-      else if (car.truck) this.lorries.setMatrixAt(trucks++, dummy.matrix);
+      if (car.bus) {
+        // One transform, three meshes, and the same index in each: the blind
+        // and the lamps are parts of this bus and never move relative to it.
+        this.coaches.setMatrixAt(coaches, dummy.matrix);
+        this.blinds.setMatrixAt(coaches, dummy.matrix);
+        if (lit) this.busLamps.setMatrixAt(coaches, dummy.matrix);
+        coaches++;
+      } else if (car.truck) this.lorries.setMatrixAt(trucks++, dummy.matrix);
       else this.bodies.setMatrixAt(drawn++, dummy.matrix);
 
-      if (lit) {
+      // A bus brings its own headlights, so it is the one vehicle that does not
+      // take a quad off the shared lamp mesh.
+      if (lit && !car.bus) {
         // The nose, in the direction of travel. Same rotation, so the quad
         // faces the way the vehicle is going without a second trig call. All
         // three body types share the lamp mesh — an instance index there
@@ -821,6 +867,10 @@ export class Cars {
     this.bodies.flush();
     this.coaches.count = coaches;
     this.coaches.flush();
+    this.blinds.count = coaches;
+    this.blinds.flush();
+    this.busLamps.count = lit ? coaches : 0;
+    if (lit) this.busLamps.flush();
     this.lorries.count = trucks;
     this.lorries.flush();
     if (lit) {

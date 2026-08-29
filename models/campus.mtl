@@ -1,0 +1,55 @@
+# Exported by three-d-stage
+newmtl trim-grey
+Kd 0.3419 0.3564 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl quad-lawn
+Kd 0.0497 0.2747 0.0953
+Ks 0.2000 0.2000 0.2000
+Ns 16
+d 1.0000
+
+newmtl quad-path
+Kd 0.5457 0.4564 0.2502
+Ks 0.2000 0.2000 0.2000
+Ns 20
+d 1.0000
+
+newmtl campus-stone
+Kd 0.6724 0.5841 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 44
+d 1.0000
+
+newmtl glazing
+Kd 0.0273 0.0482 0.0908
+Ks 0.2000 0.2000 0.2000
+Ns 144
+d 1.0000
+
+newmtl campus-roof
+Kd 0.3231 0.2122 0.0762
+Ks 0.2000 0.2000 0.2000
+Ns 56
+d 1.0000
+
+newmtl belfry-light
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+
+newmtl tree-trunk
+Kd 0.0685 0.0356 0.0176
+Ks 0.2000 0.2000 0.2000
+Ns 20
+d 1.0000
+
+newmtl tree-canopy
+Kd 0.0865 0.3916 0.1441
+Ks 0.2000 0.2000 0.2000
+Ns 24
+d 1.0000
+

@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { hash01 } from '../core/rng.ts';
 import { ZONE } from '../sim/citygen.ts';
 import { CELL, CIVIC_SERVICES, HAPPINESS_SERVICES } from '../sim/config.ts';
 import {
@@ -25,8 +24,11 @@ import {
   type Coord,
 } from '../sim/layout.ts';
 import type { GameState, ZoneKind } from '../sim/state.ts';
+import { PARK_PARTS } from './civicModels.ts';
+import { Glow } from './glow.ts';
 import { ROAD_H } from './ground.ts';
 import { GrowableInstancedMesh } from './growable.ts';
+import { mergeByMaterial } from './model.ts';
 import { PALETTE } from './palette.ts';
 
 /** A gutter under the pad so plots read as plots rather than as a colour wash. */
@@ -188,62 +190,72 @@ export class Courtyards {
 }
 
 /**
- * Parks: a green pad and a handful of trees, on land nothing else can use.
+ * The highest a park reaches, which is what its meshes are culled against.
  *
- * The pad is the courtyard pad — same geometry, same height, same one-unit
- * gutter — because a park *is* a courtyard with something on it, and drawing it
- * any other way would make the interior of a block read as two different kinds
- * of land. What distinguishes it is the colour and the trees.
- *
- * Rebuilt only when the park count or the district count moves. Tree placement
- * is `hash01` over the park's ordinal, so a park scatters the same way on every
- * device and after every reload without a single coordinate being stored.
+ * Read off the part table rather than stated, because the model decides it: the
+ * lamp is the tallest thing in the current one and the next remodel may put
+ * something taller in, and a ceiling that had to be remembered would be a park
+ * culled at the wrong height with nothing to say so.
  */
-class ParkTrees {
-  /** Trees to a plot. Four reads as planting; more reads as woodland. */
-  static readonly PER_PARK = 4;
-  /** Kept inside the pad, so no canopy overhangs the kerb. */
-  static readonly SPREAD = PAD / 2 - 0.55;
-  /** Trunk and canopy, at the top of the height jitter. What TREE_TOP is. */
-  static readonly TALLEST = (0.55 + 1.15) * 1.28;
-}
+const PARK_TOP = PARK_PARTS.reduce((top, part) => {
+  const height = part.shape === 'box' ? part.size[1] : part.height;
+  return Math.max(top, part.at[1] + height / 2);
+}, 0);
 
-/** The highest a park reaches, which is what its meshes are culled against. */
-const TREE_TOP = PAD_Y + ParkTrees.TALLEST;
-
+/**
+ * Parks: a laid-out plot, on land nothing else can use.
+ *
+ * The lawn is the courtyard pad — the same 3.2-unit square inside the same
+ * one-unit gutter — because a park *is* a courtyard with something on it, and
+ * drawing it any other way would make the interior of a block read as two
+ * different kinds of land. What distinguishes it is what is laid out on top:
+ * two paths, planting beds, a pond, three trees, two benches and a lamp.
+ *
+ * Modelled rather than scattered, which is a trade worth stating. What it gives
+ * up is variety — the trees were placed by `hash01` over the park's ordinal, so
+ * no two parks were quite alike. What it buys is *design*: a park that reads as
+ * laid out rather than as four cones dropped on a green square. At a plot four
+ * world units across, one scatter was never legible from another, and a city
+ * has up to 64 of these; what matters is that one of them reads as a park.
+ *
+ * One instanced mesh per material and one instance per park, so the cost grows
+ * with the *table* and not with the city — the same bargain every modelled
+ * building in `civicModels.ts` makes. Rebuilt only when the park count or the
+ * district count moves.
+ */
 export class Parks {
-  private readonly pads: GrowableInstancedMesh;
-  private readonly trunks: GrowableInstancedMesh;
-  private readonly canopies: GrowableInstancedMesh;
+  private readonly meshes: readonly GrowableInstancedMesh[];
+  /** The lamp head, which is the one lit thing on a plot of grass. */
+  private readonly lamp = new Glow(PALETTE.sodium, 0.36);
   private readonly dummy = new THREE.Object3D();
-  private readonly tint = new THREE.Color(PALETTE.park);
   private stamp = '';
 
   constructor(
     scene: THREE.Scene,
     private readonly layout: CityLayout,
   ) {
-    this.pads = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(PAD, PAD_H, PAD),
-      new THREE.MeshLambertMaterial({ color: PALETTE.park }),
-      64,
-      { receiveShadow: true, name: 'zone:park' },
-    );
-    this.trunks = new GrowableInstancedMesh(
-      scene,
-      new THREE.BoxGeometry(0.16, 0.55, 0.16),
-      new THREE.MeshLambertMaterial({ color: PALETTE.trunk }),
-      256,
-      { castShadow: true, name: 'zone:trunk' },
-    );
-    this.canopies = new GrowableInstancedMesh(
-      scene,
-      new THREE.ConeGeometry(0.52, 1.15, 6),
-      new THREE.MeshLambertMaterial({ color: PALETTE.canopy }),
-      256,
-      { castShadow: true, name: 'zone:canopy' },
-    );
+    this.meshes = mergeByMaterial(PARK_PARTS).map(({ mtl, colour, geometry }) => {
+      // The lamp head is a light; everything else is a surface. Keyed on the
+      // material name for the reason the merge is — the lamp post and the
+      // benches share a grey, and the head is a different thing entirely.
+      const lit = mtl === 'lamp-light';
+      // The lawn, the paths, the beds and the pond are ground: they take a
+      // shadow and cast none. What stands on them does both.
+      const flat = lit || mtl === 'park-lawn' || mtl === 'park-path'
+        || mtl === 'planting-bed' || mtl === 'pond-water';
+      return new GrowableInstancedMesh(
+        scene,
+        geometry,
+        lit ? this.lamp.material : new THREE.MeshLambertMaterial({ color: colour }),
+        64,
+        { castShadow: !flat, receiveShadow: true, name: `park:${mtl}` },
+      );
+    });
+  }
+
+  /** The lamp comes on with the rest of the city's sodium. */
+  setNight(night: number): void {
+    this.lamp.setNight(night);
   }
 
   sync(state: Readonly<GameState>): void {
@@ -251,53 +263,26 @@ export class Parks {
     if (stamp === this.stamp) return;
     this.stamp = stamp;
     this.layout.ensure(state);
-    // A canopy is a cone standing on a trunk; TREE_TOP is where the tallest of
-    // them reaches, which is what the pads and the trees share as a ceiling.
-    fitToCity(state.districts, TREE_TOP, this.pads, this.trunks, this.canopies);
+    fitToCity(state.districts, PARK_TOP, ...this.meshes);
 
     const n = Math.min(state.parks, state.districts * PARKS_PER_DISTRICT);
-    this.pads.ensure(n);
-    this.trunks.ensure(n * ParkTrees.PER_PARK);
-    this.canopies.ensure(n * ParkTrees.PER_PARK);
+    for (const mesh of this.meshes) mesh.ensure(n);
 
-    let tree = 0;
     for (let i = 0; i < n; i++) {
       const cell = this.layout.parkCell(i);
-      const x = worldX(cell.x);
-      const z = worldZ(cell.z);
-
+      // Every mesh takes the same transform, because the model carries its own
+      // placement: the plot's centre, unrotated and unscaled.
       this.dummy.rotation.set(0, 0, 0);
       this.dummy.scale.set(1, 1, 1);
-      this.dummy.position.set(x, PAD_Y, z);
+      this.dummy.position.set(worldX(cell.x), 0, worldZ(cell.z));
       this.dummy.updateMatrix();
-      this.pads.setMatrixAt(i, this.dummy.matrix);
-      this.pads.setColorAt(i, this.tint);
-
-      for (let k = 0; k < ParkTrees.PER_PARK; k++) {
-        const seed = i * ParkTrees.PER_PARK + k;
-        const tx = x + (hash01(seed ^ 0x51ed270b) * 2 - 1) * ParkTrees.SPREAD;
-        const tz = z + (hash01(seed ^ 0x2f9a3b17) * 2 - 1) * ParkTrees.SPREAD;
-        // A little height variation, or four identical cones read as a fence.
-        const grow = 0.78 + hash01(seed ^ 0x7c1a55d3) * 0.5;
-
-        this.dummy.scale.set(1, grow, 1);
-        this.dummy.position.set(tx, PAD_Y + (0.55 * grow) / 2, tz);
-        this.dummy.updateMatrix();
-        this.trunks.setMatrixAt(tree, this.dummy.matrix);
-
-        this.dummy.position.y = PAD_Y + 0.55 * grow + (1.15 * grow) / 2;
-        this.dummy.updateMatrix();
-        this.canopies.setMatrixAt(tree, this.dummy.matrix);
-        tree++;
-      }
+      for (const mesh of this.meshes) mesh.setMatrixAt(i, this.dummy.matrix);
     }
 
-    this.pads.count = n;
-    this.trunks.count = tree;
-    this.canopies.count = tree;
-    this.pads.flush();
-    this.trunks.flush();
-    this.canopies.flush();
+    for (const mesh of this.meshes) {
+      mesh.count = n;
+      mesh.flush();
+    }
   }
 }
 

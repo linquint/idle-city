@@ -297,15 +297,42 @@ box.
   stays out of the depth pass.
 - Industry is the anti-tower — wide, low and flat, with one stack. Height is how
   the housing tiers say "bigger", so industry competes on footprint instead.
-- Civic buildings get 2x2 plots, which is room for a silhouette each rather than
-  three colours of the same box: the police station is a low dark block, the
-  school a long flat hall, the depot a shed with a lit apron. Two of them go
-  further and are *modelled* rather than massed — the hospital as a ward slab
-  and a lower treatment wing in an L, with a helipad and a painted cross on the
-  roofs the play camera looks down at; the fire station as an appliance hall, a
-  dormitory and a hose tower with a beacon on top, so it cannot be mistaken for
-  the police station at the same footprint. Both are generated from the models
-  in `models/` — see `npm run model:parts`.
+- Civic buildings get 2x2 plots and landmarks a square of their own, which is
+  room for a silhouette each rather than three colours of the same box. Two
+  types are still a slab with one thing standing on it — the city hall a clock
+  tower, the power plant a lit stack. The other eight are *modelled* rather than
+  massed: the hospital as a ward slab and a lower treatment wing in an L, with a
+  helipad and a painted cross on the roofs the play camera looks down at; the
+  fire station as an appliance hall, a dormitory and a hose tower with a beacon
+  on top; the police station as a banded block with a cell wing, a walled yard
+  with two patrol cars in it, and a radio mast that goes higher than the fire
+  station's tower while reading as a line rather than a mass; the depot as a low
+  shed over a lit apron with the fleet parked on it, which is the one civic
+  square that is mostly yard; the school as a teaching hall and a gym over a
+  marked playground, hedged along the street; the museum as a colonnaded hall
+  between two wings on a stone plinth; the stadium as four stands around a
+  marked pitch under corner floodlights; and the university as four ranges round
+  a planted quad with a campanile on the back corner, which is the shape that
+  stops it reading as the city hall at a bigger footprint. All eight are
+  generated from the models in `models/` — see `npm run model:parts`.
+- Two modelled things are not buildings. A **park** is a plot-sized lawn with
+  paths, planting, a pond, three trees, benches and a lit lamp, drawn by `Parks`
+  rather than `Buildings`; its trees used to be scattered per park by `hash01`,
+  which bought variety nobody could read at four world units a plot. A **bus**
+  is the one model that moves, and so the one merged by vertex colour rather
+  than by material: a vehicle's transform is rewritten every frame, and a mesh
+  per material would multiply the renderer's hottest loop by seven. It costs
+  three — a vertex-coloured body, a destination blind and its own headlights,
+  which replace the shared lamp quad on a bus rather than doubling it.
+
+  The converter takes axis-aligned boxes and discs/rings and **refuses**
+  anything else, including two solids welded at a shared corner — a group's
+  faces are split into solids by shared vertex position, so a ring of walls
+  meeting at their corners arrives as one lump. A refusal is a modelling
+  instruction, not a licence to write the geometry by hand: change the model and
+  re-run. Every refusal so far has been that ring — the police station's yard
+  wall, the stadium's stands and its seating tiers — and the fix each time is a
+  group per segment, which leaves the geometry untouched.
 - Land nobody will build on is drawn as courtyard, not left as a hole — block
   interiors, and the civic sites still standing empty.
 

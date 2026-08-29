@@ -3,7 +3,11 @@
  *
  * Recognises axis-aligned boxes and discs/rings only, and REFUSES anything else
  * rather than approximating it. A refusal is the signal to change the model, not
- * to hand-write geometry: see the authoring contract in NOTES.md.
+ * to hand-write geometry: see the authoring contract in README.md.
+ *
+ * Two solids welded at a shared corner are one refusal, because a group's faces
+ * are split into solids by shared vertex *position*. The fix is a group each,
+ * which costs the model nothing: see the police station's yard wall.
  *
  * Usage: node tools/model2parts.mjs <name.obj> <name.mtl> [--ts]
  */
@@ -22,6 +26,14 @@ const PALETTE = {
   0x54637c: 'stack', 0x2a3140: 'runway', 0xf0a64b: 'sodium',
   0xe8ecf2: 'marking', 0xd8453c: 'emergency',
   0x6d2f2c: 'fire', 0xe0574b: 'fireRoof', 0xc9d1da: 'concrete',
+  0x3d5a52: 'depot', 0xc2d24f: 'depotRoof', 0x5f8f5a: 'bus',
+  0x1c2740: 'police', 0x7fa8ff: 'policeRoof', 0x9ea1a8: 'kerb',
+  0xe4dccb: 'landmark', 0x9c6f4f: 'landmarkRoof', 0x3f8f57: 'park',
+  0xb9ab8e: 'school', 0x8d7f63: 'schoolRoof', 0x4a4f57: 'asphalt', 0x4a7a4e: 'hedge',
+  0xc3b489: 'sand', 0x5b7f57: 'courtyard', 0x2f6076: 'water',
+  0x4a3524: 'trunk', 0x53a86a: 'canopy',
+  0xd6c9a8: 'university', 0x9a7f4e: 'universityRoof',
+  0x2b3644: 'hull', 0xffe6b0: 'headlight',
 };
 
 /* ---- parsing ------------------------------------------------------------ */
