@@ -740,3 +740,483 @@ the whole of Memo 1's problem. Nothing to prompt.
    writes its three rules.
 2. Nothing else. Health stays a weight, and the cemetery waits for a land
    answer that is not this memo's to give.
+
+
+---
+
+# Phase 7 design notes
+
+Four write-ups. Two are the memos the brief asked for instead of code
+(demographics and road widening), one is the land question four of the eight
+features are blocked on, and one is the candidate the emergency-response work
+examined and left alone.
+
+Every number below is measured against this build —
+`tools/phase7.calibrate.mjs`, `tools/economy.calibrate.mjs` — and not estimated.
+
+---
+
+## 11. The civic land question, and what it costs at every divisor
+
+### Why this is one memo and not four
+
+Four of Phase 7's eight features want a new 2x2 civic type: a library, a
+theatre, a waste depot and a recycling centre. `CIVIC_SERVICES` holds five and
+`civicSiteFor` interleaves them as `i * n + offset`, so `n` is the divisor —
+and the divisor is not a table edit. It decides three separate things at once:
+how many sites each type gets, what every `Service.plots` figure has to be, and
+which square every existing civic building in every existing save stands on.
+
+### What each divisor does
+
+Sites each type receives, measured:
+
+| types | sites/district/type | 1d | 4d | 12d | 49d |
+| --- | --- | --- | --- | --- | --- |
+| 5 (today) | 1.20 | 2,1,1,1,1 | 5,5,5,5,4 | 15,15,14,14,14 | 59,59,59,59,58 |
+| 6 | 1.00 | 1,1,1,1,1,1 | 4 each | 12 each | 49 each |
+| 7 | 0.86 | 1×6, **0** | 4,4,4,3,3,3,3 | 11,11,10,10,10,10,10 | 42 each |
+| 8 | 0.75 | 1×6, **0,0** | 3 each | 9 each | 37,37,37,37,37,37,36,36 |
+| 9 | 0.67 | 1×6, **0,0,0** | 3,3,3,3,3,3,2,2,2 | 8 each | 33×6, 32,32,32 |
+
+The re-derived `plots` column follows from the rule SERVICES already states —
+the hospital is exactly full coverage when every allowed building of its type
+is standing, so the anchor is `24n / civicSites`:
+
+| types | hospital | police | fire | school | transit | university |
+| --- | --- | --- | --- | --- | --- | --- |
+| 5 | 20 | 26 | 31 | 15 | 24 | 18 |
+| 6 | 24 | 31 | 37 | 18 | 29 | 18 |
+| 7 | 28 | 36 | 43 | 21 | 34 | 18 |
+| 8 | 32 | 42 | 50 | 24 | 38 | 18 |
+| 9 | 36 | 47 | 56 | 27 | 43 | 18 |
+
+The university column does not move: a 3x3 site, one to a district, never on
+the interleave.
+
+### Two guards, and they fail together
+
+**`LEVEL_EDUCATION`'s window.** Schools alone have to clear 0.60 and miss 0.85
+at every district count. Swept over every integer `plots` from 1 to 80:
+
+| types | derived | in window? | every integer that works | schools alone read |
+| --- | --- | --- | --- | --- |
+| 5 | 15 | yes | 15, 16 | 62.5% – 78.1% |
+| 6 | 18 | yes | 15, 16, 17, 18, 19, 20 | 75.0% – 75.0% |
+| 7 | 21 | **no** | 20 only | 65.6% – 87.5% |
+| 8 | 24 | **no** | **none** | 66.7% – 100.0% |
+| 9 | 27 | **no** | **none** | 56.3% – 100.0% |
+
+**The >= 0.95 happiness ceiling**, re-run at every district count with every
+type at its allowance:
+
+| types | worst service coverage | worst target | where |
+| --- | --- | --- | --- |
+| 5 | 1.0000 | **0.9583** | 1d |
+| 6 | 1.0000 | **0.9583** | 1d |
+| 7 | 1.0000 | **0.9475** | 3d, transit 94% |
+| 8 | 1.0000 | **0.9177** | 2d, transit 79% |
+| 9 | 1.0000 | **0.9380** | 2d, school 56%, transit 90% |
+
+The failures are not the hospital or the fire station — both still read 1.0000
+everywhere. It is the **transit row losing sites at small district counts**,
+which raises congestion, which lands in the modifier bracket. `TRANSIT_ROAD_SHARE`'s
+own comment says a constant that quietly lowers the best a city can ever feel is
+a constant that has re-opened someone else's calibration, and this is that,
+arriving through the land instead.
+
+So: **six 2x2 types is the last divisor that works, and it is not close.** Seven
+breaches both guards, and eight and nine have no legal school constant at all.
+
+### What it costs a save that already exists
+
+A 12-district city with 64 civic buildings at their current allowance, re-read
+under each divisor:
+
+| types | buildings that change square | buildings with no site |
+| --- | --- | --- |
+| 6 | **53** (82.8%) | **6** |
+| 7 | 47 | 12 |
+| 8 | 40 | 19 |
+| 9 | 35 | 24 |
+
+This is the number `cityHallSites` warns about, priced. A returning player
+would watch fifty-three buildings move and six disappear.
+
+### The options, costed
+
+**A. Fold new types onto the existing interleave.** Only n=6 survives the
+guards, so this buys **exactly one** new type for the price of relocating 83% of
+every existing city's civic buildings and refunding six. The migration cannot
+pin them: pinning means storing which square each building is on, which is a
+position in the save, which is the invariant this whole codebase is arranged
+around. It could refund the six as cash, and that is the most honest form — and
+it is still a save that opens with a different-looking city.
+
+**B. A site class of its own, carved from courtyard.** The four spare courtyard
+plots a district holds are the only land left. They are *not* 2x2 squares — they
+are single interior plots, and Memo 4 already found this: a 2x2 square cut from
+courtyard means re-cutting the district plan, which is `FRONTAGE_TARGET.squares`
+and the sampler's acceptance rate. Same wall as the prison and the recycling
+centre.
+
+**C. Culture as a policy or an upgrade rather than a building.** Costs no land
+at all. See section 13, which is where this one goes.
+
+**D. Cut what does not fit.** The default, and it is not a failure: three of the
+four features that want land turn out to have a better form that needs none.
+
+### Recommendation
+
+**A hybrid: C for culture, one use of A for waste, and D for the fourth.**
+
+- **Library and theatre take option C.** Section 13 costs both readings the
+  brief asked for and neither works as a weight or as a modifier. What does work
+  is two rows in `LANDMARKS` on the small-landmark site that already exists —
+  zero land, zero migration, no divisor change. Memo 4 reached this a cycle ago
+  and the numbers still hold.
+- **The waste depot takes the one option-A slot, if any feature does.** It is
+  the only one of the four that is genuinely a civic building with a coverage:
+  it collects, it has a reach, it belongs on the interleave. Six types works, on
+  every guard, at every district count.
+- **The recycling centre is cut**, and section 12 is why it does not need a site
+  in the first place.
+
+**But A's price is a save-compatibility break, and that is a decision for the
+project rather than for this cycle.** Fifty-three buildings move and six are
+refunded, in every existing save, and no migration avoids it. If the answer is
+that returning players must not see that, then the waste depot is cut too and
+`GARBAGE_COLLECTORS` stays a list of one — which costs the game nothing it
+currently has.
+
+---
+
+## 12. The waste depot and the recycling centre
+
+Blocked on section 11, and worth writing down anyway because the measurement
+answers the brief's own question about the bus.
+
+### The bus keeps the bins
+
+The brief asks what happens to `transit`'s collection when a real collector
+arrives, and asks for both readings before choosing. Measured, a 12-district
+city at the top of the ladder, a waste depot modelled as the sixth 2x2 type at
+the 24-plot anchor from section 11:
+
+| built | bus only | waste only | both | waste only, bus dropped |
+| --- | --- | --- | --- | --- |
+| 0% | 0.974 | 0.974 | 0.974 | 0.974 |
+| 25% | 0.731 | 0.731 | 0.487 | 0.731 |
+| 50% | 0.487 | 0.487 | **0.000** | 0.487 |
+| 75% | 0.244 | 0.244 | 0.000 | 0.244 |
+| 100% | 0.000 | 0.000 | 0.000 | 0.000 |
+
+`garbageCollection` is a plot count over the housing land, clamped at 1, and one
+finished collector already covers the city — `TRANSIT.plots` is 24 against a
+district's 24 housing plots. So a second collector at the same reach is worth
+everything to a city halfway through its first and **nothing** to one that has
+finished it.
+
+Which makes the choice a question about what a depot is rather than a balance
+question:
+
+- **keep transit in the array**, and the waste depot is a second way to buy a
+  number the bus already buys. The player builds whichever is cheaper and the
+  other is a 2x2 square doing nothing;
+- **take transit out**, and the depot loses the fourth job `GARBAGE_MOOD` gave
+  it last cycle. The worst case is the city that did everything right: a full
+  bus network, no waste depot because there was none to build, reading 0.000 the
+  night before and 0.974 the morning after — 9.7 points of mood taken from the
+  player who bought the building that was answering it. No migration softens it,
+  because there is no count to carry across.
+
+**Recommend keeping transit in the array.**
+
+### Then the second collector has to do something else
+
+Which is what the brief already says about the recycling centre and is true a
+rung earlier: a collector that only raises `garbageCollection` competes with the
+bus for one number, where one that lowers `garbageRate` at source stacks with
+it. `garbageRate` is `residents x PER_RESIDENT + shops x PER_SHOP + works x
+PER_WORKS`, so a recycling term is a multiplier on that sum and the two
+compose exactly — `garbage` is load times uncollected share, and the pair moves
+both factors.
+
+So the honest shape is **one new type, not two**: a waste depot that lowers the
+rate rather than raising the collection, which is the recycling centre's job
+under the depot's name. That is the difference between section 11's six-type row
+(which works) and its seven-type row (which does not), and it is why the
+recycling centre does not need a site of its own.
+
+### Two things stay out of scope, and the reasons still hold
+
+**Garbage as an accumulating stock.** `GARBAGE_PER_RESIDENT`'s comment rejects
+it and the argument is unchanged: a stock is integrated, which is a fourth save
+exception bounded by *elapsed time*, which is the exact property the three that
+exist were careful not to have. Nothing measured this cycle weakens it. The
+counter-case would have to be that a rate cannot express something a settled
+city needs, and the ladder measurement — 0.174 at detached houses to 0.974 at
+arcologies, never clamped — says the rate has range at both ends.
+
+**Collection radius.** Garbage is a city-wide scalar. A radius makes it spatial,
+which is invariant 5, and section 9 above already works through why the
+equivalent move on pollution was deferred. One thing that section says is worth
+repeating here because it is the whole answer: garbage's sources are residents,
+shops and works, every one of them a city-wide scalar, so a field driven by them
+would paint the same number on every plot.
+
+---
+
+## 13. Library and theatre
+
+### Both readings, costed
+
+**As a fourth happiness weight.** The three non-zero weights sum to exactly 1
+and a fourth takes its share from all three:
+
+| term | today | culture 0.10 | 0.15 | 0.20 | 0.24 |
+| --- | --- | --- | --- | --- | --- |
+| hospital | 0.46 | 0.414 | 0.391 | 0.368 | 0.350 |
+| fire | 0.30 | 0.270 | 0.255 | 0.240 | 0.228 |
+| recreation | 0.24 | 0.216 | 0.204 | 0.192 | 0.182 |
+| culture | — | 0.100 | 0.150 | 0.200 | 0.240 |
+
+Every cell is a constant with its own measurement, and the damage is worse than
+the table shows: `plots_i = 20 x w_hospital / w_i`, so a fourth weight moves the
+**plots column** as well, which re-opens `LEVEL_EDUCATION`'s window and the
+ceiling test together — section 11's table, arriving from the other side. And
+that is before the land: culture as a weight needs a building, which needs a
+site, which is the divisor.
+
+**As a modifier in the bracket.** A maxed city sits at 0.9583 at every district
+count. With a culture term of each sign:
+
+| sign | size | ceiling |
+| --- | --- | --- |
+| bonus | +0.08 | 1.0000 (clamped) |
+| bonus | +0.12 | 1.0000 (clamped) |
+| penalty | −0.08 | **0.8783** |
+| penalty | −0.12 | **0.8383** |
+
+A bonus is mostly thrown away — the city is already at 0.9583, so most of +0.08
+lands past the clamp. A penalty for going without culture takes the ceiling
+under the 0.95 `test/services.test.ts` asserts, and that promise predates all of
+this.
+
+So the brief is right that the modifier bracket is the established route, and
+the bracket turns out not to have room for this particular term either way.
+
+### What does work, and it needs no land
+
+`LANDMARK_MOOD` is +0.12 and a city that has earned 1.00 gains nothing from it —
+and `config.ts` already says why that is the right shape: *landmarks buy
+happiness early, standing in for services not yet built, and stop mattering once
+the city is properly served.* That is, precisely, what a cheap library and a
+cheap theatre would do.
+
+**So culture is a cheaper tier of landmark, and the feature is two rows in
+`LANDMARKS`.** Not a new system, not a fourth weight, not a sixth civic type.
+Memo 4 above reached this a cycle ago and the arithmetic has not moved. Under
+the museum: base 900 and 2,200, growth 1.5, reach 14 and 18.
+
+**Giving the two buildings different jobs.** The brief is right that a library
+and a theatre with one effect are one building with two names, and the split it
+proposes is the right one — a library reaching education, a theatre reaching
+mood. The education half fits without a weight: `EDUCATION_SERVICES` is a
+*pool*, `educationCoverage` sums schools and universities over the housing
+plots, and a third contributor joins the sum the way `GARBAGE_COLLECTORS` takes
+a second collector. The constraint the brief states is the right one and is
+measurable: the library's contribution must not alone clear a `LEVEL_EDUCATION`
+rung. At 15 plots of reach on one small-landmark site a district, a fully
+libraried city reads `1 x 15 / 24 = 0.625`, which clears the 0.60 rung on its
+own — so the reach has to be under 14.4 plots, and 12 leaves the margin.
+
+**The one thing still to decide, and it is a design call rather than a
+measurement**: `landmarkSiteCapacity` gives one small site per district, so a
+library, a theatre and a museum compete for the same square. Memo 4 recommends
+sharing it and saying so — one small-landmark site a district, four things that
+can stand on it, `canBuildLandmark` comparing against the sum. That costs no
+land, needs no migration, and makes the tier a decision rather than a checklist.
+What it needs measuring first is `landmarkPlotsCovered` at four small landmarks
+a district rather than one, because the reach geometry is memoised against the
+counts and this widens the key.
+
+---
+
+## 14. Demographics
+
+**Reported, not implemented**, as the brief asks — and the recommendation is the
+one Memo 5 above already reached, with the reasons re-measured against this
+build rather than restated.
+
+### What the save would gain, and how it would be bounded
+
+`population(s)` is a pure sum over `homeLevels` against `LEVEL_HOUSING`;
+`residents` is that times `occupancyR`. Measured on this build, `GameState`
+carries 65 fields and **not one of them is demographic** — no age, no birth, no
+death, no migration. (A text search over `src/` finds twenty-five hits for those
+words and every one is a save migration or the renderer's growth clock.)
+
+A *replacement* — age cohorts with births, deaths and migration producing
+`residents` — gains a bucket array in the save and it is bounded by **elapsed
+time**, which is the exact property the three existing exceptions were each
+careful not to have: `surveyedR` grows with districts, `unlocked` with a static
+table, `history` with a fixed ring. That is a fourth exception of a kind the
+codebase has refused four times, and refusing it is not a technicality: a stock
+bounded by time is a stock a twelve-hour absence has to integrate, and every
+integration in this game had to be re-derived to survive that.
+
+### How births and deaths would stay step-size invariant
+
+The machinery exists and this cycle used it twice. A flow spent per tick is not
+step-size invariant; a flow **accumulated** and spent out of a bank is. Births
+and deaths would take the shape `driftR` already has — a fractional-people
+accumulator per bucket, with whole people spent out of it — and any random draw
+would take the shape `fireHazard` and now `callHazard` have: `rate x dt`
+integrated into a hazard, spent against exponential waiting times, with a cursor
+so a reload continues the same sequence.
+
+That is genuinely solvable. It is also five new save fields per bucket, and the
+measurement that would have to be run is `test/history.test.ts`'s: a 60-second
+catch-up step against 3,600 one-second steps, agreeing to a stated tolerance.
+The existing pair already disagree by 1.24% of income because congestion closed
+a feedback loop; a demographic model closes a second one — deaths read the
+hospital, the hospital reads happiness, happiness reads residents — and nobody
+has measured what two coupled loops do to a coarse step.
+
+### Which consumers change meaning
+
+Every one of these reads `residents` or `population`, and there are 18 call
+sites across `economy.ts`, `game.ts` and `save.ts`:
+
+| consumer | what changes |
+| --- | --- |
+| `income` | rent is per resident; residents stop being capacity × fill |
+| the labour market, `WORKING_SHARE` | a *share* of residents becomes a share of the working-age bucket, and `ZONE_SHARE` solves `14R = 8C + 20I` against the old one |
+| every coverage denominator | already housing *plots*, so untouched — the one part of this that is free |
+| all three `demandTargets` | `demandScale`, `SPEND_PER_RESIDENT`, `labourReach` |
+| `crime` | both halves: `crimeCrowding` is residents per plot, `unemployment` is workers over `demandScale` |
+| `garbageRate` | per resident |
+| `TRIPS_PER_RESIDENT`, `congestion` | per resident |
+| `visitors` and every tourism line | `VISITORS_PER_RESIDENT` |
+| `RANKS` | the population column, which is `population` and not `residents` on purpose |
+| the history ring | its population series |
+
+`WORKING_SHARE` is on the frozen list and the labour market is what `ZONE_SHARE`
+solves. So a demographic model does not merely add a readout; it re-opens the
+zoning budget.
+
+### What a returning player sees after twelve hours
+
+Under a replacement: a population that has moved for reasons `occupancyR` did
+not decide, on top of an `occupancyR` that also moved. `OFFLINE_CAP_SECONDS` is
+twelve hours and `CATCHUP_STEP_SECONDS` is 60, so 720 coarse steps of a coupled
+birth/death/migration model against an occupancy integrator that is already a
+migration model. The away sheet would have to say which of the two moved the
+number, and there is no honest way to split it.
+
+Under the wrapper: exactly what they see today, plus a readout that explains it.
+
+### The cheaper alternative, costed
+
+**Age structure as a derived distribution over the existing cohorts.** Buildings
+take levels in build order — the oldest slots hold the highest levels, which is
+the one identity the whole cohort representation rests on — so cohort boundaries
+already encode age. `LevelCohort`'s comment says exactly that: *age is exactly
+what a cohort boundary encodes.*
+
+So a distribution over `{ homeLevels, occupancyR, elapsed }` and a static table
+is a pure function of counts. It needs **no new save state at all**, it is
+bounded by the table the way `achievements.ts` is, and deleting it leaves the
+city identical. It cannot double-count, because it produces nothing: a hospital
+changes life expectancy in the readout and changes residents through the path it
+already has, and those are the same fact stated twice rather than two effects.
+
+What it cannot do is be a *mechanic* — a city that ages badly and loses people
+to it. That is the honest cost, and it is worth paying, because the mechanic
+version is `occupancyR` with more steps.
+
+### Recommendation
+
+**The wrapper.** Demographics as a readout over `residents`, in its own file, a
+sibling of `achievements.ts`, with the `LevelCohort` argument written into its
+header. Nothing else: no births, no deaths, no migration, no new save field, and
+the existing migration model left as the only one.
+
+And one thing to be explicit about with the reviewer, because it is the whole of
+what the recommendation gives up: if the point of the feature is a population
+that can *fall for demographic reasons*, the wrapper does not do it and cannot
+be extended into doing it. That version is a multi-session rewrite of the centre
+of the game and should be planned as one, starting with `ZONE_SHARE`.
+
+---
+
+## 15. Road widening
+
+**Blocked, and reported rather than built** — but the version that fits is
+worth costing, and the measurement turns out to answer the question by itself.
+
+### Why the stated feature does not fit
+
+"Widen a street to cut congestion locally" needs per-street or per-district
+congestion. `congestion` is one city-wide number *by construction* and the
+reason is in `ROAD_CELLS_PER_DISTRICT`: every district has the same 81 road
+cells and the same 3+3 through-lines, so there is no district-to-district
+variation to read and a per-district congestion number would be a fabrication.
+Making it local is per-district state, which is invariants 1 and 5 together, and
+`LevelCohort` names the class of change and the price it carries.
+
+`test/traffic.test.ts` already asserts the generator property this rests on —
+every district, at every one of the 49 positions, exactly 81 road cells and
+exactly three lines on each axis. If that ever stops holding, congestion stops
+being honest as a scalar and that test is what says so.
+
+### The version that fits, measured
+
+Road capacity as a city-wide term the player invests in: a multiplier `w` on the
+road supply in `congestion`'s denominator. Same button, same fiction, one
+scalar, no new spatial state. At 12 districts and the top of the ladder:
+
+| | w=1.0 | w=1.2 | w=1.5 | w=2.0 | w=3.0 |
+| --- | --- | --- | --- | --- | --- |
+| no transit at all | 0.993 | 0.827 | 0.662 | 0.496 | 0.331 |
+| every depot open | 0.298 | 0.248 | 0.199 | 0.149 | 0.099 |
+| depots + a full network | 0.055 | 0.045 | 0.036 | 0.027 | 0.018 |
+
+### And that is the answer: it is not worth buying
+
+The brief asks whether widening and transit together leave either worth having.
+Measured in points of mood, against a transit-free, unwidened city:
+
+| what the city has bought | jam | mood | worth, vs nothing |
+| --- | --- | --- | --- |
+| nothing | 0.993 | −0.139 | — |
+| every depot | 0.298 | −0.042 | **+0.097** |
+| depots + network | 0.055 | −0.008 | **+0.131** |
+| nothing, roads x2 | 0.496 | −0.070 | +0.070 |
+| nothing, roads x3 | 0.331 | −0.046 | +0.093 |
+| depots, roads x2 | 0.149 | −0.021 | +0.118 |
+| depots + network, roads x2 | 0.027 | −0.004 | **+0.135** |
+
+Doubling the entire road system is worth +0.070 to a city with no transit,
+**+0.021 on top of the depots**, and **+0.004 on top of the depots and the
+network**. Four thousandths of a point of mood, for a purchase the player would
+have to be told was a major investment.
+
+The reason is arithmetic and worth stating plainly, because it is not a tuning
+problem: congestion is `trips x (1 - carried) / road`. Transit multiplies the
+numerator; widening divides the denominator. They act on the same quotient, so
+what matters is the *product* — and the marginal value of each falls as the
+other rises. Two levers on one ratio can never both be worth buying, whatever
+either one costs.
+
+### Recommendation
+
+**Do not build it, in either form.** The local version breaks two invariants; the
+city-wide version does not, and is worth four thousandths of a point of mood to
+a city that has already bought the transport it is competing with. If road
+capacity is wanted as a *decision* rather than as a second congestion lever,
+the honest place for it is the other side of the ratio — something that changes
+`TRIPS_PER_RESIDENT` rather than the road, which is a statement about how people
+live rather than about how wide the street is. That is a different feature and
+not this one.

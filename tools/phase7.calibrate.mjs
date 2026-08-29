@@ -63,8 +63,10 @@ import {
   LEVEL_FOOTPRINT,
   MAX_DISTRICTS,
   OCCUPANCY_FULL,
+  LANDMARKS,
   RECREATION_WEIGHT,
   ROAD_CELLS_PER_DISTRICT,
+  TRIPS_PER_RESIDENT,
   SERVICES,
   TRANSIT_LABOUR_DRAW,
   TRANSIT_ROAD_SHARE,
@@ -1008,4 +1010,242 @@ console.log('what an unanswered call is worth, and what it cannot do\n');
   console.log('  to it saturates. What the term actually moves is the middle — a city at 20%');
   console.log('  coverage, which is over fire\'s threshold and under this one.');
   console.log('');
+}
+
+// ==================================================================== 6
+
+console.log('='.repeat(78));
+console.log('6   road widening, costed rather than built');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('the version that fits: capacity as a city-wide term\n');
+{
+  console.log('  `congestion` is trips / roadCells / density / CONGESTION_SCALE. A local');
+  console.log('  exemption needs per-district congestion, which is per-district state. A');
+  console.log('  city-wide capacity term raises the *denominator* instead — same button,');
+  console.log('  same fiction, one scalar. What it would look like, as a multiplier `w` on');
+  console.log(`  ROAD_CELLS_PER_DISTRICT (${ROAD_CELLS_PER_DISTRICT} a district):`);
+  console.log('');
+  console.log('  12 districts, level 4     w=1.0    w=1.2    w=1.5    w=2.0    w=3.0');
+  const widen = (s, w) => {
+    const road = ROAD_CELLS_PER_DISTRICT * Math.max(1, s.districts) * w;
+    const density = cityScale(s) ** CONGESTION_DENSITY_EXPONENT;
+    const carried = Math.min(TRANSIT_MAX_SHARE, TRANSIT_ROAD_SHARE * transitCoverage(s));
+    return Math.max(0, Math.min(1, (trips(s) * (1 - carried)) / road / density / CONGESTION_SCALE));
+  };
+  for (const [label, serve, lines] of [
+    ['no transit at all  ', 0, 0],
+    ['every depot open   ', 1, 0],
+    ['depots + network   ', 1, 12],
+  ]) {
+    const s = wired(12, LEVELS - 1, serve, 0, lines);
+    const row = [1, 1.2, 1.5, 2, 3].map((w) =>
+      fixed(lines > 0 ? congestionWiden(s, w) : widen(s, w), 9, 3),
+    );
+    console.log(`    ${label}${row.join('')}`);
+  }
+  console.log('');
+  console.log('  and what each of those is worth in mood, against what transit already gives');
+  console.log('  12 districts, level 4            jam      mood      vs transit-free');
+  {
+    const bare = city(12, LEVELS - 1, 0);
+    const depots = city(12, LEVELS - 1, 1);
+    const both = wired(12, LEVELS - 1, 1, 0, 12);
+    const rows = [
+      ['nothing bought      ', congestion(bare)],
+      ['every depot         ', congestion(depots)],
+      ['depots + network    ', congestion(both)],
+      ['nothing, roads x2   ', widen(bare, 2)],
+      ['nothing, roads x3   ', widen(bare, 3)],
+      ['depots, roads x2    ', congestionWiden(depots, 2)],
+      ['depots + net, x2    ', congestionWiden(both, 2)],
+    ];
+    const base = congestion(bare);
+    for (const [label, jam] of rows) {
+      console.log(
+        `    ${label}${fixed(jam, 9, 3)}${fixed(-CONGESTION_MOOD * jam, 10, 4)}` +
+          `${fixed(CONGESTION_MOOD * (base - jam), 20, 4)}`,
+      );
+    }
+  }
+  console.log('');
+}
+
+/** `congestion` with the road supply multiplied by `w`, network included. */
+function congestionWiden(s, w) {
+  const road = ROAD_CELLS_PER_DISTRICT * Math.max(1, s.districts) * w;
+  const density = cityScale(s) ** CONGESTION_DENSITY_EXPONENT;
+  const carried = Math.min(
+    TRANSIT_MAX_SHARE,
+    TRANSIT_ROAD_SHARE * transitCoverage(s) + NETWORK_ROAD_SHARE * networkService(s),
+  );
+  return Math.max(0, Math.min(1, (trips(s) * (1 - carried)) / road / density / CONGESTION_SCALE));
+}
+
+// ==================================================================== 2
+
+console.log('='.repeat(78));
+console.log('2   the waste depot, and what it would do to the bus');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('leaving transit as a collector, against removing it\n');
+{
+  console.log('  GARBAGE_COLLECTORS is a readonly ServiceKey[] and the mechanism is already');
+  console.log('  there: a waste depot joins the sum and nothing else in the model moves. The');
+  console.log('  question the brief asks is what happens to the *bus* when it does.');
+  console.log('');
+  console.log('  A waste depot modelled as the sixth 2x2 type: 24 plots a district of sites');
+  console.log(`  and the 6-type anchor of ${derivedPlots(6).anchor} plots of reach, out of 0a's table.`);
+  console.log('');
+  // Collection is `covered / housingPlots`, clamped — so it can be computed
+  // from a count and a reach without the service having to exist.
+  const wastePlots = derivedPlots(6).anchor;
+  const share = (s, busCount, wasteCount) => {
+    const plots = housingPlots(s);
+    if (plots <= 0) return 1;
+    const transit = SERVICES.find((x) => x.key === 'transit');
+    const reached = busCount * transit.plots + wasteCount * wastePlots;
+    return Math.min(1, reached / plots);
+  };
+  const bins = (s, bus, waste) => Math.max(0, garbageLoad(s) * (1 - share(s, bus, waste)));
+  console.log('  A 12-district city at level 4, by how much of each is built:');
+  console.log('');
+  console.log('  built     bus only   waste only   both (bus kept)   waste only (bus dropped)');
+  const s12 = city(12, LEVELS - 1, 0);
+  const busAllowed = Math.min(
+    Math.floor(housingPlots(s12) / 24) + 1,
+    Math.ceil((12 * FRONTAGE_TARGET.civicSites - 4) / 6),
+  );
+  const wasteAllowed = Math.ceil((12 * FRONTAGE_TARGET.civicSites - 5) / 6);
+  for (const built of [0, 0.25, 0.5, 0.75, 1]) {
+    const bus = Math.round(busAllowed * built);
+    const waste = Math.round(wasteAllowed * built);
+    console.log(
+      `  ${pct(built, 5, 0)}${fixed(bins(s12, bus, 0), 13, 3)}${fixed(bins(s12, 0, waste), 13, 3)}` +
+        `${fixed(bins(s12, bus, waste), 18, 3)}${fixed(bins(s12, 0, waste), 27, 3)}`,
+    );
+  }
+  console.log('');
+  console.log('  The two right-hand columns are the decision, and at a full build they are');
+  console.log('  the same number — which is the reading rather than a flaw in the probe.');
+  console.log('  `garbageCollection` is a plot count over the housing land, clamped at 1, and');
+  console.log('  one finished collector already covers the city: TRANSIT.plots is 24 against');
+  console.log("  a district's 24 housing plots. A second collector at the same reach is worth");
+  console.log('  everything to a city halfway through its first and nothing to one that has');
+  console.log('  finished it.');
+  console.log('');
+  console.log('  So the choice is not a balance question, it is a question about what a');
+  console.log('  depot is:');
+  console.log('');
+  console.log('    - keep transit in the array, and the waste depot is a second way to buy a');
+  console.log('      number the bus already buys. The player builds whichever is cheaper and');
+  console.log('      the other is a 2x2 square doing nothing. The two rows the table above');
+  console.log('      calls "both" and "bus only" are the same line past 50% built;');
+  console.log('    - take transit out, and the depot loses the fourth job GARBAGE_MOOD gave');
+  console.log('      it last cycle — measured, and written into `garbageCollection` — and a');
+  console.log('      city mid-save wakes up with rubbish it did not have when it closed the');
+  console.log('      tab. The worst case is the city that did everything right: a full bus');
+  console.log('      network, no waste depot because there was none to build, reading 0.000');
+  console.log('      the night before and 0.974 the morning after, which is 9.7 points of');
+  console.log('      mood taken from the player who bought the building that was answering');
+  console.log('      it. A migration cannot soften that — there is no count to carry across,');
+  console.log('      because the buildings that would collect the rubbish were never bought.');
+  console.log('');
+  console.log('  Recommendation, for when the land question is answered: **keep transit in');
+  console.log('  the array and give the waste depot a different job**, which is what the');
+  console.log('  brief already says about the recycling centre and is true a rung earlier.');
+  console.log('  A collector that only ever raises `garbageCollection` is competing with the');
+  console.log('  bus for one number; one that lowers `garbageRate` at source stacks with it.');
+  console.log('  That makes the pair depot-and-recycling rather than depot-and-depot, and it');
+  console.log('  costs one 2x2 type instead of two — which is the difference between 0a\'s');
+  console.log('  six-type row (which works) and its seven-type row (which does not).');
+  console.log('');
+}
+
+// ==================================================================== 4
+
+console.log('='.repeat(78));
+console.log('4   culture, costed both ways');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('as a fourth weight: the re-normalisation, and what it re-opens\n');
+{
+  const weighted = SERVICES.filter((x) => x.weight > 0);
+  console.log('  today                      as a fourth weight, culture at w');
+  console.log('  term          weight       w=0.10   w=0.15   w=0.20   w=0.24');
+  const rows = [...weighted.map((x) => [x.key, x.weight]), ['recreation', RECREATION_WEIGHT]];
+  for (const [key, w] of rows) {
+    const cells = [0.1, 0.15, 0.2, 0.24].map((c) => fixed(w * (1 - c), 9, 3));
+    console.log(`  ${pad(key, 14)}${fixed(w, 6, 2)}${cells.join('')}`);
+  }
+  console.log(`  ${pad('culture', 14)}${pad('—', 6)}` +
+    [0.1, 0.15, 0.2, 0.24].map((c) => fixed(c, 9, 3)).join(''));
+  console.log('');
+  console.log('  Every one of those cells is a constant with its own measurement. The three');
+  console.log('  non-zero weights sum to exactly 1 and every `Service.plots` was solved');
+  console.log('  against their ordering — `plots_i = 20 x w_hospital / w_i` — so a fourth');
+  console.log('  weight moves the plots column as well as the weights, which re-opens');
+  console.log("  LEVEL_EDUCATION's window and the >= 0.95 ceiling together. See 0a, which is");
+  console.log('  the same table from the other side.');
+  console.log('');
+}
+
+console.log('as a modifier in the bracket: which sign, and what each does to the ceiling\n');
+{
+  console.log('  The bracket as it stands, and where a culture term would sit:');
+  console.log(`    crime      -0.26     congestion -${CONGESTION_MOOD}     garbage    -${GARBAGE_MOOD}`);
+  console.log(`    landmark   +${LANDMARK_MOOD}     transport  +${FREE_TRANSPORT_MOOD}     tax        -0.14 .. +0.08`);
+  console.log('');
+  console.log('  A maxed city, at every district count, with a culture term of each sign:');
+  console.log('');
+  console.log('  sign        term   ceiling at 1d   at 12d   at 49d   worst anywhere');
+  for (const [label, sign] of [['bonus  ', +1], ['penalty', -1]]) {
+    for (const size of [0.08, 0.12]) {
+      let worst = 1;
+      const at = {};
+      for (let d = 1; d <= MAX_DISTRICTS; d++) {
+        const s = maxedCity(d);
+        // A bonus is added to a city already at its ceiling; a penalty is what
+        // a city *without* culture carries, so it comes off the same ceiling.
+        const t = Math.max(0, Math.min(1, happinessTarget(s) + (sign > 0 ? size : -size)));
+        worst = Math.min(worst, t);
+        if (d === 1 || d === 12 || d === MAX_DISTRICTS) at[d] = t;
+      }
+      console.log(
+        `  ${label}${fixed(size, 8, 2)}${fixed(at[1], 16, 4)}${fixed(at[12], 9, 4)}` +
+          `${fixed(at[MAX_DISTRICTS], 9, 4)}${fixed(worst, 17, 4)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  The bonus row is the one worth reading: a maxed city sits at 0.9583, so a');
+  console.log('  +0.08 bonus takes it to 1.0000 and is clamped — most of what was bought');
+  console.log('  goes nowhere. A penalty of the same size takes the ceiling to 0.8783, which');
+  console.log('  is under the 0.95 test/services.test.ts asserts and predates all of this.');
+  console.log('');
+  console.log('  Which is LANDMARK_MOOD\'s argument arriving again from the other side: it is');
+  console.log('  +0.12, a city that has earned 1.00 gains nothing from it, and that is the');
+  console.log('  right shape *because* landmarks are for buying happiness early. A cheap');
+  console.log('  library and a cheap theatre are the same statement.');
+  console.log('');
+}
+
+/** A city built out to the top with every service and park the land allows. */
+function maxedCity(districts) {
+  const s = city(districts, LEVELS - 1, 0);
+  s.parks = parkCapacity(s);
+  for (const service of SERVICES) {
+    const n = serviceAllowed(s, service);
+    setCount(s, service.key, n);
+  }
+  s.hospitalStaff = 1;
+  s.policeStaff = 1;
+  s.fireStaff = 1;
+  s.schoolStaff = 1;
+  s.universityStaff = 1;
+  s.depotStaff = 1;
+  return s;
 }
