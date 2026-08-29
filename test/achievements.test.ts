@@ -4,11 +4,21 @@ import {
   ACHIEVEMENT_COUNT,
   ACHIEVEMENT_GROUPS,
   ACHIEVEMENT_TEST_SECONDS,
+  achievementDenominator,
   achievementReadings,
   unlockedAt,
   unlockedCount,
+  visibleReadings,
 } from '../src/sim/achievements';
-import { LEVELS, MAX_DISTRICTS, MERGE_LEVEL, TAX_STEPS } from '../src/sim/config';
+import {
+  FRONTAGE_TARGET,
+  LEVELS,
+  MAX_ACTIVE_FIRES,
+  MAX_DISTRICTS,
+  MERGE_LEVEL,
+  POWER_TRADES,
+  TAX_STEPS,
+} from '../src/sim/config';
 import { annexCost, homeCapacity, industryCapacity, shopCapacity } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { migrate } from '../src/sim/save';
@@ -84,7 +94,10 @@ describe('the achievement table', () => {
   it('has a unique key for every row', () => {
     const keys = new Set(ACHIEVEMENTS.map((a) => a.key));
     expect(keys.size).toBe(ACHIEVEMENTS.length);
-    expect(ACHIEVEMENT_COUNT).toBe(ACHIEVEMENTS.length);
+    // The visible rows, not every row: the label is the one place the game
+    // states how many awards exist, and the hidden ones are not in it.
+    expect(ACHIEVEMENT_COUNT).toBe(ACHIEVEMENTS.filter((a) => !a.hidden).length);
+    expect(ACHIEVEMENT_COUNT).toBeLessThan(ACHIEVEMENTS.length);
   });
 
   it('puts every row in a group the panel knows how to head', () => {
@@ -110,8 +123,32 @@ describe('the achievement table', () => {
   it('grants nothing: a row carries a test and no payout', () => {
     for (const achievement of ACHIEVEMENTS) {
       // The shape is the guarantee. A bonus would have to arrive as a field,
-      // and there is nowhere for one to go.
-      expect(Object.keys(achievement).sort()).toEqual(['group', 'key', 'name', 'note', 'test']);
+      // and there is nowhere for one to go. `hidden` is the one addition and it
+      // is a display flag: it changes which rows the panel draws and nothing
+      // the simulation can observe.
+      const keys = Object.keys(achievement).sort();
+      const shape = achievement.hidden
+        ? ['group', 'hidden', 'key', 'name', 'note', 'test']
+        : ['group', 'key', 'name', 'note', 'test'];
+      expect(keys, achievement.key).toEqual(shape);
+      // Absent rather than false on an ordinary row, so nothing about the rows
+      // that were here before hidden ones existed has moved.
+      if (!achievement.hidden) expect('hidden' in achievement).toBe(false);
+    }
+  });
+
+  it('gives the hidden rows the same shape as every other row', () => {
+    const hidden = ACHIEVEMENTS.filter((a) => a.hidden);
+    expect(hidden.length).toBeGreaterThan(0);
+    for (const achievement of hidden) {
+      expect(achievement.hidden).toBe(true);
+      // A full name and a full note, written now rather than when it fires:
+      // once found, a secret is an ordinary award and reads like one.
+      expect(achievement.name.length).toBeGreaterThan(0);
+      expect(achievement.note.length).toBeGreaterThan(0);
+      // In a group the panel already heads, so an empty section can never be
+      // the thing that gives a secret away.
+      expect(ACHIEVEMENTS.some((a) => !a.hidden && a.group === achievement.group)).toBe(true);
     }
   });
 });
@@ -221,7 +258,7 @@ describe('what a city has earned', () => {
     expect(unlockedAt(s, 'first-home')).toBe(42);
     expect(unlockedAt(s, 'homes-10')).toBeUndefined();
     const readings = achievementReadings(s);
-    expect(readings).toHaveLength(ACHIEVEMENT_COUNT);
+    expect(readings).toHaveLength(ACHIEVEMENTS.length);
     expect(readings.find((r) => r.achievement.key === 'first-home')?.at).toBe(42);
     expect(readings.find((r) => r.achievement.key === 'homes-10')?.at).toBeNull();
   });
@@ -263,7 +300,7 @@ describe('the record the simulation keeps', () => {
   it('never grows past the table, whatever the city does', () => {
     const game = new Game(fullCity({ unlocked: {} }));
     game.catchUp(3600);
-    expect(Object.keys(game.state.unlocked).length).toBeLessThanOrEqual(ACHIEVEMENT_COUNT);
+    expect(Object.keys(game.state.unlocked).length).toBeLessThanOrEqual(ACHIEVEMENTS.length);
     for (const key of Object.keys(game.state.unlocked)) {
       expect(ACHIEVEMENTS.some((a) => a.key === key)).toBe(true);
     }
@@ -378,5 +415,157 @@ describe('the merge rung', () => {
     expect(row.test(state({ ...housedOn(24, MERGE_LEVEL) }))).toBe(true);
     // Any zone counts, not only housing.
     expect(row.test(state({ ...trading(6, MERGE_LEVEL) }))).toBe(true);
+  });
+});
+
+describe('the rows nobody is told about', () => {
+  const row = (key: string) => {
+    const found = ACHIEVEMENTS.find((a) => a.key === key);
+    expect(found, key).toBeDefined();
+    return found!;
+  };
+
+  it('shows nothing at all for a secret nobody has found', () => {
+    const fresh = state();
+    const visible = visibleReadings(fresh);
+    // Absent, not blanked. A greyed row with its words taken out is still a
+    // row, and a player counting rows would know both that a secret exists and
+    // where in the ladder it sits.
+    for (const achievement of ACHIEVEMENTS) {
+      const shown = visible.some((r) => r.achievement.key === achievement.key);
+      expect(shown, achievement.key).toBe(!achievement.hidden);
+    }
+    expect(visible).toHaveLength(ACHIEVEMENT_COUNT);
+  });
+
+  it('does not leak the count: the denominator moves with the numerator', () => {
+    const fresh = state();
+    expect(achievementDenominator(fresh)).toBe(ACHIEVEMENT_COUNT);
+
+    // Every visible row unlocked and no secret found reads as a full house.
+    const complete = state({
+      unlocked: Object.fromEntries(
+        ACHIEVEMENTS.filter((a) => !a.hidden).map((a) => [a.key, 0]),
+      ),
+    });
+    expect(unlockedCount(complete)).toBe(ACHIEVEMENT_COUNT);
+    expect(achievementDenominator(complete)).toBe(ACHIEVEMENT_COUNT);
+
+    // Finding one moves both halves by one, which says "that was not on the
+    // list" without ever saying how many more are.
+    const secret = ACHIEVEMENTS.find((a) => a.hidden);
+    expect(secret).toBeDefined();
+    if (!secret) return;
+    const found = state({ unlocked: { ...complete.unlocked, [secret.key]: 12 } });
+    expect(unlockedCount(found)).toBe(ACHIEVEMENT_COUNT + 1);
+    expect(achievementDenominator(found)).toBe(ACHIEVEMENT_COUNT + 1);
+  });
+
+  it('turns a found secret into an ordinary row, in its own group', () => {
+    const secret = row('all-boarded');
+    const found = state({ unlocked: { [secret.key]: 40 } });
+    const visible = visibleReadings(found);
+    const reading = visible.find((r) => r.achievement.key === secret.key);
+    expect(reading).toBeDefined();
+    expect(reading?.at).toBe(40);
+    expect(reading?.achievement.name).toBe(secret.name);
+    expect(reading?.achievement.note).toBe(secret.note);
+    // In table order, among the rows of its own group, so the panel can insert
+    // it at the end of the section it belongs to.
+    const keys = visible.map((r) => r.achievement.key);
+    const all = ACHIEVEMENTS.filter((a) => !a.hidden || a.key === secret.key).map((a) => a.key);
+    expect(keys).toEqual(all);
+  });
+
+  it('records a secret exactly as it records anything else', () => {
+    // Every zone boarded up at once, which is what `all-boarded` is about.
+    const game = new Game(
+      state({
+        ...housedOn(24),
+        ...trading(12),
+        ...making(6),
+        abandonedR: 1,
+        abandonedC: 1,
+        abandonedI: 1,
+      }),
+    );
+    run(game, ACHIEVEMENT_TEST_SECONDS + 0.5);
+    expect(game.state.unlocked['all-boarded']).toBeGreaterThanOrEqual(0);
+    // And it is announced, with its real name — a secret found is not a secret.
+    const announced = game
+      .drainEvents()
+      .filter((e) => e.kind === 'unlocked' && e.key === 'all-boarded');
+    expect(announced).toHaveLength(1);
+  });
+
+  it('houses a district with nowhere to spend a penny', () => {
+    const only = row('dormitory');
+    const homes = FRONTAGE_TARGET.residential;
+    expect(only.test(state({ ...housedOn(homes) }))).toBe(true);
+    // One shop anywhere in the city and it is an ordinary town again.
+    expect(only.test(state({ ...housedOn(homes), ...trading(1) }))).toBe(false);
+    expect(only.test(state({ ...housedOn(homes), ...making(1) }))).toBe(false);
+    expect(only.test(state({ ...housedOn(homes - 1) }))).toBe(false);
+  });
+
+  it('spots the landmarks that went up before the hospital', () => {
+    const only = row('bread-and-circuses');
+    const built = { ...housedOn(24), museums: 1, stadiums: 1 };
+    expect(only.test(state(built))).toBe(true);
+    expect(only.test(state({ ...built, hospitals: 1 }))).toBe(false);
+    expect(only.test(state({ ...built, stadiums: 0 }))).toBe(false);
+  });
+
+  it('spots an export agreement held over a short grid', () => {
+    const only = row('brownout-export');
+    const exporting = POWER_TRADES.findIndex((trade) => trade.sells > 0);
+    expect(exporting).toBeGreaterThan(0);
+    // A city past what POWER_BASE covers, with no plant to make up the rest.
+    const short = {
+      ...zoning(6),
+      ...housedOn(144),
+      ...trading(270),
+      ...making(78),
+      cityHall: true,
+      plants: 0,
+    };
+    expect(only.test(state({ ...short, powerTrade: exporting }))).toBe(true);
+    // Supply to spare is an ordinary export deal, not an odd one.
+    expect(
+      only.test(state({ ...short, powerTrade: exporting, plants: 6, plantStaff: 1 })),
+    ).toBe(false);
+    // No hall, no policy: `powerTradeStep` reads neutral however the field is set.
+    expect(only.test(state({ ...short, cityHall: false, powerTrade: exporting }))).toBe(false);
+  });
+
+  it('spots a goods treaty with nothing to send', () => {
+    const only = row('empty-treaty');
+    const signed = { ...housedOn(24), cityHall: true, goodsTrade: true };
+    expect(only.test(state(signed))).toBe(true);
+    expect(only.test(state({ ...signed, ...making(1) }))).toBe(false);
+    expect(only.test(state({ ...signed, estates: 1 }))).toBe(false);
+    expect(only.test(state({ ...signed, cityHall: false }))).toBe(false);
+  });
+
+  it('spots a city alight to its cap', () => {
+    const only = row('fully-alight');
+    const burning = (n: number) => ({
+      fires: Array.from({ length: n }, (_, i) => ({
+        kind: 'home' as const,
+        index: i,
+        startedAt: 0,
+      })),
+    });
+    expect(only.test(state({ ...housedOn(24), ...burning(MAX_ACTIVE_FIRES) }))).toBe(true);
+    expect(only.test(state({ ...housedOn(24), ...burning(MAX_ACTIVE_FIRES - 1) }))).toBe(false);
+  });
+
+  it('leaves a fully built city none the wiser', () => {
+    // A city that did everything right finds no secrets by doing it, which is
+    // the whole of what makes them secrets rather than a later rung.
+    const earned = ACHIEVEMENTS.filter((a) => a.test(fullCity())).map((a) => a.key);
+    for (const achievement of ACHIEVEMENTS) {
+      if (achievement.hidden) expect(earned, achievement.key).not.toContain(achievement.key);
+    }
   });
 });

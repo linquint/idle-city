@@ -9,10 +9,12 @@ import {
   type HistoryTierKey,
 } from '../sim/history';
 import {
-  ACHIEVEMENT_COUNT,
   ACHIEVEMENT_GROUPS,
-  achievementReadings,
+  achievementDenominator,
   unlockedCount,
+  visibleReadings,
+  type Achievement,
+  type AchievementGroup,
 } from '../sim/achievements';
 import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
@@ -729,6 +731,21 @@ export class Hud {
    * to avoid.
    */
   private readonly awardRows = new Map<string, { row: HTMLElement; at: HTMLElement }>();
+  /**
+   * The last node in each group's run, so a row that appears later lands in the
+   * right section.
+   *
+   * The markup is one flat list of headings and rows rather than a container
+   * per group, and it stays that way — the sections are a `margin-top` on the
+   * heading, and wrapping them would change the layout to buy nothing. So the
+   * one thing an insert needs is where its section currently ends, which is
+   * this. Updated on every insert, so two secrets found in the same group keep
+   * their table order.
+   *
+   * Only hidden rows ever use it: everything else is in the list from the
+   * first paint. See `buildAwards`.
+   */
+  private readonly awardGroupTail = new Map<AchievementGroup, HTMLElement>();
   /** What the awards list last rendered, so an unchanged panel is left alone. */
   private awardsShown = '';
   /** What the awards tab label last said. Painted on every tick — see `paint`. */
@@ -1402,7 +1419,7 @@ export class Hud {
    */
   private buildAwards(): void {
     const list = this.nodes.awardsList;
-    const readings = achievementReadings(this.game.state);
+    const readings = visibleReadings(this.game.state);
     for (const group of ACHIEVEMENT_GROUPS) {
       const rows = readings.filter((reading) => reading.achievement.group === group.key);
       if (rows.length === 0) continue;
@@ -1410,22 +1427,39 @@ export class Hud {
       heading.className = 'award-group';
       heading.textContent = group.name;
       list.append(heading);
+      // The heading is the section's tail until a row lands under it, which is
+      // the case that matters: a group whose only entries are secrets nobody
+      // has found yet still has somewhere to put the first one.
+      this.awardGroupTail.set(group.key, heading);
       for (const { achievement } of rows) {
-        const row = document.createElement('div');
-        row.className = 'award locked';
-        const name = document.createElement('span');
-        name.className = 'k';
-        name.textContent = achievement.name;
-        const at = document.createElement('span');
-        at.className = 'at';
-        const note = document.createElement('p');
-        note.className = 'note';
-        note.textContent = achievement.note;
-        row.append(name, at, note);
-        list.append(row);
-        this.awardRows.set(achievement.key, { row, at });
+        list.append(this.awardRow(achievement));
       }
     }
+  }
+
+  /**
+   * One row's markup, and the record of where it went.
+   *
+   * Split out of `buildAwards` because a hidden row is built by the *paint*
+   * rather than by the build — it does not exist in the list until the tick it
+   * fires on. Everything about it is the same row every other award gets, which
+   * is the point: once found, a secret is an ordinary award forever.
+   */
+  private awardRow(achievement: Achievement): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'award locked';
+    const name = document.createElement('span');
+    name.className = 'k';
+    name.textContent = achievement.name;
+    const at = document.createElement('span');
+    at.className = 'at';
+    const note = document.createElement('p');
+    note.className = 'note';
+    note.textContent = achievement.note;
+    row.append(name, at, note);
+    this.awardRows.set(achievement.key, { row, at });
+    this.awardGroupTail.set(achievement.group, row);
+    return row;
   }
 
   /**
@@ -1438,26 +1472,43 @@ export class Hud {
    * instruction and a greyed instruction is still an instruction.
    */
   private paintAwards(s: Readonly<GameState>): void {
-    const readings = achievementReadings(s);
+    const readings = visibleReadings(s);
     // One string compare against a list of two dozen rows, for the reason the
     // card does it: the panel is static between unlocks and rewriting it ten
-    // times a second is DOM traffic carrying no new information.
+    // times a second is DOM traffic carrying no new information. A secret
+    // firing changes the *length* of the list, which this catches for free.
     const shown = readings.map((reading) => `${reading.achievement.key}:${reading.at ?? ''}`).join('|');
     if (shown === this.awardsShown) return;
     this.awardsShown = shown;
 
     for (const { achievement, at } of readings) {
-      const row = this.awardRows.get(achievement.key);
-      if (!row) continue;
+      let row = this.awardRows.get(achievement.key);
+      if (!row) {
+        // A secret, on the tick it was found. It has no markup yet — that is
+        // what hiding it meant — so it is built now and inserted at the end of
+        // its own section rather than at the end of the list.
+        const node = this.awardRow(achievement);
+        this.awardGroupTail.get(achievement.group)?.after(node);
+        // `awardRow` moved the tail to this node, so a second secret in the
+        // same group lands after this one and the section keeps table order.
+        row = this.awardRows.get(achievement.key);
+        if (!row) continue;
+      }
       const locked = at === null;
       row.row.classList.toggle('locked', locked);
       row.at.textContent = locked ? '' : fmtDuration(at);
     }
   }
 
-  /** The count on the tab itself, which is the reason to open it. */
+  /**
+   * The count on the tab itself, which is the reason to open it.
+   *
+   * The denominator is this city's, not the table's — see
+   * `achievementDenominator`. A secret moves both halves at once, so the label
+   * never states how many are left to find.
+   */
   private paintAwardsTab(s: Readonly<GameState>): void {
-    const label = `Awards ${unlockedCount(s)}/${ACHIEVEMENT_COUNT}`;
+    const label = `Awards ${unlockedCount(s)}/${achievementDenominator(s)}`;
     if (label === this.awardsTabShown) return;
     this.awardsTabShown = label;
     const tab = this.tabs.find((entry) => entry.key === 'awards');
