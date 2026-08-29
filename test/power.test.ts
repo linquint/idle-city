@@ -309,6 +309,13 @@ describe('the death spiral', () => {
     // occupancy, which cuts the income the wages come out of. Both ends are
     // bounded — POWER_FLOOR holds occupancy at a third and UPKEEP_KEEP_SHARE
     // keeps the treasury growing — and this is the pair run together.
+    //
+    // Budgeted for the reason `fire.test.ts` states its own: four hours in
+    // tenth-second ticks is 144,000 of them over a twelve-district city, and
+    // the cost is the tick count. It runs at 1.07 seconds outside vitest and
+    // about two inside it, and still timed out on a shared CI runner at 5.28
+    // seconds of the 5-second default. The budget is headroom for a runner
+    // that is not ours, not cover for a hang: nothing below is unbounded.
     const game = at({
       ...district(LEVELS - 1, 12, 12),
       universities: 40,
@@ -328,7 +335,7 @@ describe('the death spiral', () => {
     expect(game.state.plantStaff).toBeGreaterThan(0);
     expect(powerCap(game.state)).toBeGreaterThanOrEqual(POWER_FLOOR);
     expect(Number.isFinite(game.state.cash)).toBe(true);
-  });
+  }, 20_000);
 
   it('does not compound across a twelve-hour absence', () => {
     const game = blackout();
