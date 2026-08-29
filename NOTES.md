@@ -299,6 +299,27 @@ short probes over `src/sim`), not estimated.
 
 ## 9. Pollution
 
+> **Since this was written**, crime and rubbish were built to the template it
+> lays out below — derived, never stored, entering happiness as modifiers
+> alongside `congestionMood` rather than as extra weights, and answered by a
+> building so the ceiling stays reachable. What they did *not* take from it is
+> the spatial field, and the reason is the one this section's own second hard
+> question raises: their sources are crowding, idleness, residents, shops and
+> works, every one of them a city-wide scalar, so a field driven by them would
+> paint the same number on every plot. Pollution's source is *industrial land*,
+> which clusters — that is what still makes it the bigger feature, and what is
+> written up below still stands for it.
+>
+> One thing measured while building them is worth adding to the list at the
+> foot of this section: the happiness *ceiling* was never the hard part.
+> `crime` and `garbage` are both pressure times an *uncovered* service, so a
+> city with its police and its depots built reads exactly zero on each however
+> bad it would otherwise be, and the ceiling comes out identical before and
+> after to six decimal places at every district count and level. What a
+> modifier of this shape actually moves is everything *below* the ceiling — a
+> half-served city of towers dropped 0.10 — which is where a game is played
+> and which is not what the ceiling test measures.
+
 ### Why it is not in the overlay set
 
 The Phase 4 brief listed pollution as an overlay mode alongside land value,

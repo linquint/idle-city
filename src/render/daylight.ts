@@ -1,4 +1,4 @@
-import { DAY_SECONDS } from '../sim/config';
+import { DAY_SECONDS } from '../sim/config.ts';
 
 /**
  * The day/night cycle, as pure arithmetic over `elapsed`.

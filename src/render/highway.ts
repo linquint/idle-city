@@ -3,13 +3,13 @@ import {
   districtCoord,
   DISTRICT_WIDTH,
   type Coord,
-} from '../sim/layout';
-import { ESTATE_FAR, ESTATE_ROAD_U, ESTATE_SPAN, estateReach } from '../sim/estates';
-import type { GameState } from '../sim/state';
-import { WATERS, type Shore } from '../sim/water';
-import { ROAD_H } from './ground';
-import { GrowableInstancedMesh } from './growable';
-import { PALETTE } from './palette';
+} from '../sim/layout.ts';
+import { ESTATE_FAR, ESTATE_ROAD_U, ESTATE_SPAN, estateReach } from '../sim/estates.ts';
+import type { GameState } from '../sim/state.ts';
+import { WATERS, type Shore } from '../sim/water.ts';
+import { ROAD_H } from './ground.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { PALETTE } from './palette.ts';
 
 /**
  * The road out of town: a spur down the axis and a band road along the estates.

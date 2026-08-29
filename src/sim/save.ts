@@ -7,6 +7,8 @@ import {
   MERGE_LEVEL,
   OCCUPANCY_FULL,
   SERVICES,
+  POWER_TRADES,
+  POWER_TRADE_NEUTRAL,
   TAX_NEUTRAL,
   TAX_STEPS,
 } from './config';
@@ -448,6 +450,36 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
      * wrong-length ring costs the chart and nothing else.
      */
     history: version >= 12 ? migrateHistory(r['history']) : emptyHistory(),
+    /**
+     * The founding count and what earlier foundings left behind.
+     *
+     * A save older than v13 has neither, and the defaults are the only reading
+     * that could be right: an existing city has been founded once, and it has
+     * nothing behind it because there was nothing behind it to have. So a
+     * returning player's city is exactly the city they left — the multiplier is
+     * 1 at a legacy of 0, which is what a first founding earns anyway.
+     *
+     * Clamped like every other count: a doctored save cannot buy itself a
+     * legacy larger than the districts it could ever have given up, which is
+     * MAX_DISTRICTS a founding.
+     */
+    foundings: Math.max(1, Math.floor(num(r['foundings'], 1))),
+    legacy: Math.max(0, Math.floor(num(r['legacy'], 0))),
+    /**
+     * The two treaties, and what a save written before them is entitled to.
+     *
+     * Neither: a v13 city never had anybody to sign one, and off is the only
+     * reading that leaves it earning exactly what it earned. The power step is
+     * clamped to the table it indexes rather than trusted, the same way
+     * `taxRate` is, so a doctored save picks a real step; the goods flag is
+     * `=== true` rather than coerced, because a treaty is signed or it is not
+     * and a save carrying the string "yes" is not a save that signed one.
+     */
+    powerTrade: Math.max(
+      0,
+      Math.min(POWER_TRADES.length - 1, Math.floor(num(r['powerTrade'], POWER_TRADE_NEUTRAL))),
+    ),
+    goodsTrade: r['goodsTrade'] === true,
     savedAt: num(r['savedAt'], now),
   };
 
@@ -562,6 +594,11 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     else if (service.key === 'transit') state.depots = Math.min(state.depots, allowed);
     else state.universities = Math.min(state.universities, allowed);
   }
+
+  // A legacy is what earlier foundings gave up, and a founding can give up at
+  // most MAX_DISTRICTS. So the two fields bound each other, and a doctored save
+  // cannot claim a legacy no run could have earned.
+  state.legacy = Math.min(state.legacy, (state.foundings - 1) * MAX_DISTRICTS);
 
   // After the building counts are legal, because a fire is only legal if the
   // building it is burning still exists.

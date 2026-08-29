@@ -4,12 +4,12 @@ import {
   districtCoord,
   DISTRICT_WIDTH,
   type Coord,
-} from '../sim/layout';
-import type { GameState } from '../sim/state';
-import { WATERS, type Shore } from '../sim/water';
-import { Glow } from './glow';
-import { GrowableInstancedMesh } from './growable';
-import { PALETTE } from './palette';
+} from '../sim/layout.ts';
+import type { GameState } from '../sim/state.ts';
+import { WATERS, type Shore } from '../sim/water.ts';
+import { Glow } from './glow.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { PALETTE } from './palette.ts';
 
 /**
  * The city's waterfront: a quay off every coastal district that has a terminal

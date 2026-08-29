@@ -1,4 +1,11 @@
-import { FRONTAGE_TARGET, LEVELS, OCCUPANCY_FULL, START_CASH, TAX_NEUTRAL } from './config.ts';
+import {
+  FRONTAGE_TARGET,
+  LEVELS,
+  OCCUPANCY_FULL,
+  POWER_TRADE_NEUTRAL,
+  START_CASH,
+  TAX_NEUTRAL,
+} from './config.ts';
 import { emptyHistory, type History } from './history.ts';
 import { districtLand } from './layout.ts';
 
@@ -81,7 +88,7 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 12;
+export const SAVE_VERSION = 14;
 
 /**
  * The entire game, in a handful of fields.
@@ -410,6 +417,45 @@ export interface GameState {
    * Nothing in the simulation reads it back.
    */
   history: History;
+  /**
+   * Where the city buys and sells power, as an index into POWER_TRADES.
+   *
+   * A policy scalar, exactly as `taxRate` is, and stored for exactly the same
+   * reason: it is a choice the player made and the simulation cannot re-derive
+   * it. One number and a table — see POWER_TRADES, which is where what it does
+   * is stated.
+   */
+  powerTrade: number;
+  /**
+   * Whether the city has signed a goods agreement with its neighbours.
+   *
+   * The second policy switch, in the shape `freeTransport` already is: a stored
+   * *choice*, read through `hasPolicy` so a city without a hall acts as though
+   * it were off while keeping whatever the player set. See `goodsTraded`.
+   */
+  goodsTrade: boolean;
+  /**
+   * How many times a city has been founded on this seed. One for a fresh save.
+   *
+   * The first of exactly two fields ascension adds, and it is a scalar for the
+   * same reason everything else here is: it grows with nothing. A city founded
+   * a thousand times carries the number 1,000 and not a thousand of anything.
+   */
+  foundings: number;
+  /**
+   * What the cities before this one left behind, in districts.
+   *
+   * The second field, and the only one anything reads back. Districts rather
+   * than cash, population or `earned`, and the choice is the whole sizing: a
+   * founding can contribute at most MAX_DISTRICTS, so the legacy grows by a
+   * bounded amount however long a run is left going. Population would have
+   * spanned four to a million and made the second city's bonus a function of
+   * how patient the first player was rather than of how far they got.
+   *
+   * See `legacyMultiplier`, which is what reads it, and `Game.ascend`, which is
+   * the only thing that writes it.
+   */
+  legacy: number;
   /** Epoch ms of the last save, used to compute time away. */
   savedAt: number;
 }
@@ -491,6 +537,13 @@ export function createState(now = Date.now()): GameState {
     // Nothing earned yet, which is the one thing a fresh city is certain of.
     unlocked: {},
     history: emptyHistory(),
+    // No treaties, which is where a city with nobody to sign one starts.
+    powerTrade: POWER_TRADE_NEUTRAL,
+    goodsTrade: false,
+    // The city being founded right now is the first one. `Game.ascend` is what
+    // makes it the second, by re-seeding these two over a fresh state.
+    foundings: 1,
+    legacy: 0,
     savedAt: now,
   };
 }

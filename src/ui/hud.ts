@@ -21,6 +21,9 @@ import {
   LANDMARKS,
   LANDMARK_MOOD,
   CONGESTION_MOOD,
+  CRIME_MOOD,
+  EDUCATION_SERVICES,
+  GARBAGE_MOOD,
   HAPPINESS_MIN_BUILD,
   PLOTS_PER_PARK,
   LEVEL_EDUCATION,
@@ -46,8 +49,13 @@ import {
   AIRPORT_VISITORS,
   ROAD_VISITORS,
   CARGO_EXPORT_LIFT,
+  GOODS_TRADE_ANSWER,
+  GOODS_TRADE_LIFT,
   HIGHWAY_MIN_DISTRICTS,
+  POWER_TRADES,
+  RIVAL_MATCH_DISTRICTS,
   TERMINALS,
+  type PowerTrade,
 } from '../sim/config';
 import {
   abandonedBuildings,
@@ -72,7 +80,17 @@ import {
   canBuildCityHall,
   canBuildPlant,
   canBuildTerminal,
+  ascendBlocker,
+  canAscend,
   cityHallBlocker,
+  cityRank,
+  crime,
+  garbage,
+  legacyGain,
+  legacyMultiplier,
+  nextRank,
+  population,
+  rankProgress,
   cityHallCost,
   cruiseIncome,
   demandLift,
@@ -88,6 +106,7 @@ import {
   estateSupply,
   exportMarket,
   fareIncome,
+  goodsTraded,
   highwayAllowed,
   highwayBlocker,
   highwayCost,
@@ -113,7 +132,14 @@ import {
   policyBlocker,
   powerCap,
   powerDemand,
+  powerImported,
   powerRatio,
+  powerSurplus,
+  powerTradeCost,
+  powerTradeIncome,
+  powerTradeStep,
+  rivalDemand,
+  rivalStrength,
   levelAt,
   mergedOf,
   parkCost,
@@ -139,6 +165,7 @@ import {
   shopCost,
   terminalBlocker,
   terminalReadings,
+  tradeUpkeep,
   upkeep,
   visitors,
   visitorShare,
@@ -176,6 +203,14 @@ export interface HudHooks {
   onZoneMode?: (mode: ZoneMode) => ZoneMode;
   /** What the view is showing now, so the picker opens marked correctly. */
   zoneMode?: () => ZoneMode;
+  /**
+   * Drops the camera to street level, or brings it back, and reports where it
+   * ended up. Same contract as `onZoneMode`: the camera is view state and the
+   * HUD asks rather than deciding.
+   */
+  onStreet?: () => boolean;
+  /** Whether the camera is at street level, so the switch opens marked right. */
+  street?: () => boolean;
   /** Dev-only time travel, wired to a button that only exists in dev builds. */
   onSkip?: (seconds: number) => void;
   /** Told when the card is dismissed, so the outline goes with it. */
@@ -422,6 +457,7 @@ export class Hud {
   private readonly nodes = {
     cash: el('cash'),
     rate: el('rate'),
+    rank: el('rank'),
     ticker: el('ticker'),
     ledgerCash: el('ledger-cash'),
     ledgerGross: el('ledger-gross'),
@@ -463,6 +499,7 @@ export class Hud {
     graphsNote: el('graphs-note'),
     overlays: el('overlays'),
     overlayNote: el('overlay-note'),
+    streetView: el('street-view'),
     corner: el('corner'),
     sheetGrip: el<HTMLButtonElement>('sheet-grip'),
     education: el('education'),
@@ -498,6 +535,9 @@ export class Hud {
     annex: el<HTMLButtonElement>('annex'),
     auto: el<HTMLButtonElement>('auto'),
     reset: el<HTMLButtonElement>('reset'),
+    ascend: el<HTMLButtonElement>('ascend'),
+    ascendLabel: el('ascend-label'),
+    ascendGain: el('ascend-gain'),
     welcome: el('welcome'),
     welcomeAway: el('welcome-away'),
     welcomeRows: el('welcome-rows'),
@@ -533,6 +573,10 @@ export class Hud {
     transitFares: el('transit-fares'),
     transitLabour: el('transit-labour'),
     transitCongestion: el('transit-congestion'),
+    crimeRate: el('crime-rate'),
+    crimeMood: el('crime-mood'),
+    garbageRate: el('garbage-rate'),
+    garbageMood: el('garbage-mood'),
     transitCongestionMood: el('transit-congestion-mood'),
     landmarkShare: el('landmark-share'),
     landmarkMood: el('landmark-mood'),
@@ -544,6 +588,14 @@ export class Hud {
     portSources: el('port-sources'),
     portShopping: el('port-shopping'),
     portLift: el('port-lift'),
+    rivalStrength: el('rival-strength'),
+    rivalCost: el('rival-cost'),
+    powerSteps: el('power-steps'),
+    powerTradeFlow: el('power-trade-flow'),
+    powerTradeWorth: el('power-trade-worth'),
+    goodsTrade: el<HTMLButtonElement>('goods-trade'),
+    goodsFee: el('goods-fee'),
+    goodsEffect: el('goods-effect'),
     airport: el<HTMLButtonElement>('build-airport'),
     airportLabel: el('build-airport-label'),
     airportCost: el('build-airport-cost'),
@@ -609,6 +661,8 @@ export class Hud {
   private open: TabKey = 'build';
   /** One control per TAX_STEPS entry, built once. */
   private readonly taxButtons: HTMLButtonElement[] = [];
+  /** The same, per POWER_TRADES entry. Two tables, one idiom. */
+  private readonly powerButtons: HTMLButtonElement[] = [];
 
   /**
    * The building the card is showing, or null.
@@ -685,6 +739,8 @@ export class Hud {
   private overlayShown: ZoneMode = 'off';
   /** What that note last said, so an unchanged one is left alone. */
   private overlayNoteShown = '';
+  /** What the rank strip last said, so a repaint a frame is a string compare. */
+  private rankShown = '';
   /**
    * Which tier the chart is showing. View state, and it stays in the view: the
    * ring the simulation keeps is the same whichever span is on screen.
@@ -751,6 +807,31 @@ export class Hud {
       this.paint();
     });
 
+    n.ascend.addEventListener('click', () => {
+      const s = this.game.state;
+      if (!canAscend(s)) return;
+      const gain = legacyGain(s);
+      const after = legacyMultiplier({ ...s, legacy: s.legacy + gain });
+      if (
+        !confirm(
+          `Give up ${fmtInt(s.districts)} district${s.districts === 1 ? '' : 's'} and found the ` +
+            `city again on the same land?\n\nEverything goes: the buildings, the treasury, ` +
+            `the awards and the charts. What comes back is a permanent ` +
+            `${after.toFixed(2)}x on everything the next city earns.`,
+        )
+      ) {
+        return;
+      }
+      this.game.ascend();
+      // The ticker is the one part of the HUD that holds anything across a
+      // paint, so it is the one part a founding has to be told about — same as
+      // a reset, because underneath it is one.
+      this.ticker.clear();
+      this.tickerShown = '';
+      this.hooks.onReset();
+      this.paint();
+    });
+
     n.welcomeClose.addEventListener('click', () => {
       n.welcome.hidden = true;
     });
@@ -782,8 +863,31 @@ export class Hud {
       n.taxSteps.append(button);
     }
 
+    // And the power agreement, from POWER_TRADES for the same reason. Off,
+    // import, export: one index in the save, so one radio group here.
+    for (let i = 0; i < POWER_TRADES.length; i++) {
+      const trade = POWER_TRADES[i] as PowerTrade;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'step';
+      button.setAttribute('role', 'radio');
+      button.textContent = trade.label;
+      button.addEventListener('click', () => {
+        this.game.setPowerTrade(i);
+        this.paint();
+      });
+      this.powerButtons.push(button);
+      n.powerSteps.append(button);
+    }
+
+    n.goodsTrade.addEventListener('click', () => {
+      this.game.setGoodsTrade(!this.game.state.goodsTrade);
+      this.paint();
+    });
+
     this.wireSheet();
     this.buildOverlays();
+    this.buildStreetView();
     this.buildGraphs();
     this.buildAwards();
 
@@ -899,6 +1003,7 @@ export class Hud {
     // rather than as earning — see `netIncome`. What the buildings *earn* is a
     // separate row in the Treasury tab, where the difference is the point.
     n.rate.textContent = `${fmt(netIncome(s))}/s`;
+    this.paintRank(s);
 
     this.paintTicker(s);
 
@@ -1095,6 +1200,58 @@ export class Hud {
       this.nodes.overlays.append(button);
     }
     this.markOverlay(this.hooks.zoneMode?.() ?? 'off');
+  }
+
+  /**
+   * Wires the street-level switch, if the view offered one.
+   *
+   * A switch rather than a chip in the radio group above it: the overlays are
+   * one-of-seven and this is on-or-off, and a screen reader told otherwise
+   * would announce it as one of eight overlays.
+   */
+  private buildStreetView(): void {
+    const button = this.nodes.streetView;
+    if (!this.hooks.onStreet) {
+      button.hidden = true;
+      return;
+    }
+    button.addEventListener('click', () => this.markStreet(this.hooks.onStreet?.() ?? false));
+    this.markStreet(this.hooks.street?.() ?? false);
+  }
+
+  /**
+   * Marks whether the camera is at street level.
+   *
+   * Public for the reason `markOverlay` is: the V key belongs to the view, so
+   * the view reports what it did and the switch follows rather than the two
+   * disagreeing.
+   */
+  markStreet(street: boolean): void {
+    this.nodes.streetView.setAttribute('aria-pressed', String(street));
+  }
+
+  /**
+   * The city's rank, and how far it is through the rung it is climbing.
+   *
+   * In the strip rather than in a tab, because the rank decides which buttons
+   * in the Build tab exist: a player reading "Needs a town" on a disabled
+   * button has to be able to find out what they are without going looking. The
+   * name is the label and the detail is the title, which is the split the rest
+   * of this HUD already uses for a blocker.
+   */
+  private paintRank(s: Readonly<GameState>): void {
+    const rank = cityRank(s);
+    const next = nextRank(s);
+    const label = next === null ? rank.name : `${rank.name} · ${pct(rankProgress(s) ?? 0)}`;
+    if (label === this.rankShown) return;
+    this.rankShown = label;
+    this.nodes.rank.textContent = label;
+    this.nodes.rank.title =
+      next === null
+        ? `${rank.name} — the top of the ladder`
+        : `${rank.name}. Next: ${next.name}, at ${fmtInt(next.districts)} district` +
+          `${next.districts === 1 ? '' : 's'} and ${fmtInt(next.population)} people` +
+          ` (${fmtInt(s.districts)} and ${fmtInt(population(s))} now)`;
   }
 
   /**
@@ -1418,8 +1575,11 @@ export class Hud {
         rows.push({
           zone: false,
           label: entry.term.label,
-          // The tax pressure is the one reading that is not a coverage, so it is
-          // shown signed rather than as a percentage of anything.
+          // The tax pressure is the one reading that is not a *share* of
+          // anything, so it is shown signed rather than as a percentage. The
+          // rival is not a coverage either, but it is a fraction — "the city
+          // next door is 30% established" is the sentence — so it reads like
+          // one. See `demandReading`.
           reads: entry.term.key === 'tax' ? entry.reading.toFixed(2) : pct(entry.reading),
           value: entry.value,
         });
@@ -1514,7 +1674,10 @@ export class Hud {
       row.built.textContent = fmtInt(built);
       row.covers.textContent = `covers ${fmtInt(covered)} of ${fmtInt(plots)}`;
       row.row.classList.toggle('covered', reach >= 1);
-      (service.weight > 0 ? spoken : taught).push(
+      // Split by what the row is *about* rather than by its weight: police
+      // carry 0 since crime became a quantity, and a weight test would have
+      // read them into the education block. See the police row in SERVICES.
+      (EDUCATION_SERVICES.some((entry) => entry.key === service.key) ? taught : spoken).push(
         `${service.name} ${built}, covering ${Math.round(covered)} of ${Math.round(plots)} housing plots`,
       );
     }
@@ -1528,6 +1691,19 @@ export class Hud {
     n.parksRow.classList.toggle('covered', reach >= 1);
     spoken.push(
       `Parks ${s.parks} of ${parkLand} plots, covering ${Math.round(reach * 100)} percent of housing land`,
+    );
+    // Crime, under the stations that answer it. Stated as the rate and what it
+    // costs, in the units every other modifier in this HUD uses — see the
+    // Traffic row, which says the same two things about the same target.
+    const crimeAt = crime(s);
+    n.crimeRate.textContent = pct(crimeAt);
+    n.crimeMood.textContent =
+      crimeAt <= 0
+        ? 'no effect on mood'
+        : `−${(CRIME_MOOD * crimeAt * 100).toFixed(1)} points of mood`;
+    spoken.push(
+      `Crime ${Math.round(crimeAt * 100)} percent` +
+        (crimeAt > 0 ? `, costing ${(CRIME_MOOD * crimeAt * 100).toFixed(1)} points of mood` : ''),
     );
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
@@ -1573,6 +1749,14 @@ export class Hud {
       jam <= 0
         ? 'no effect on mood'
         : `−${(CONGESTION_MOOD * jam * 100).toFixed(1)} points of mood`;
+    // And the bins, which the same depots empty. Fourth thing this block says a
+    // depot is for — see `garbageCollection`.
+    const bins = garbage(s);
+    n.garbageRate.textContent = pct(bins);
+    n.garbageMood.textContent =
+      bins <= 0
+        ? 'no effect on mood'
+        : `−${(GARBAGE_MOOD * bins * 100).toFixed(1)} points of mood`;
     n.transit.setAttribute(
       'aria-label',
       `Transport: ${s.depots} depots covering ${Math.round(transitCoverage(s) * 100)} percent, ` +
@@ -1766,9 +1950,91 @@ export class Hud {
         : `${pct(share)} of the city's shopping`;
 
     n.portExports.textContent = fmt(exportMarket(s));
-    const lift = CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0);
+    const lift =
+      CARGO_EXPORT_LIFT * s.cargoTerminals +
+      (s.airport ? AIRPORT_EXPORT_LIFT : 0) +
+      (goodsTraded(s) ? GOODS_TRADE_LIFT : 0);
     n.portLift.textContent =
       lift <= 0 ? 'no freight yet' : `+${Math.round(lift * 100)}% on the tap`;
+
+    this.paintTreaties(s);
+  }
+
+  /**
+   * The lower half of the trade tab: the city next door, and the two agreements
+   * that answer it.
+   *
+   * On this tab rather than on the policy one, even though both switches are
+   * gated on the city hall exactly as the tax rate is. Policy is what the city
+   * does to itself; this is what it does with everybody else, and the rival is
+   * only legible next to the export tap it is competing for.
+   *
+   * The rival row is the first thing painted and it is the one that has to be
+   * there. A rival the player cannot find is indistinguishable from commerce
+   * being mysteriously expensive — so the row says how established it is *and*
+   * what that is costing, in the same points the demand tab is read in.
+   */
+  private paintTreaties(s: Readonly<GameState>): void {
+    const n = this.nodes;
+    const why = policyBlocker(s);
+    const rival = rivalStrength(s);
+    n.rivalStrength.textContent = pct(rival);
+    // Both signals, because the rival takes more off industry than off commerce
+    // and a single averaged number would hide the one decision it informs.
+    n.rivalCost.textContent =
+      rival <= 0
+        ? s.districts >= RIVAL_MATCH_DISTRICTS
+          ? 'outgrown — a suburb now'
+          : 'not settled yet'
+        : `${signed(rivalDemand(s, 'shop'))} trade, ${signed(rivalDemand(s, 'industry'))} industry`;
+
+    // The step the city is *on*, not the one it stored — `powerTradeStep`
+    // answers with Off for a save that predates its own city hall, and the
+    // radio group has to agree with the grid rather than with the save.
+    const step = powerTradeStep(s);
+    const at = POWER_TRADES.indexOf(step);
+    for (let i = 0; i < this.powerButtons.length; i++) {
+      const button = this.powerButtons[i];
+      if (!button) continue;
+      const trade = POWER_TRADES[i] as PowerTrade;
+      button.setAttribute('aria-checked', String(i === at));
+      button.disabled = why !== null;
+      button.title =
+        why ??
+        (trade.imports > 0
+          ? `Buy ${Math.round(trade.imports * 100)}% of the draw at ${trade.price.toFixed(2)} a unit`
+          : trade.sells > 0
+            ? `Sell the spare at ${trade.sells.toFixed(2)} a unit`
+            : 'Neither buy nor sell');
+    }
+
+    const bought = powerImported(s);
+    const sold = step.sells > 0 ? powerSurplus(s) : 0;
+    n.powerTradeFlow.textContent =
+      bought > 0 ? `${fmt(bought)} bought`
+      : sold > 0 ? `${fmt(sold)} sold`
+      : step.sells > 0 ? 'nothing spare'
+      : 'none traded';
+    // What it is worth per second, which is the number the switch is decided
+    // on. A city exporting with no surplus reads nothing rather than reading a
+    // price it is not being paid.
+    n.powerTradeWorth.textContent =
+      bought > 0 ? `${fmt(powerTradeCost(s))}/s on the bill`
+      : sold > 0 ? `${fmt(powerTradeIncome(s))}/s earned`
+      : why ?? 'no agreement';
+
+    // `goodsTraded` rather than the stored flag, for the reason `faresWaived` is
+    // read that way: the flag is what the player chose and this is whether the
+    // city can act on it.
+    const treaty = goodsTraded(s);
+    n.goodsTrade.textContent = `Goods agreement · ${treaty ? 'on' : 'off'}`;
+    n.goodsTrade.setAttribute('aria-pressed', String(treaty));
+    n.goodsTrade.disabled = why !== null;
+    n.goodsTrade.title = why ?? 'Open the market next door';
+    n.goodsFee.textContent = treaty ? `${fmt(tradeUpkeep(s))}/s to keep` : 'nothing to keep';
+    n.goodsEffect.textContent = `tap +${Math.round(GOODS_TRADE_LIFT * 100)}%, rival \u2212${Math.round(
+      GOODS_TRADE_ANSWER * 100,
+    )}%`;
   }
 
   /**
@@ -1904,6 +2170,21 @@ export class Hud {
     n.auto.setAttribute('aria-pressed', String(developing));
     n.auto.disabled = govern !== null;
     n.auto.title = govern ?? 'Spend surplus cash while you are away';
+
+    // Founding again. The button carries what it is worth rather than what it
+    // costs, which is the one place in this HUD that reads the other way round
+    // — the cost is the whole city and it is on the button's face already.
+    const ascendWhy = ascendBlocker(s);
+    const gain = legacyGain(s);
+    const after = legacyMultiplier({ ...s, legacy: s.legacy + gain });
+    n.ascendLabel.textContent =
+      ascendWhy ?? (s.foundings > 1 ? `Found again · city ${fmtInt(s.foundings)}` : 'Found again');
+    n.ascendGain.textContent = ascendWhy === null ? `${after.toFixed(2)}x` : '';
+    n.ascend.disabled = !canAscend(s);
+    n.ascend.title =
+      ascendWhy ??
+      `Give up ${fmtInt(s.districts)} districts for a permanent ${after.toFixed(2)}x` +
+        ` on everything the next city earns (now ${legacyMultiplier(s).toFixed(2)}x)`;
   }
 
   /**

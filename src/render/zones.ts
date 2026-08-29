@@ -1,21 +1,33 @@
 import * as THREE from 'three';
-import { hash01 } from '../core/rng';
-import { ZONE } from '../sim/citygen';
-import { CELL, CIVIC_SERVICES, HAPPINESS_SERVICES } from '../sim/config';
-import { congestion, covered, serviceCount, zoneOf } from '../sim/economy';
+import { hash01 } from '../core/rng.ts';
+import { ZONE } from '../sim/citygen.ts';
+import { CELL, CIVIC_SERVICES, HAPPINESS_SERVICES } from '../sim/config.ts';
+import {
+  POLICE,
+  TRANSIT,
+  congestion,
+  covered,
+  crimePressure,
+  garbageLoad,
+  serviceCount,
+  zoneOf,
+} from '../sim/economy.ts';
 import {
   BUILDABLE_PARKS_PER_DISTRICT as PARKS_PER_DISTRICT,
+  DISTRICT_WIDTH,
+  cityCentre,
+  cityRadius,
   createPlacement,
   housingCentrality,
   worldX,
   worldZ,
   type CityLayout,
   type Coord,
-} from '../sim/layout';
-import type { GameState, ZoneKind } from '../sim/state';
-import { ROAD_H } from './ground';
-import { GrowableInstancedMesh } from './growable';
-import { PALETTE } from './palette';
+} from '../sim/layout.ts';
+import type { GameState, ZoneKind } from '../sim/state.ts';
+import { ROAD_H } from './ground.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { PALETTE } from './palette.ts';
 
 /** A gutter under the pad so plots read as plots rather than as a colour wash. */
 const PAD = CELL - 0.8;
@@ -62,6 +74,21 @@ const quantise = (d: number): number => Math.round(d * DEMAND_STEPS);
  * Always on, unlike the zoning overlay, and rebuilt only when a count it draws
  * from actually moves.
  */
+/**
+ * States what a ground-level layer covers, so its meshes can be frustum-culled.
+ *
+ * One helper rather than three copies of the same trig: everything here stands
+ * on the city's own land, so the extent is the city's — which the simulation
+ * states in `cityRadius` and which moves only when a district is annexed. See
+ * `GrowableInstancedMesh.setBounds` for why bounds are stated rather than
+ * derived from the instance buffers.
+ */
+function fitToCity(districts: number, top: number, ...meshes: GrowableInstancedMesh[]): void {
+  const centre = cityCentre(districts);
+  const reach = cityRadius(districts) + DISTRICT_WIDTH / 2;
+  for (const mesh of meshes) mesh.setBounds(centre.x, centre.z, reach, top);
+}
+
 export class Courtyards {
   private readonly pads: GrowableInstancedMesh;
   private readonly dummy = new THREE.Object3D();
@@ -79,7 +106,7 @@ export class Courtyards {
       new THREE.BoxGeometry(PAD, PAD_H, PAD),
       new THREE.MeshLambertMaterial({ color: PALETTE.courtyard }),
       256,
-      { receiveShadow: true },
+      { receiveShadow: true, name: 'zone:courtyard' },
     );
   }
 
@@ -95,6 +122,7 @@ export class Courtyards {
     if (stamp === this.stamp) return;
     this.stamp = stamp;
     this.layout.ensure(state);
+    fitToCity(state.districts, PAD_Y + PAD_H, this.pads);
 
     const courtyards = this.layout.courtyards;
     // Parks are the front of the courtyard list, so the plots still standing
@@ -176,7 +204,12 @@ class ParkTrees {
   static readonly PER_PARK = 4;
   /** Kept inside the pad, so no canopy overhangs the kerb. */
   static readonly SPREAD = PAD / 2 - 0.55;
+  /** Trunk and canopy, at the top of the height jitter. What TREE_TOP is. */
+  static readonly TALLEST = (0.55 + 1.15) * 1.28;
 }
+
+/** The highest a park reaches, which is what its meshes are culled against. */
+const TREE_TOP = PAD_Y + ParkTrees.TALLEST;
 
 export class Parks {
   private readonly pads: GrowableInstancedMesh;
@@ -195,21 +228,21 @@ export class Parks {
       new THREE.BoxGeometry(PAD, PAD_H, PAD),
       new THREE.MeshLambertMaterial({ color: PALETTE.park }),
       64,
-      { receiveShadow: true },
+      { receiveShadow: true, name: 'zone:park' },
     );
     this.trunks = new GrowableInstancedMesh(
       scene,
       new THREE.BoxGeometry(0.16, 0.55, 0.16),
       new THREE.MeshLambertMaterial({ color: PALETTE.trunk }),
       256,
-      { castShadow: true },
+      { castShadow: true, name: 'zone:trunk' },
     );
     this.canopies = new GrowableInstancedMesh(
       scene,
       new THREE.ConeGeometry(0.52, 1.15, 6),
       new THREE.MeshLambertMaterial({ color: PALETTE.canopy }),
       256,
-      { castShadow: true },
+      { castShadow: true, name: 'zone:canopy' },
     );
   }
 
@@ -218,6 +251,9 @@ export class Parks {
     if (stamp === this.stamp) return;
     this.stamp = stamp;
     this.layout.ensure(state);
+    // A canopy is a cone standing on a trunk; TREE_TOP is where the tallest of
+    // them reaches, which is what the pads and the trees share as a ceiling.
+    fitToCity(state.districts, TREE_TOP, this.pads, this.trunks, this.canopies);
 
     const n = Math.min(state.parks, state.districts * PARKS_PER_DISTRICT);
     this.pads.ensure(n);
@@ -268,17 +304,41 @@ export class Parks {
 /**
  * What the overlay is showing.
  *
- * Six modes and an off. `plan` is the zoning map and `demand` repaints the same
- * pads by how badly the city wants that type; the four that follow are about
- * the land the city has already built on, which is why `Buildings.setOverlay`
- * takes a per-slot colour rather than one per zone.
+ * Eight modes and an off. `plan` is the zoning map and `demand` repaints the
+ * same pads by how badly the city wants that type; the rest are about the land
+ * the city has already built on, which is why `Buildings.setOverlay` takes a
+ * per-slot colour rather than one per zone.
  *
- * **Pollution is deliberately not here.** There is no pollution number anywhere
- * in `src/sim`, so an overlay over it would be a picture of nothing — see
- * NOTES.md section 9, where it is written up as the simulation feature it would
- * have to be first.
+ * **Crime and rubbish are here now, and pollution still is not.** This comment
+ * used to rule out all three together, on the grounds that there was no number
+ * in `src/sim` for any of them and an overlay over a number that does not exist
+ * is a picture of nothing. That reason has stopped holding for two of them:
+ * `crime` and `garbage` are simulation quantities with sources, a calibration
+ * and a happiness cost, so the overlays draw something the ledger reads. It has
+ * not stopped holding for pollution, which is still written up in NOTES.md
+ * section 9 as the feature it would have to be first — and the thing that makes
+ * it a bigger feature than these two is exactly what section 9 says: its source
+ * is *industrial land*, which clusters, so it is genuinely spatial where these
+ * two are city-wide.
+ *
+ * Which is why neither of these draws a field. Crime's sources are crowding and
+ * idleness and rubbish's are residents, shops and works — every one of them a
+ * city-wide scalar — so the pads say what `coverage` says: which plots the
+ * answer accounts for, under the city's own oldest-land-first ordering, with
+ * the ones it does not reach shaded by how bad the city-wide reading is. A
+ * circle drawn round a police station would put a number on screen that the
+ * services panel does not have.
  */
-export type ZoneMode = 'off' | 'plan' | 'demand' | 'value' | 'coverage' | 'order' | 'traffic';
+export type ZoneMode =
+  | 'off'
+  | 'plan'
+  | 'demand'
+  | 'value'
+  | 'coverage'
+  | 'crime'
+  | 'garbage'
+  | 'order'
+  | 'traffic';
 
 /**
  * The modes, in cycle order, with what the picker calls each.
@@ -296,6 +356,16 @@ export const ZONE_MODES: readonly { key: ZoneMode; label: string; note: string }
     key: 'coverage',
     label: 'Coverage',
     note: 'Housing the worst-covered service accounts for, oldest land first.',
+  },
+  {
+    key: 'crime',
+    label: 'Crime',
+    note: 'Housing the police reach, oldest land first, and how bad it is where they do not.',
+  },
+  {
+    key: 'garbage',
+    label: 'Rubbish',
+    note: 'Housing the depots collect from, oldest land first.',
   },
   { key: 'order', label: 'Build order', note: 'Which plots the city took first.' },
   { key: 'traffic', label: 'Traffic', note: 'How jammed the streets are. One number, city-wide.' },
@@ -345,6 +415,12 @@ export interface OverlayReading {
   /** Plots of housing the worst-covered service accounts for. See `coveredPlots`. */
   readonly covered: number;
   readonly congestion: number;
+  /** Plots the police reach, and the plots the depots collect from. */
+  readonly policed: number;
+  readonly collected: number;
+  /** How bad each is where the answer does not reach. City-wide, in [0, 1]. */
+  readonly crime: number;
+  readonly garbage: number;
   /** The range the land-value ramp is stretched over. See `read`. */
   readonly valueMin: number;
   readonly valueMax: number;
@@ -415,6 +491,7 @@ export class Zones {
       new THREE.BoxGeometry(PAD, PAD_H, PAD),
       new THREE.MeshBasicMaterial({ color: 0xffffff }),
       256,
+      { name: 'overlay:pads' },
     );
     this.pads.mesh.visible = false;
     this.streets = new GrowableInstancedMesh(
@@ -424,6 +501,7 @@ export class Zones {
       new THREE.BoxGeometry(CELL, PAD_H, CELL),
       new THREE.MeshBasicMaterial({ color: 0xffffff }),
       256,
+      { name: 'overlay:streets' },
     );
     this.streets.mesh.visible = false;
   }
@@ -533,6 +611,22 @@ export class Zones {
       case 'coverage':
         if (kind !== 'home') return out.setHex(PALETTE.overlayMute);
         return index < reading.covered ? ramp(1, out) : ramp(0, out);
+      case 'crime':
+        // Housing only, for the reason `value` is housing only: `crime` is a
+        // share of the *housing* land, and a shop's plot has never been in that
+        // denominator.
+        //
+        // Two tones rather than one, and this is where the mode earns its place
+        // beside `coverage`: a policed plot is clear, and an unpoliced one is
+        // shaded by how much crime there would be — so a village with no police
+        // reads pale and a crowded idle city with no police reads hot. The
+        // pressure is city-wide, exactly as congestion is, and the *reach* is
+        // the plots-covered form. Neither half invents a geometry.
+        if (kind !== 'home') return out.setHex(PALETTE.overlayMute);
+        return index < reading.policed ? ramp(0, out) : ramp(reading.crime, out);
+      case 'garbage':
+        if (kind !== 'home') return out.setHex(PALETTE.overlayMute);
+        return index < reading.collected ? ramp(0, out) : ramp(reading.garbage, out);
       case 'order':
         // Within its own list, so a young district's shops read as new even
         // though the city has far more housing than commerce.
@@ -565,6 +659,15 @@ export class Zones {
     return {
       covered: this.coveredPlots(state),
       congestion: congestion(state),
+      // The plots each of the two answers accounts for, in the same
+      // oldest-land-first ordering `coverage` uses — and how bad the thing is
+      // on the plots they do not reach, which is the one number that makes
+      // these two modes different from `coverage` rather than a third copy of
+      // it. See `crime` and `garbage`.
+      policed: POLICE ? covered(state, POLICE) : 0,
+      collected: TRANSIT ? covered(state, TRANSIT) : 0,
+      crime: crimePressure(state),
+      garbage: garbageLoad(state),
       valueMin: Number.isFinite(valueMin) ? valueMin : 0,
       valueMax: Number.isFinite(valueMax) ? valueMax : 1,
     };
@@ -603,7 +706,11 @@ export class Zones {
       // the front of the list and take two plots each. `place` is the same call
       // the inspector makes, so the card and the overlay agree about the land.
       const plot =
-        this.mode === 'value' || this.mode === 'coverage' || this.mode === 'order'
+        this.mode === 'value' ||
+        this.mode === 'coverage' ||
+        this.mode === 'crime' ||
+        this.mode === 'garbage' ||
+        this.mode === 'order'
           ? this.layout.place(zoneOf(kind), slot, merged[kind], state, at).plot
           : slot;
       return this.plotColor(state, kind, plot, totals[kind], reading, scratch).getHex();
@@ -630,13 +737,22 @@ export class Zones {
         ? `${quantise(state.demandR)}:${quantise(state.demandC)}:${quantise(state.demandI)}`
         : this.mode === 'coverage'
           ? `${Math.round(this.coveredPlots(state))}`
-          : this.mode === 'value'
-            ? `${state.mergedR}`
-            : `${state.mergedR}:${state.mergedC}:${state.mergedI}`;
+          : this.mode === 'crime'
+            ? // Both halves of what the mode draws, and the pressure is
+              // quantised for the reason demand is: it moves with the occupancy
+              // integrator, and a stamp that carried it raw would rebuild every
+              // pad every frame for a signal nobody can see move.
+              `${Math.round(POLICE ? covered(state, POLICE) : 0)}:${quantise(crimePressure(state))}`
+            : this.mode === 'garbage'
+              ? `${Math.round(TRANSIT ? covered(state, TRANSIT) : 0)}:${quantise(garbageLoad(state))}`
+              : this.mode === 'value'
+                ? `${state.mergedR}`
+                : `${state.mergedR}:${state.mergedC}:${state.mergedI}`;
     const stamp = `${this.mode}:${counts}:${extra}`;
     if (stamp === this.stamp) return false;
     this.stamp = stamp;
     this.layout.ensure(state);
+    fitToCity(state.districts, ROAD_PAD_Y + PAD_H, this.pads, this.streets);
     this.streets.count = 0;
 
     const residential = this.layout.zoneCells(ZONE.residential);
@@ -696,6 +812,7 @@ export class Zones {
     if (stamp === this.roadStamp) return false;
     this.roadStamp = stamp;
     this.layout.ensure(state);
+    fitToCity(state.districts, ROAD_PAD_Y + PAD_H, this.pads, this.streets);
     this.pads.count = 0;
 
     let n = 0;

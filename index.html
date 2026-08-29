@@ -20,13 +20,22 @@
   <p>every purchase is a building</p>
 </header>
 
-<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z steps the overlay, Shift-Z steps back</p>
+<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z steps the overlay, Shift-Z steps back<br>V goes down to street level</p>
 
 <!-- The overlay picker. Out of the dock and next to the hint on purpose: it is
      a control over the *map* rather than over the city, and it is the one
      control a touch device cannot reach any other way — there is no Z key on a
      phone. -->
 <div class="overlay-pick">
+  <!-- Street level, on the same shelf as the overlay chips and for the same
+       reason: it is a control over the *camera* rather than over the city, and
+       there is no V key on a phone. Its own row above the overlays, because it
+       is a different question — the overlays are a radio group and this is a
+       switch, and putting a switch in a radiogroup lies to a screen reader. -->
+  <div class="camera-pick">
+    <button type="button" class="overlay" id="street-view" aria-pressed="false"
+      title="Drop the camera to street level. V.">Street level</button>
+  </div>
   <div class="overlays" id="overlays" role="radiogroup" aria-label="Map overlay"></div>
   <p class="overlay-note" id="overlay-note"></p>
 </div>
@@ -66,6 +75,10 @@
   <div class="dock-head">
     <span class="dock-cash" id="cash">0</span>
     <span class="dock-rate" id="rate">0</span>
+    <!-- The rank, beside the treasury rather than in a tab: it decides which
+         buttons in the Build tab exist at all, so a player who has to go
+         looking for it is a player who does not know why one is dead. -->
+    <span class="dock-rank" id="rank"></span>
   </div>
 
   <div class="tabs" role="tablist" aria-label="Control panels">
@@ -169,6 +182,13 @@
       <button class="ghost" id="auto" type="button" aria-pressed="false">Auto-develop · off</button>
       <button class="ghost" id="reset" type="button">Clear city</button>
     </div>
+    <!-- Beside "Clear city" and not in it: both take the city away and only one
+         of them gives anything back, so the two have to be told apart at a
+         glance. It carries what it is worth on the button, the way every other
+         purchase in this HUD carries its price. -->
+    <button class="ghost" id="ascend" type="button">
+      <span id="ascend-label">Found again</span><span class="cost" id="ascend-gain"></span>
+    </button>
   </div>
 
   <div class="panel" id="panel-treasury" role="tabpanel" aria-labelledby="tab-treasury" tabindex="0" hidden>
@@ -235,6 +255,12 @@
       <div class="svc"><span class="k">Police</span>
         <span class="built" id="svc-police-built">0/0</span>
         <span class="covers" id="svc-police-covers">0 of 0</span></div>
+      <!-- Directly under the stations, because it is what they are for: police
+           carry no happiness weight any more and this row is where the purchase
+           pays off. Same shape as the Traffic row under the depots. -->
+      <div class="svc"><span class="k">Crime</span>
+        <span class="built" id="crime-rate">0%</span>
+        <span class="covers" id="crime-mood">no effect on mood</span></div>
       <div class="svc"><span class="k">Fire</span>
         <span class="built" id="svc-fire-built">0/0</span>
         <span class="covers" id="svc-fire-covers">0 of 0</span></div>
@@ -264,6 +290,13 @@
       <div class="svc"><span class="k">Traffic</span>
         <span class="built" id="transit-congestion">0%</span>
         <span class="covers" id="transit-congestion-mood">no effect on mood</span></div>
+      <!-- The depot is the municipal yard, so the bin lorries come out of it
+           too — see `garbageCollection`. Fourth thing a depot is for, and it is
+           in this block rather than in Services because this is where the
+           building that answers it lives. -->
+      <div class="svc"><span class="k">Rubbish</span>
+        <span class="built" id="garbage-rate">0%</span>
+        <span class="covers" id="garbage-mood">no effect on mood</span></div>
     </div>
 
     <p class="cap">Education</p>
@@ -364,6 +397,27 @@
         <span class="built" id="port-exports">60</span>
         <span class="covers" id="port-lift">no cargo berths</span></div>
     </div>
+
+    <p class="cap">The city next door</p>
+    <div class="services" id="rival-trade" role="img">
+      <div class="svc"><span class="k">Rival</span>
+        <span class="built" id="rival-strength">0%</span>
+        <span class="covers" id="rival-cost">not settled yet</span></div>
+    </div>
+
+    <p class="cap">Power</p>
+    <div class="steps" id="power-steps" role="radiogroup" aria-label="Power agreement"></div>
+    <div class="svc"><span class="k">Grid</span>
+      <span class="built" id="power-trade-flow">none traded</span>
+      <span class="covers" id="power-trade-worth">no agreement</span></div>
+
+    <p class="cap">Goods agreement</p>
+    <button class="ghost wide" id="goods-trade" type="button" aria-pressed="false">
+      Goods agreement · off
+    </button>
+    <div class="svc"><span class="k">Treaty</span>
+      <span class="built" id="goods-fee">0/s to keep</span>
+      <span class="covers" id="goods-effect">tap +55%, rival −60%</span></div>
   </div>
 
   <div class="panel" id="panel-estates" role="tabpanel" aria-labelledby="tab-estates" tabindex="0" hidden>

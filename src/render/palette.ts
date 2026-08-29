@@ -118,6 +118,12 @@ export const PALETTE = {
   // because distance culling reshuffles which slot holds which car.
   car: 0x39465e,
   headlight: 0xffe6b0,
+  // People. One shared colour for the same reason the cars have one: a walker
+  // is a third of a world unit across, so a per-instance tint would not read
+  // and the distance cull reshuffles which slot holds which walker every frame.
+  // Warmer and lighter than the car body, because the one thing that has to
+  // read at this size is that the pavement is not more traffic.
+  pedestrian: 0x8a6f63,
   // Fire. Brighter than the sodium the city lights itself with, because a
   // burning roof has to be the thing you look at first.
   flame: 0xff7a2e,

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { hash01, mixSeed } from '../core/rng';
-import { SEED } from '../sim/config';
+import { hash01, mixSeed } from '../core/rng.ts';
+import { SEED } from '../sim/config.ts';
 import {
   AIRPORT_DEPTH,
   AIRPORT_LENGTH,
@@ -8,11 +8,11 @@ import {
   ESTATE_SPAN,
   estateCell,
   type EstateCell,
-} from '../sim/estates';
-import type { GameState } from '../sim/state';
-import { WATERS, type Shore } from '../sim/water';
-import { GrowableInstancedMesh } from './growable';
-import { PALETTE } from './palette';
+} from '../sim/estates.ts';
+import type { GameState } from '../sim/state.ts';
+import { WATERS, type Shore } from '../sim/water.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { PALETTE } from './palette.ts';
 
 /**
  * The works beyond the city edge: a yard, a shed and a stack on each parcel.

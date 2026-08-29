@@ -11,6 +11,32 @@ import {
   AIRPORT_VISITORS,
   CARGO_EXPORT_LIFT,
   CITY_HALL_BASE,
+  GOODS_TRADE_ANSWER,
+  GOODS_TRADE_LIFT,
+  GOODS_TRADE_UPKEEP,
+  POWER_EXPORT_CAP,
+  POWER_TRADES,
+  POWER_TRADE_NEUTRAL,
+  RIVAL_COMMERCIAL_DEMAND,
+  RIVAL_INDUSTRIAL_DEMAND,
+  RIVAL_MATCH_DISTRICTS,
+  RIVAL_SETTLE_SECONDS,
+  type PowerTrade,
+  CRIME_CROWDING_FULL,
+  CRIME_FROM_CROWDING,
+  CRIME_FROM_IDLENESS,
+  CRIME_MOOD,
+  GARBAGE_MOOD,
+  GARBAGE_PER_RESIDENT,
+  GARBAGE_PER_SHOP,
+  GARBAGE_PER_WORKS,
+  GARBAGE_CURVE,
+  GARBAGE_SATURATION,
+  LEGACY_YIELD,
+  RANKS,
+  RANK_GATES,
+  type CityRank,
+  type RankGate,
   CONGESTION_DENSITY_EXPONENT,
   CONGESTION_MOOD,
   CONGESTION_SCALE,
@@ -50,7 +76,6 @@ import {
   HAPPINESS_MIN_BUILD,
   HAPPINESS_TAU,
   HIGHWAY_COST,
-  HIGHWAY_MIN_DISTRICTS,
   HOME_BASE,
   INDUSTRIAL_OUTPUT,
   INDUSTRY_BASE,
@@ -734,6 +759,129 @@ export const population = (s: GameState): number => {
   return people;
 };
 
+// --------------------------------------------------------------------- rank
+
+/**
+ * What the city is, on the ladder in `RANKS`.
+ *
+ * Derived, never stored, and that is not an implementation detail: a stored
+ * rank would be one more thing an offline catch-up could get out of step with a
+ * watched session, and one more field a save from an older balance pass would
+ * carry a stale answer in. As a function of counts, a returning player opens on
+ * whatever rank their city now implies and the two paths agree by construction.
+ *
+ * The walk stops at the first rung the city fails, which is what makes the rank
+ * the *lower* of what the two thresholds say — both columns of `RANKS` climb,
+ * so a city that fails one rung fails every rung above it.
+ *
+ * `population` rather than `residents`: the housing stock is what the city has
+ * built, and a city that has just emptied out under a punitive tax has not been
+ * demoted. A rank read through the occupancy integrator would flicker.
+ */
+export const cityRank = (s: GameState): CityRank => {
+  const people = population(s);
+  let index = 0;
+  for (let i = 1; i < RANKS.length; i++) {
+    const rank = RANKS[i] as CityRank;
+    if (s.districts < rank.districts || people < rank.population) break;
+    index = i;
+  }
+  return RANKS[index] as CityRank;
+};
+
+/** The next rung, or null at the top. What the treasury strip counts toward. */
+export const nextRank = (s: GameState): CityRank | null =>
+  (RANKS[cityRank(s).index + 1] as CityRank | undefined) ?? null;
+
+/** Which rung a gated thing needs. A lookup, named so a caller reads as English. */
+export const rankAt = (gate: RankGate): number => RANK_GATES[gate];
+
+/** Whether the city has climbed far enough for one of the gated things. */
+export const rankAllows = (s: GameState, gate: RankGate): boolean =>
+  cityRank(s).index >= rankAt(gate);
+
+/**
+ * Why a rank gate is holding a button shut, phrased for the HUD.
+ *
+ * The existing voice, which is "Needs 14 districts" — so this is "Needs a town"
+ * and not "Rank 1 required". Null when the city has climbed far enough, so it
+ * composes with the other blockers by falling through.
+ */
+export const rankBlocker = (s: GameState, gate: RankGate): string | null => {
+  if (rankAllows(s, gate)) return null;
+  const needed = RANKS[rankAt(gate)] as CityRank | undefined;
+  return needed ? `Needs a ${needed.name.toLowerCase()}` : null;
+};
+
+// ---------------------------------------------------------------- ascension
+
+/**
+ * What the cities before this one are worth to it, as a multiplier on income.
+ *
+ * Sublinear on purpose — see LEGACY_YIELD, which carries the sizing and the
+ * argument for violating the "achievements grant nothing" rule.
+ *
+ * Applied beside `incomeMultiplier` rather than inside `bonuses`, and the
+ * distinction is `ledgerScale`: `bonuses` is shared with the upkeep model,
+ * where it keeps the wage bill a constant share of a ledger that climbs the
+ * level ladder twice. A legacy is not a property of the city's buildings, it is
+ * a property of the player's history — the same kind of thing the tax rate and
+ * the mood are, and those are deliberately outside the upkeep scaling too. The
+ * consequence is stated rather than hidden: a legacy city runs a smaller upkeep
+ * share than a first one, exactly as a taught city does. See `workforceSkill`,
+ * which makes the same trade for the same reason.
+ *
+ * Takes the one field it reads rather than the whole state, which is the
+ * honest signature: it says in the type that a legacy is not a property of the
+ * city, and it lets a caller price a legacy the city does not have yet — which
+ * is exactly what the HUD's button and the calibrator's table both do.
+ */
+export const legacyMultiplier = (s: Pick<GameState, 'legacy'>): number =>
+  1 + LEGACY_YIELD * Math.sqrt(Math.max(0, s.legacy));
+
+/**
+ * What ascending now would leave behind, in districts.
+ *
+ * The districts the city currently holds, and nothing else. Not `earned`, not
+ * the population, not the elapsed time: those all grow with how long a run is
+ * left going, and a carryover that did would reward patience rather than
+ * progress. See `GameState.legacy`.
+ */
+export const legacyGain = (s: GameState): number => s.districts;
+
+/**
+ * Whether the city may be given up and founded again.
+ *
+ * On the rank ladder like everything else that unlocks, at the rung the
+ * calibrator says a played run reaches in about two hours — see RANK_GATES.
+ * Early enough that a player who wants the loop can have it, late enough that
+ * "found it again" is a decision rather than a reflex.
+ */
+export const canAscend = (s: GameState): boolean => rankAllows(s, 'ascend');
+
+/** Why the ascend button is off, phrased for the HUD. */
+export const ascendBlocker = (s: GameState): string | null => rankBlocker(s, 'ascend');
+
+/**
+ * How far the city is through the rung it is climbing, in [0, 1].
+ *
+ * The lesser of the two shares, because the rank is the lesser of the two
+ * thresholds — a city with the people and not the land is as far from the next
+ * rung as its land says. Null at the top of the ladder, where there is nothing
+ * to be a share of.
+ */
+export const rankProgress = (s: GameState): number | null => {
+  const next = nextRank(s);
+  if (!next) return null;
+  const from = RANKS[next.index - 1] as CityRank;
+  const share = (now: number, was: number, needs: number): number =>
+    needs <= was ? 1 : Math.max(0, Math.min(1, (now - was) / (needs - was)));
+  return Math.min(
+    share(s.districts, from.districts, next.districts),
+    share(population(s), from.population, next.population),
+  );
+};
+
 // ------------------------------------------------------------------ services
 
 export type ServiceKey = Service['key'];
@@ -962,6 +1110,189 @@ export const congestionWithDepot = (s: GameState): number => {
  */
 export const congestionMood = (s: GameState): number => -CONGESTION_MOOD * congestion(s);
 
+// --------------------------------------------------------------------- crime
+
+/** The police service, or undefined if the table is ever built without one. */
+export const POLICE = SERVICES.find((service) => service.key === 'police');
+
+/**
+ * How crowded the city's housing is, in [0, 1].
+ *
+ * Residents per housing plot against CRIME_CROWDING_FULL, which is the middle
+ * rung of the ladder. Measured across the five rungs of a built-out district:
+ * 0.05, 0.21, 0.92, 1.00, 1.00 — so crowding is nothing in a village of
+ * detached houses, is noticeable in a town of terraces and is the whole of what
+ * it can be once towers go up. That is the ramp the term wants: what is being
+ * measured is how many people share a street, and the two rungs above towers
+ * are about height rather than about that.
+ *
+ * Residents rather than `population`, unlike a rank: crowding is about the
+ * people who are actually there, and a half-empty tower is a half-crowded
+ * street. It is the one place in this file where the occupancy integrator
+ * *should* feed a reading.
+ */
+export const crimeCrowding = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 0;
+  return Math.min(1, residents(s) / plots / CRIME_CROWDING_FULL);
+};
+
+/**
+ * Share of the city's workforce with nowhere to go, in [0, 1].
+ *
+ * Against `demandScale` rather than against the workforce, and that is the one
+ * thing this could not be got wrong: this game is *structurally* worker-rich —
+ * jobs are per plot and workers are per resident, so a built-out level-4
+ * district has 14,573 workers against 2,646 jobs and `1 - jobs/workers` reads
+ * 96% at every city size. It would have been a level term wearing an
+ * unemployment label. `demandScale` is the imbalance the whole demand model is
+ * normalised by — DEMAND_SCALE times `cityScale` — so this is the same reading
+ * `demandTargets` takes for housing, with the sign the other way up.
+ *
+ * `workers` rather than `reachableWorkers`, and the difference is worth
+ * stating: a bus route delivers a worker to a job that exists, and it does not
+ * create one. Measuring idleness against the reachable force would have made
+ * opening a depot *raise* the reported unemployment, which is exactly backwards
+ * as a statement about what a depot is for.
+ *
+ * Zero for a city with nobody in it, so a fresh save is not idle — it is empty.
+ */
+export const unemployment = (s: GameState): number =>
+  Math.max(0, Math.min(1, (workers(s) - jobs(s)) / demandScale(s)));
+
+/**
+ * How much crime the city would have with no police at all, in [0, 1].
+ *
+ * The part police do not answer, and the whole of what makes this a quantity
+ * rather than an abstraction — see CRIME_FROM_CROWDING and CRIME_FROM_IDLENESS,
+ * which sum to 1 so a maximally crowded and wholly idle city reads exactly 1.
+ */
+export const crimePressure = (s: GameState): number =>
+  Math.min(
+    1,
+    CRIME_FROM_CROWDING * crimeCrowding(s) + CRIME_FROM_IDLENESS * unemployment(s),
+  );
+
+/**
+ * How much crime the city actually has, in [0, 1].
+ *
+ * Pressure times the share of the housing the police do *not* reach, and the
+ * multiplication is the load-bearing part in three directions at once:
+ *
+ *   - it is not `1 - policeCoverage`, which is the abstraction this feature
+ *     exists to remove. A quiet, employed village with no police station has
+ *     almost no crime, and a crowded idle city with the same coverage has a
+ *     great deal;
+ *   - it is answerable. Full police coverage takes it to exactly zero whatever
+ *     the pressure, which is what keeps the happiness ceiling reachable — see
+ *     CRIME_MOOD, and `test/services.test.ts` -> "the happiness ceiling";
+ *   - it has no geometry, and does not pretend to. `coverage` is a plot count
+ *     over the housing land, with nothing anywhere deciding *which* plots — the
+ *     rule `zones.ts` states about the coverage overlay — so this is a share of
+ *     the city rather than a map of it.
+ *
+ * Not scaled by `shortfallShare`, exactly as congestion is not, and the reason
+ * is the same one congestion gives: the grace is about a *service* a city is
+ * too small to have needed yet, and a city is never too small to have its own
+ * crime. It was tried the other way and measured out as unnecessary as well as
+ * inconsistent — `unemployment` is normalised by `demandScale`, so a
+ * one-house city reads 0.7% idle rather than the "wholly idle" a naive
+ * jobs-over-workers ratio would have given it, and its pressure comes out at
+ * 0.027. There was nothing to excuse.
+ */
+export const crime = (s: GameState): number => {
+  if (!POLICE) return 0;
+  return Math.max(0, crimePressure(s) * (1 - coverage(s, POLICE)));
+};
+
+/** What crime costs the happiness target, in points. Never positive. */
+export const crimeMood = (s: GameState): number => -CRIME_MOOD * crime(s);
+
+// ------------------------------------------------------------------- garbage
+
+/**
+ * What the city puts out each second, in bags.
+ *
+ * Residents, trading premises and working industry — the three the brief names
+ * and the three `income` already reads, so the rubbish a city makes and the
+ * money it makes are read off the same numbers. `effectiveOf` and `activeOf`
+ * rather than the raw counts, which is what makes a boarded-up shop stop
+ * putting bins out.
+ */
+export const garbageRate = (s: GameState): number =>
+  residents(s) * GARBAGE_PER_RESIDENT +
+  effectiveOf(s, 'shop') * GARBAGE_PER_SHOP +
+  activeOf(s, 'industry') * GARBAGE_PER_WORKS;
+
+/**
+ * How much rubbish there is to shift, per housing plot, in [0, 1].
+ *
+ * Per housing plot for the reason every coverage in this file is: it is the one
+ * denominator that is level-invariant, merge-invariant and occupancy-invariant,
+ * so a city that promotes every building does not suddenly read as cleaner.
+ * Read on a square root against GARBAGE_SATURATION — see that constant for the
+ * curve and the measured ramp.
+ */
+export const garbageLoad = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 0;
+  const per = garbageRate(s) / plots;
+  return Math.min(1, (per / GARBAGE_SATURATION) ** GARBAGE_CURVE);
+};
+
+/**
+ * Share of the city's rubbish somebody comes for, in [0, 1].
+ *
+ * The transit depot, and it is the depot because the depot is the municipal
+ * yard: it is where the city keeps the vehicles that go out on a round, and a
+ * council that runs its buses out of one runs its bin lorries out of it too.
+ * That gives the depot a second reason to exist and costs the balance nothing,
+ * because TRANSIT carries `weight: 0` — the building was already the least
+ * motivated of the five and this is the first happiness argument it has.
+ *
+ * A list of one rather than a single read, and that is the wiring the brief
+ * asks for: a recycling centre is blocked on land — there is no sixth
+ * CIVIC_SERVICES entry to be had, and `siteCapacity` divides by that list's
+ * length — so when the land question is answered, a second collector joins this
+ * sum and nothing else in the model moves.
+ *
+ * Plots-covered rather than a radius, and that is the trap avoided rather than
+ * a shortcut taken. `covered(s, service)` is a plot *count*; nothing anywhere
+ * decides which plots it is, so a circle drawn round a depot would put a number
+ * on screen the services panel does not have. See the comment on the coverage
+ * overlay in `zones.ts`, which states the same rule from the other side.
+ */
+export const GARBAGE_COLLECTORS: readonly ServiceKey[] = ['transit'];
+
+export const garbageCollection = (s: GameState): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 1;
+  let reached = 0;
+  for (const key of GARBAGE_COLLECTORS) {
+    const service = SERVICES.find((entry) => entry.key === key);
+    if (service) reached += covered(s, service);
+  }
+  return Math.min(1, reached / plots);
+};
+
+/**
+ * How much rubbish is lying about, in [0, 1].
+ *
+ * Same shape as `crime`, and for the same reasons: the load has sources, the
+ * collection answers all of it, neither half pretends to a geometry the game
+ * does not have, and neither is excused by `shortfallShare` — a village makes
+ * its own rubbish whether or not it is big enough to have needed a depot.
+ *
+ * `Math.max(0, …)` on both so a covered city reads +0 rather than -0. A sign
+ * on a zero is invisible everywhere except in a test that asserts equality,
+ * and that is exactly where it would be found.
+ */
+export const garbage = (s: GameState): number =>
+  Math.max(0, garbageLoad(s) * (1 - garbageCollection(s)));
+
+/** What uncollected rubbish costs the happiness target, in points. */
+export const garbageMood = (s: GameState): number => -GARBAGE_MOOD * garbage(s);
+
 /**
  * Share of the city's housing land a service reaches, capped at all of it.
  *
@@ -1189,12 +1520,18 @@ export const terminalReadings = (s: GameState): readonly TerminalReading[] =>
 /**
  * Whether the city has reached the size at which it may build outside itself.
  *
- * A count rather than a share, because there is no land to measure — see
- * HIGHWAY_MIN_DISTRICTS. Separate from `canBuildHighway` so the panel can say
- * "not yet" and "not enough cash" as two different things.
+ * A rank now, and it *replaces* HIGHWAY_MIN_DISTRICTS rather than stacking on
+ * it: two gates on one button would be two numbers saying one thing. The
+ * constant stays because it is what HIGHWAY_COST and AIRPORT_BASE are priced
+ * from, and the rank that replaces it asks for the same 14 districts — see
+ * RANKS, whose Conurbation rung is set to exactly that so the timing the
+ * highway was calibrated at is the timing it keeps. What the rank adds is the
+ * population column, which at 14 districts is long since cleared.
+ *
+ * Separate from `canBuildHighway` so the panel can say "not yet" and "not
+ * enough cash" as two different things.
  */
-export const highwayAllowed = (s: GameState): boolean =>
-  s.districts >= HIGHWAY_MIN_DISTRICTS;
+export const highwayAllowed = (s: GameState): boolean => rankAllows(s, 'highway');
 
 export const highwayCost = (): number => HIGHWAY_COST;
 
@@ -1265,7 +1602,7 @@ export const estateJobs = (s: GameState): number => estateActive(s) * JOBS_PER_E
 
 export function highwayBlocker(s: GameState): string | null {
   if (s.highway) return 'Built';
-  return highwayAllowed(s) ? null : `Needs ${HIGHWAY_MIN_DISTRICTS} districts`;
+  return rankBlocker(s, 'highway');
 }
 
 /**
@@ -1310,7 +1647,7 @@ export function estateBlocker(s: GameState): string | null {
  * the two have in common and nothing more.
  */
 export interface HappinessTerm {
-  readonly key: ServiceKey | 'recreation' | 'congestion';
+  readonly key: ServiceKey | 'recreation' | 'congestion' | 'crime' | 'garbage';
   readonly coverLabel: string;
   readonly weight: number;
   /**
@@ -1356,10 +1693,16 @@ export const shortfallShare = (s: GameState): number =>
  * Every term happiness is made of, services first, then recreation, then the
  * one modifier the panel can name.
  *
- * The first four are the weights, and they sum to exactly 1. Congestion is
- * `modifier: true` and is not one of them — it is here so the panel has a row
- * for it and `bindingTerm` can pick it, which is the whole of what makes a depot
- * a mood purchase. See `HappinessTerm.modifier`.
+ * The first three are the weights, and they sum to exactly 1. Congestion,
+ * crime and rubbish are `modifier: true` and are not among them — they are here
+ * so the panel has a row for each and `bindingTerm` can pick one, which is the
+ * whole of what makes a depot and a police station mood purchases. See
+ * `HappinessTerm.modifier`.
+ *
+ * Police is no longer in the weighted half and is in the modifier half twice
+ * over: it answers crime, and the depot beside it answers both congestion and
+ * rubbish. That is the shape the re-calibration was for — a service is worth
+ * what the problem it solves costs, rather than worth a number in a table.
  */
 export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
   ...HAPPINESS_SERVICES.map((service) => ({
@@ -1381,6 +1724,20 @@ export const happinessTerms = (s: GameState): readonly HappinessTerm[] => [
     coverLabel: 'Roads clear',
     weight: CONGESTION_MOOD,
     coverage: 1 - congestion(s),
+    modifier: true,
+  },
+  {
+    key: 'crime' as const,
+    coverLabel: 'Streets safe',
+    weight: CRIME_MOOD,
+    coverage: 1 - crime(s),
+    modifier: true,
+  },
+  {
+    key: 'garbage' as const,
+    coverLabel: 'Bins emptied',
+    weight: GARBAGE_MOOD,
+    coverage: 1 - garbage(s),
     modifier: true,
   },
 ];
@@ -1420,11 +1777,21 @@ export const happinessTarget = (s: GameState): number => {
   // service a city is too small to have needed yet, and a city too small to
   // have needed a hospital has too few residents to jam its own streets, so the
   // term is already small there on its own.
+  //
+  // Crime and rubbish are the fifth and sixth, and the first two that replace a
+  // weight rather than sitting on top of one. Police used to carry 0.26 in the
+  // weighted sum; it carries nothing now and `crimeMood` carries it instead —
+  // see the police row in SERVICES for the arithmetic and for why charging both
+  // was rejected. Neither is scaled by `shortfallShare`, exactly as congestion
+  // is not: the grace is about a service a city has not needed yet, and a city
+  // is never too small to have its own crime or its own bins.
   const policy =
     taxStep(s).mood +
     (faresWaived(s) ? FREE_TRANSPORT_MOOD : 0) +
     LANDMARK_MOOD * landmarkCoverage(s) +
-    congestionMood(s);
+    congestionMood(s) +
+    crimeMood(s) +
+    garbageMood(s);
   return Math.max(0, Math.min(1, covered + policy) - FIRE_UNHAPPINESS * s.fires.length);
 };
 
@@ -1495,15 +1862,39 @@ export const happinessFix = (s: GameState): HappinessFix | null => {
   // carries `weight: 0`, so it is not in HAPPINESS_SERVICES and the loop above
   // never sees it — but a jammed city has a purchase that fixes it, and a panel
   // that could not name that purchase would be naming a problem with no answer.
+  //
+  // It answers rubbish as well now, and the two lifts are summed rather than
+  // listed twice: one button cannot be two rows, and what the player wants to
+  // know is what pressing it is worth. See `garbageCollection` for why the
+  // depot is the yard the bin lorries come out of.
   if (TRANSIT && serviceCount(s, 'transit') < serviceAllowed(s, TRANSIT)) {
     const cost = serviceCost(s, TRANSIT);
+    const cleaner = { ...s, depots: s.depots + 1, depotStaff: 1 };
     options.push({
       label: TRANSIT.buildLabel,
       cost,
       affordable: s.cash >= cost,
       // Not scaled by `share`: congestion is a modifier and is not excused for
       // a small city — see `happinessTarget`.
-      lift: CONGESTION_MOOD * (congestion(s) - congestionWithDepot(s)),
+      lift:
+        CONGESTION_MOOD * (congestion(s) - congestionWithDepot(s)) +
+        GARBAGE_MOOD * (garbage(s) - garbage(cleaner)),
+    });
+  }
+
+  // And the police station, for exactly the reason the depot is here: police
+  // carry `weight: 0` since crime became a quantity, so the loop above never
+  // sees them either — and a city being robbed has a purchase that stops it.
+  if (POLICE && serviceCount(s, 'police') < serviceAllowed(s, POLICE)) {
+    const cost = serviceCost(s, POLICE);
+    // One more station at full staffing, which is the same marginal reading
+    // every other option in this list uses.
+    const safer = { ...s, police: s.police + 1, policeStaff: 1 };
+    options.push({
+      label: POLICE.buildLabel,
+      cost,
+      affordable: s.cash >= cost,
+      lift: CRIME_MOOD * (crime(s) - crime(safer)),
     });
   }
 
@@ -1709,6 +2100,135 @@ export const alight = (s: GameState, kind: ZoneKind): number => {
 export const isBurning = (s: GameState, kind: ZoneKind, index: number): boolean =>
   s.fires.some((fire) => fire.kind === kind && fire.index === index);
 
+// ---------------------------------------------------------- the rival city
+
+/**
+ * Whether the city's goods agreement is actually in force.
+ *
+ * Read instead of `s.goodsTrade` everywhere it matters, exactly as
+ * `faresWaived` is read instead of `s.freeTransport`: the stored flag is the
+ * player's *choice* and this is whether the city can act on it. Keeping the two
+ * apart is what lets a setting survive a save that predates the city hall.
+ */
+export const goodsTraded = (s: GameState): boolean => hasPolicy(s) && s.goodsTrade;
+
+/**
+ * How established the city next door is, in [0, 1].
+ *
+ * Derived and never stored, which is the whole of why it survives an offline
+ * catch-up: it is a function of `s.elapsed` and `s.districts`, both of which
+ * only ever rise, so a twelve-hour absence lands on exactly the rival a watched
+ * session would have. A stored rival scalar would be a fourth exception to "the
+ * save is counts" — and unlike the three that exist, it would be bounded by a
+ * clock rather than by districts, a static table or a fixed ring, which is the
+ * one thing every one of them is bounded by something *other* than.
+ *
+ * Two factors, and between them they are the shape that makes a rival a feature
+ * rather than a tax:
+ *
+ *   - it *arrives*. `age / (1 + age)` against RIVAL_SETTLE_SECONDS saturates
+ *     rather than clamping, so there is no moment at which the rival suddenly
+ *     is one;
+ *   - it is *outgrown*. A city that has annexed its way to
+ *     RIVAL_MATCH_DISTRICTS has made the place next door a suburb, and the term
+ *     goes to zero — so the answer the player was always going to reach for is
+ *     the answer.
+ *
+ * The treaty is the faster answer and is the one that makes this pushable back
+ * against inside an hour. See GOODS_TRADE_ANSWER.
+ */
+export const rivalStrength = (s: GameState): number => {
+  const age = Math.max(0, s.elapsed) / RIVAL_SETTLE_SECONDS;
+  const arrived = age / (1 + age);
+  const outgrown = Math.min(1, Math.max(0, s.districts - 1) / Math.max(1, RIVAL_MATCH_DISTRICTS - 1));
+  const answered = goodsTraded(s) ? GOODS_TRADE_ANSWER : 0;
+  return Math.max(0, arrived * (1 - outgrown) * (1 - answered));
+};
+
+/**
+ * What the rival takes off one zone's demand target, signed. Never positive.
+ *
+ * Additive, in the same bracket `demandLift` adds into, because that is where
+ * it *is*: the two `rival` rows are DEMAND_TERMS entries like every other term,
+ * so `demandTargets` carries it without a line of its own and the HUD's
+ * breakdown names it without a case of its own. This is the readable accessor
+ * for a caller that wants the one term rather than the sum — the trade panel,
+ * which has to say what the place next door is costing before a player will
+ * spend anything on answering it.
+ */
+export const rivalDemand = (s: GameState, kind: ZoneKind): number => {
+  if (kind === 'home') return 0;
+  const weight = kind === 'shop' ? RIVAL_COMMERCIAL_DEMAND : RIVAL_INDUSTRIAL_DEMAND;
+  return -weight * rivalStrength(s);
+};
+
+// --------------------------------------------------------------------- trade
+
+/** The power arrangement the city is *on*, which is not always the one it stored. */
+export const powerTradeStep = (s: GameState): PowerTrade => {
+  const wanted = hasPolicy(s) ? s.powerTrade : POWER_TRADE_NEUTRAL;
+  const at = Math.max(0, Math.min(POWER_TRADES.length - 1, Math.floor(wanted)));
+  return POWER_TRADES[at] as PowerTrade;
+};
+
+/**
+ * Power the city buys in, per second.
+ *
+ * A share of what it draws rather than a flat block, and that is what keeps the
+ * agreement useful at every size: POWER_PER_PLANT is multiplied by `cityScale`,
+ * so a fixed import would be the whole grid at one district and a rounding
+ * error at forty-nine.
+ */
+export const powerImported = (s: GameState): number => {
+  const share = powerTradeStep(s).imports;
+  return share <= 0 ? 0 : share * powerDemand(s);
+};
+
+/**
+ * Power the city has spare and can find a buyer for, per second.
+ *
+ * Imports are excluded from the surplus on purpose: a city that bought a unit
+ * and sold it back would be a money printer, and both halves of the switch
+ * cannot be on at once anyway — POWER_TRADES is one index.
+ */
+export const powerSurplus = (s: GameState): number => {
+  const draw = powerDemand(s);
+  // Capped at a share of the city's own draw — see POWER_EXPORT_CAP, which is
+  // what stops an over-plotted small city selling eleven times what it uses.
+  return Math.max(0, Math.min(ownPowerSupply(s) - draw, POWER_EXPORT_CAP * draw));
+};
+
+/**
+ * What selling the surplus earns, per second, before tax.
+ *
+ * Short-circuited on the step rather than multiplied by zero, and both of these
+ * are: `powerSurplus` and `powerImported` each walk the three cohorts through
+ * `powerDemand`, and `income` and `upkeep` run ten times a second on a path
+ * that is already the hottest in the game. A city with no treaty pays nothing
+ * for having the mechanism.
+ */
+export const powerTradeIncome = (s: GameState): number => {
+  const sells = powerTradeStep(s).sells;
+  return sells <= 0 ? 0 : sells * powerSurplus(s);
+};
+
+/** What buying power costs, per second. Joins the wage bill, not the ledger. */
+export const powerTradeCost = (s: GameState): number => {
+  const step = powerTradeStep(s);
+  return step.imports <= 0 || step.price <= 0 ? 0 : step.price * step.imports * powerDemand(s);
+};
+
+/**
+ * What a goods agreement costs to keep, per second.
+ *
+ * A share of the ledger rather than a flat fee, for the reason `civicPayroll`
+ * is: a flat fee is a decision for the first hour and a rounding error after
+ * it. Indexed to the same yardstick the wage bill is, so a treaty is worth the
+ * same fraction of a village's income as of a metropolis's.
+ */
+export const tradeUpkeep = (s: GameState): number =>
+  goodsTraded(s) ? GOODS_TRADE_UPKEEP * ledgerScale(s) * housingPlots(s) : 0;
+
 // -------------------------------------------------------------------- demand
 
 /**
@@ -1726,7 +2246,14 @@ export const exportMarket = (s: GameState): number =>
   // cargo terminal: a city with both has one tap raised twice, not two taps for
   // the same goods — and a multiplicative form would have made the airport worth
   // most to the city that least needs it. See AIRPORT_EXPORT_LIFT.
-  (1 + CARGO_EXPORT_LIFT * s.cargoTerminals + (s.airport ? AIRPORT_EXPORT_LIFT : 0));
+  //
+  // The goods agreement is the third, and it adds in the same bracket for the
+  // same reason: it is a treaty about the goods the berths and the runway carry
+  // rather than a fourth kind of goods. See GOODS_TRADE_LIFT.
+  (1 +
+    CARGO_EXPORT_LIFT * s.cargoTerminals +
+    (s.airport ? AIRPORT_EXPORT_LIFT : 0) +
+    (goodsTraded(s) ? GOODS_TRADE_LIFT : 0));
 
 export const jobs = (s: GameState): number =>
   openOf(s, 'shop', SHOP_JOBS) +
@@ -2034,8 +2561,8 @@ export interface DemandTargets {
   readonly i: number;
 }
 
-/** The police and hospital entries, looked up once. See TRANSIT for the pattern. */
-const POLICE = SERVICES.find((service) => service.key === 'police');
+/** The hospital entry, looked up once. See TRANSIT for the pattern; POLICE is
+ *  already exported above, because `crime` reads it. */
 const HOSPITAL = SERVICES.find((service) => service.key === 'hospital');
 
 /**
@@ -2053,6 +2580,7 @@ const demandReading = (s: GameState, key: DemandTerm['key']): number =>
   : key === 'transit' ? transitCoverage(s)
   : key === 'landmark' ? landmarkCoverage(s)
   : key === 'education' ? educationCoverage(s)
+  : key === 'rival' ? rivalStrength(s)
   : taxPressure(s);
 
 /** What one term contributes to its zone's target, signed. */
@@ -2060,7 +2588,8 @@ const demandTermValue = (s: GameState, term: DemandTerm): number =>
   term.weight * (term.centred ? demandReading(s, term.key) - 0.5 : demandReading(s, term.key));
 
 /**
- * What the city's services add to one zone's demand target.
+ * What the table adds to one zone's demand target: services, the tax rate, and
+ * the city next door.
  *
  * Zero — every term, all three zones — while the city has no housing, and that
  * gate is the whole of what keeps the opening where it was. `coverage` reads 1
@@ -2143,6 +2672,9 @@ export const demandTargets = (s: GameState): DemandTargets => {
       s.happiness,
       clampDemand((jobs(s) - reachableWorkers(s)) / scale + demandLift(s, 'home')),
     ),
+    // The rival arrives through `demandLift` with everything else — it is two
+    // DEMAND_TERMS rows, not a special case. Housing has no rival row: a rival
+    // competes for trade, and people live where they work.
     c: clampDemand(
       (residents(s) * SPEND_PER_RESIDENT +
         // Visitors shop, and that is the whole of how tourism reaches the
@@ -2428,11 +2960,23 @@ export const income = (s: GameState): number => {
       // Tourism, outside the bracket for the same reason and carrying its own
       // happiness term — see `visitors`, where the mood is a multiplier rather
       // than the floor `incomeMultiplier` applies to rent.
-      cruiseIncome(s)) *
+      cruiseIncome(s) +
+      // And what the grid sells. Outside the bracket for the same reason fares
+      // are: a unit of surplus power is not rent, so it does not scale with the
+      // shop multiplier or the district bonus. It *is* taxed, like everything
+      // else the city takes in. Zero unless the export agreement is on and the
+      // city's own plants are making more than it draws — see `powerSurplus`.
+      powerTradeIncome(s)) *
     // The tax rate multiplies the whole ledger, which is why the happiness it
     // costs is worth more than it looks: happiness multiplies this same line
     // through `incomeMultiplier`, so the two terms compound against each other.
-    taxStep(s).income
+    taxStep(s).income *
+    // And what the cities before this one left behind. Out here with the tax
+    // rate rather than inside `bonuses`, because it is a property of the
+    // player's history rather than of this city's buildings — see
+    // `legacyMultiplier`. Exactly 1 on a first founding, so every constant in
+    // this file keeps the meaning it was measured with.
+    legacyMultiplier(s)
   );
 };
 
@@ -2492,8 +3036,25 @@ export const powerDemand = (s: GameState): number =>
  * grid yet — the same ninety-second ramp every civic building has, and the same
  * thing an unpaid wage bill takes back.
  */
-export const powerSupply = (s: GameState): number =>
+/**
+ * What the city's own grid makes, per second: the base and its plants.
+ *
+ * Split out from `powerSupply` because the export agreement sells the *surplus*
+ * and a city that bought a unit and sold it back would be a money printer. See
+ * `powerSurplus`, which is the only caller that wants this rather than the
+ * total.
+ */
+export const ownPowerSupply = (s: GameState): number =>
   POWER_BASE + s.plants * s.plantStaff * POWER_PER_PLANT * cityScale(s);
+
+/**
+ * Everything on the grid, per second: the city's own plants and whatever the
+ * import agreement is buying in.
+ *
+ * The one `powerRatio` reads, so an imported unit browns the city out exactly
+ * as a generated one does not — which is the whole of what the agreement buys.
+ */
+export const powerSupply = (s: GameState): number => ownPowerSupply(s) + powerImported(s);
 
 /**
  * Supply over draw. Above 1 the city has power to spare.
@@ -2508,7 +3069,12 @@ export const powerSupply = (s: GameState): number =>
  */
 export const powerRatio = (s: GameState): number => {
   const draw = powerDemand(s);
-  return draw <= 0 ? 1 : powerSupply(s) / draw;
+  if (draw <= 0) return 1;
+  // The import inlined rather than read through `powerSupply`, because that
+  // would ask `powerDemand` — a walk over three cohorts — for a second time on
+  // a path `Game.step` runs ten times a second.
+  const imports = s.powerTrade === POWER_TRADE_NEUTRAL ? 0 : powerTradeStep(s).imports * draw;
+  return (ownPowerSupply(s) + imports) / draw;
 };
 
 /**
@@ -2565,11 +3131,12 @@ export const faresWaived = (s: GameState): boolean => s.cityHall && s.freeTransp
 export const cityHallCost = (): number => CITY_HALL_BASE;
 
 export const canBuildCityHall = (s: GameState): boolean =>
-  !s.cityHall && s.cash >= cityHallCost();
+  !s.cityHall && rankAllows(s, 'cityHall') && s.cash >= cityHallCost();
 
-/** Why the city hall button is off. Built, or a matter of money. */
+/** Why the city hall button is off. Built, too small a place, or money. */
 export function cityHallBlocker(s: GameState): string | null {
-  return s.cityHall ? 'Built' : null;
+  if (s.cityHall) return 'Built';
+  return rankBlocker(s, 'cityHall');
 }
 
 /**
@@ -2718,8 +3285,28 @@ export const serviceUpkeep = (s: GameState, service: Service): number =>
  * and the two must not be conflated: charging upkeep inside `income` would make
  * every marginal-value readout in the HUD quietly wrong.
  */
-export const upkeep = (s: GameState): number =>
-  UPKEEP_RATE * civicPayroll(s) * ledgerScale(s);
+/**
+ * Everything the city pays out per second: the wage bill and its treaties.
+ *
+ * The two treaty lines are outside `civicPayroll` rather than inside it,
+ * because they are not wages — a payroll is indexed to the ledger by
+ * `ledgerScale` and staffed buildings are what it counts, where an imported
+ * unit of power is bought at a price and a trade mission is a running cost. But
+ * they *are* upkeep in every sense that matters here: they are what a shortfall
+ * fails to pay, they are what `upkeepReserve` holds back, and they are the
+ * difference between the gross and the net the dock shows.
+ */
+export const upkeep = (s: GameState): number => {
+  // One `ledgerScale`, not two: it is a walk over the cohorts and both the wage
+  // bill and the trade mission are indexed to it. `tradeUpkeep` is the same
+  // expression for a caller that wants the line on its own.
+  const scale = ledgerScale(s);
+  return (
+    UPKEEP_RATE * civicPayroll(s) * scale +
+    powerTradeCost(s) +
+    (goodsTraded(s) ? GOODS_TRADE_UPKEEP * scale * housingPlots(s) : 0)
+  );
+};
 
 /** What the treasury actually gains per second. The number the dock shows. */
 export const netIncome = (s: GameState): number => income(s) - upkeep(s);
@@ -2772,6 +3359,7 @@ export const canBuildPark = (s: GameState): boolean =>
  * to run ahead of. The site list is the only bound it has.
  */
 export const canBuildLandmark = (s: GameState, landmark: Landmark): boolean =>
+  rankAllows(s, landmark.key) &&
   landmarkCount(s, landmark.key) < landmarkSiteCapacity(s, landmark.key) &&
   s.cash >= landmarkCost(s, landmark);
 
@@ -2918,6 +3506,11 @@ export function promotionBlocker(
  * worth saying is the thing the player cannot fix with money.
  */
 export function landmarkBlocker(s: GameState, landmark: Landmark): string | null {
+  // The rank first: it is the answer the player can do least about in the next
+  // minute, and the blocker line says the most permanent thing first
+  // everywhere else in this file — see `promotionBlocker`.
+  const rank = rankBlocker(s, landmark.key);
+  if (rank) return rank;
   return landmarkCount(s, landmark.key) >= landmarkSiteCapacity(s, landmark.key)
     ? 'No sites left'
     : null;
@@ -2932,7 +3525,21 @@ export function parkBlocker(s: GameState): string | null {
   return s.parks >= parkCapacity(s) ? 'No courtyards left' : null;
 }
 
-/** Why a civic button is off. Land runs out before the population gate does. */
+/**
+ * Why a civic button is off. Land runs out before the population gate does.
+ *
+ * No rank on any of the six, and the university is the one that was tried and
+ * measured out. It looks like the archetypal late building — 7,200 to found,
+ * one 3x3 site a district, the second education rung — and it is nothing of the
+ * kind. `educationCoverage` is schools *plus* universities over the housing
+ * plots they stand among, and `siteCapacity` gives a five-district city six
+ * schools against 169 housing plots: 90 plots covered, 0.53. LEVEL_EDUCATION's
+ * second rung is 0.60. So the university is what a city needs to reach level 2
+ * housing at all, which arrives inside the first hour — and a rank on it is a
+ * deadlock rather than a gate, because the population a rank asks for is the
+ * population level 2 was going to provide. Measured in
+ * tools/ranks.calibrate.mjs, which prints the run that stalls.
+ */
 export function serviceBlocker(s: GameState, service: Service): string | null {
   if (serviceCount(s, service.key) >= siteCapacity(s, service.key)) return 'No sites left';
   if (serviceCount(s, service.key) >= serviceAllowed(s, service)) return 'Not needed yet';

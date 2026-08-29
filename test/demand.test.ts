@@ -237,9 +237,37 @@ describe('the demand signals', () => {
       gap = now;
     }
     play(game, DEMAND_TAU * 8);
+    // Two decimals on the two zones the rival touches, three on the one it does
+    // not, and the difference is the point rather than a slackening: the rival
+    // is the first demand term that moves with the *clock* rather than with the
+    // city's counts, so commercial and industrial targets are still drifting
+    // while the signal chases them. An exponential chasing a moving target
+    // carries a lag proportional to the target's slope, and `rivalStrength`
+    // saturates — so the offset here is 0.0019 and shrinks to nothing on a
+    // settled city, which the case below asserts. See RIVAL_SETTLE_SECONDS.
     expect(game.state.demandR).toBeCloseTo(target.r, 3);
-    expect(game.state.demandC).toBeCloseTo(target.c, 3);
-    expect(game.state.demandI).toBeCloseTo(target.i, 3);
+    expect(game.state.demandC).toBeCloseTo(target.c, 2);
+    expect(game.state.demandI).toBeCloseTo(target.i, 2);
+
+    // And once the rival has stopped arriving, the chase closes completely: the
+    // same city forty hours in, where `rivalStrength`'s slope is a rounding
+    // error and the target is as still as the housing signal's already was.
+    const settled = at({
+      ...built(24, 6, 3, 3),
+      hospitals: 40,
+      police: 40,
+      fire: 40,
+      hospitalStaff: 1,
+      policeStaff: 1,
+      fireStaff: 1,
+      parks: 40,
+      elapsed: 40 * 3_600,
+    });
+    play(settled, 3_000);
+    play(settled, DEMAND_TAU * 8);
+    const there = demandTargets(settled.state);
+    expect(settled.state.demandC).toBeCloseTo(there.c, 3);
+    expect(settled.state.demandI).toBeCloseTo(there.i, 3);
   });
 
   it('never leave [-1, 1], however lopsided the city gets', () => {

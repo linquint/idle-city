@@ -63,12 +63,16 @@ const content = (patch: Partial<GameState> = {}): Partial<GameState> => ({
 
 describe('education is a gate, not a mood', () => {
   it('carries no happiness weight and appears in no happiness term', () => {
-    // The rule this whole design turns on. Happiness was calibrated across four
-    // weights summing to 1; a fifth would re-open that for nothing, because
+    // The rule this whole design turns on. Happiness is calibrated across
+    // weights summing to 1; one more would re-open that for nothing, because
     // what education is *for* is deciding how tall the city may build.
     for (const service of EDUCATION_SERVICES) expect(service.weight).toBe(0);
     expect(EDUCATION_SERVICES.map((s) => s.key)).toEqual(['school', 'university']);
-    expect(HAPPINESS_SERVICES.map((s) => s.key)).toEqual(['hospital', 'police', 'fire']);
+    // Two rather than three since crime: police left the weighted sum, and the
+    // 0.26 it carried was re-normalised across what was left. It is the same
+    // rule this test states, applied to a service that had a weight and stopped
+    // needing one — see the police row in SERVICES.
+    expect(HAPPINESS_SERVICES.map((s) => s.key)).toEqual(['hospital', 'fire']);
 
     const keys = happinessTerms(state(housed(24))).map((term) => term.key);
     expect(keys).not.toContain('school');

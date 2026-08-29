@@ -1326,7 +1326,15 @@ export const EXPORT_PER_DISTRICT = 14;
  */
 export interface DemandTerm {
   /** What the reading is drawn from. Not unique on its own — `zone` completes it. */
-  readonly key: 'police' | 'hospital' | 'recreation' | 'transit' | 'landmark' | 'education' | 'tax';
+  readonly key:
+    | 'police'
+    | 'hospital'
+    | 'recreation'
+    | 'transit'
+    | 'landmark'
+    | 'education'
+    | 'tax'
+    | 'rival';
   readonly zone: 'home' | 'shop' | 'industry';
   /** What the HUD calls it. */
   readonly label: string;
@@ -1345,7 +1353,35 @@ export const DEMAND_TERMS: readonly DemandTerm[] = [
   { key: 'tax',        zone: 'shop',     label: 'Tax rate',         weight: -0.30, centred: false },
   { key: 'education',  zone: 'industry', label: 'Education',        weight:  0.20, centred: true },
   { key: 'tax',        zone: 'industry', label: 'Tax rate',         weight: -0.35, centred: false },
+  /**
+   * The city next door, and it is in this table rather than added to
+   * `demandTargets` on its own for one reason: the table is what the HUD walks.
+   * A rival the player could not see would be indistinguishable from commerce
+   * being mysteriously expensive, and "a rival the player cannot push back on
+   * is a tax" starts with being able to find it.
+   *
+   * Not a service and not centred — it is read from 0 exactly as the tax
+   * pressure is, and like the tax pressure it is the city's own doing rather
+   * than a coverage. Housing has no row: a rival competes for *trade*, and
+   * people live where they work. See `rivalStrength` and RIVAL_SETTLE_SECONDS.
+   */
+  { key: 'rival',      zone: 'shop',     label: 'Rival city',       weight: -0.11, centred: false },
+  { key: 'rival',      zone: 'industry', label: 'Rival city',       weight: -0.15, centred: false },
 ];
+
+/**
+ * The rival's own weights, read back off the table.
+ *
+ * Stated here rather than in the table so a reader of `rivalDemand` has a name
+ * to look up, and derived from the table rather than typed twice so the two can
+ * never disagree — the same trick `TAX_NEUTRAL` plays on TAX_STEPS.
+ */
+export const RIVAL_COMMERCIAL_DEMAND = -(
+  DEMAND_TERMS.find((t) => t.key === 'rival' && t.zone === 'shop')?.weight ?? 0
+);
+export const RIVAL_INDUSTRIAL_DEMAND = -(
+  DEMAND_TERMS.find((t) => t.key === 'rival' && t.zone === 'industry')?.weight ?? 0
+);
 
 /**
  * The most any one term may move a signal, and the most the whole table may.
@@ -1614,9 +1650,29 @@ export interface Service {
  * site interleave cannot quietly reopen the ceiling.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 20, base: 130,    growth: 1.35, weight: 0.34, span: 2 },
-  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 26, base: 210,    growth: 1.35, weight: 0.26, span: 2 },
-  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 31, base: 320,    growth: 1.35, weight: 0.22, span: 2 },
+  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 20, base: 130,    growth: 1.35, weight: 0.46, span: 2 },
+  /**
+   * Police carry no happiness weight any more, and that is the whole of the
+   * crime re-calibration rather than a side effect of it.
+   *
+   * Crime used to be an abstraction: police coverage fed the mood directly, so
+   * "how safe is the city" was "how many police stations did you buy" and
+   * nothing else. `crime` makes it a quantity with sources — crowding and
+   * unemployment — that police *answer* rather than define. The two readings
+   * cannot both be charged for: the option of leaving this at 0.26 and adding
+   * crime as a modifier on top was measured and rejected, because it charges
+   * the same purchase twice and a city with no police pays for the shortfall
+   * and for the crime it causes.
+   *
+   * So the 0.26 moved. The other three were re-normalised to keep the sum at
+   * exactly 1 — 0.34/0.22/0.18 over 0.74 is 0.4595/0.2973/0.2432, and the
+   * table rounds them to 0.46/0.30/0.24, which sums to 1.00 exactly and is
+   * within half a point of the exact ratio everywhere. See CRIME_MOOD, which
+   * is 0.26: what a maximally pressured city with no police loses is exactly
+   * what this weight used to take off it.
+   */
+  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 26, base: 210,    growth: 1.35, weight: 0,    span: 2 },
+  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 31, base: 320,    growth: 1.35, weight: 0.30, span: 2 },
   /**
    * Schools take the fourth slot in the 2x2 interleave, and 15 is the only
    * integer that keeps LEVEL_EDUCATION's design intact at both ends of the map.
@@ -2283,15 +2339,19 @@ export const LANDMARK_MOOD = 0.12;
 export const PLOTS_PER_PARK = 6;
 
 /**
- * Recreation's share of happiness. With the three services above it sums to 1.
+ * Recreation's share of happiness. With the two services above it sums to 1.
  *
- * The smallest of the four, deliberately. A park is the cheapest of the
+ * The smallest of the three, deliberately. A park is the cheapest of the
  * amenities and its land is the interior of a block that nothing else can use,
  * so it should not be worth as much as a hospital — but a city that never
- * builds one is capped at 0.82, which is a visible ceiling rather than a
+ * builds one is capped at 0.76, which is a visible ceiling rather than a
  * punishment, and still miles clear of HAPPINESS_MIN_BUILD.
+ *
+ * Three rather than four since crime: police left the weighted sum and the
+ * 0.26 it carried was re-normalised across what was left — see the police row
+ * in SERVICES, which carries the arithmetic.
  */
-export const RECREATION_WEIGHT = 0.18;
+export const RECREATION_WEIGHT = 0.24;
 
 /**
  * Parks earn nothing and compound gently.
@@ -2848,6 +2908,434 @@ export const HIGHWAY_COST = ANNEX_BASE * ANNEX_GROWTH ** (HIGHWAY_MIN_DISTRICTS 
  * only curve that is still steep where the airport unlocks is the land's.
  */
 export const AIRPORT_BASE = ANNEX_BASE * ANNEX_GROWTH ** HIGHWAY_MIN_DISTRICTS;
+
+// ------------------------------------------------------------------- crime
+
+/**
+ * What a fully criminal city costs the mood.
+ *
+ * 0.26, which is exactly the weight police used to carry in SERVICES — see the
+ * police row, which carries the arithmetic. That is what makes this a
+ * *re-calibration* rather than a fifth term: a maximally pressured city with no
+ * police loses precisely what it lost before, and everything else about the
+ * change is that the loss now has a size that varies.
+ *
+ * The three modifiers it sits beside for scale: the punitive tax rate is -0.14,
+ * a fully jammed city is -0.14, and full landmark coverage is +0.12. Crime is
+ * the largest of them, which is right — it is carrying a whole service's worth
+ * of mood on its own.
+ *
+ * The ceiling is safe by construction, which is the property NOTES.md section 9
+ * says a modifier has to have: `crime` is pressure times *uncovered* police, so
+ * a city with its police stations built reads exactly zero however crowded and
+ * however idle it is. See `test/services.test.ts` -> "the happiness ceiling".
+ */
+export const CRIME_MOOD = 0.26;
+
+/**
+ * What crime is made of, before police answer any of it.
+ *
+ * Two sources, and they sum to 1 so a maximally crowded, wholly unemployed city
+ * reads exactly 1 and the constant above means what it says.
+ *
+ *   - **crowding.** People per housing plot, log-compressed — see
+ *     `crimeCrowding`. LEVEL_CAPACITY spans 4 to 1,200 a plot, so a linear read
+ *     would be a rounding error for the first three rungs of the ladder and the
+ *     term would only exist in a city of arcologies;
+ *   - **idleness.** Workers with no job to go to. The one source that is not a
+ *     function of size at all: a city can be small and idle, and this is what
+ *     makes the industrial and commercial zones a *safety* argument as well as
+ *     an income one.
+ *
+ * Weighted toward idleness, and deliberately. Crowding is something the player
+ * chooses by climbing the level ladder and cannot undo; unemployment is
+ * something they can zone their way out of this minute. A term the player can
+ * act on should be the larger half of one they cannot.
+ */
+export const CRIME_FROM_CROWDING = 0.4;
+export const CRIME_FROM_IDLENESS = 0.6;
+
+/**
+ * Residents per housing plot at which crowding reads 1.
+ *
+ * The middle rung of the ladder rather than the top, and derived from it: a
+ * city of towers is as crowded as crowding gets, and the two rungs above are
+ * about *height* rather than about how many people share a street. Taking the
+ * top rung instead would have left the term under a fifth of its range for the
+ * entire game a player actually plays.
+ */
+export const CRIME_CROWDING_FULL = LEVEL_CAPACITY[MERGE_LEVEL] ?? 70;
+
+// ----------------------------------------------------------------- garbage
+
+/**
+ * What a city nobody collects from costs the mood.
+ *
+ * Under crime and under congestion, and that is the ranking the three should
+ * have: an uncollected street is unpleasant, a jammed one wastes an hour a day
+ * and a dangerous one is a reason to leave. Small enough that the three
+ * together cannot take a covered city below the ceiling, because all three go
+ * to exactly zero when the buildings that answer them are built.
+ */
+export const GARBAGE_MOOD = 0.10;
+
+/**
+ * What the city puts out, per second, per thing that puts it out.
+ *
+ * Residents, trading premises and working industry — the three the brief names,
+ * and the three `income` already reads.
+ *
+ * The three coefficients are set so that no one source carries the term, and
+ * they had to be: `effectiveOf` is level-*weighted* where `activeOf` is
+ * level-*flat*, so the same coefficient on each would have made a mature city's
+ * rubbish 92% shops. Measured at 10 districts, they land within a factor of two
+ * of each other at towers — and the shape they give the ladder is worth having
+ * for itself: a village's rubbish is mostly industrial, because industry is
+ * flat per plot and everything else is small, and by the time the city is
+ * arcologies the people and the shops have taken it over.
+ *
+ * A rate and not a stock. A stock would have to be integrated, which means a
+ * fourth exception to "the save is counts" — and unlike the three that exist it
+ * would be bounded by nothing: `surveyedR` grows with districts, `unlocked`
+ * with a static table and `history` with a fixed ring, where a rubbish stock
+ * grows with time. The rate says the same thing about a settled city and says
+ * it without the save.
+ */
+export const GARBAGE_PER_RESIDENT = 0.09;
+export const GARBAGE_PER_SHOP = 0.2;
+export const GARBAGE_PER_WORKS = 12;
+
+/**
+ * Rubbish per housing plot at which the load reads 1, and the curve it is read
+ * on.
+ *
+ * A square root rather than a straight ratio, and the claim it makes is a
+ * physical one: what makes an uncollected street unpleasant is how much of it
+ * is covered, and a pile twice the size does not cover twice the pavement.
+ * Practically it is also the only shape with range at both ends — the three
+ * sources between them span 6.7 to 212 bags a plot across the level ladder, and
+ * a linear read against the top would be a rounding error for four fifths of a
+ * playthrough.
+ *
+ * Measured in tools/garbage.calibrate.mjs at 10 districts: 0.17 at detached
+ * houses, 0.20 at terraces, 0.29 at towers, 0.51 at megastructures and 0.98 at
+ * arcologies. Never clamped, which is the property the saturation is chosen
+ * for: a term pinned at 1 for the top two rungs would stop being a quantity
+ * exactly where the city gets interesting.
+ */
+export const GARBAGE_SATURATION = 220;
+export const GARBAGE_CURVE = 0.5;
+
+// ---------------------------------------------------------- the rival city
+
+/**
+ * How long the rival takes to become one, in seconds.
+ *
+ * The rival is derived and never stored — see `rivalStrength`, which is a
+ * function of `s.elapsed` and `s.districts` and nothing else. That is what
+ * makes an offline catch-up and a watched session agree by construction: a
+ * stored rival would be a fourth exception to "the save is counts" bounded by
+ * a clock, which is the one thing the three existing exceptions are all
+ * bounded by something *other* than.
+ *
+ * Its strength is `age / (1 + age)` against this constant, so it is half
+ * established at 20 minutes and three quarters at an hour — measured in
+ * tools/rival.calibrate.mjs against a played run, where the city's first
+ * annexation lands at 1:30 and the city hall that answers it at 1:28.
+ */
+export const RIVAL_SETTLE_SECONDS = 1_200;
+
+/**
+ * The size at which the city has outgrown the rival entirely.
+ *
+ * The other half of the shape, and the reason a rival is a feature rather than
+ * a tax: it arrives, it matters, and it is *outgrown*. HIGHWAY_MIN_DISTRICTS,
+ * because that is where the city stops being a place and starts being a region
+ * — a rival is a rival to a town and a suburb of a conurbation.
+ *
+ * Both inputs are monotone in the direction that matters, which is what keeps
+ * the reading exact under a 60-second catch-up step: elapsed only rises and
+ * districts only rise, so there is no integrator to disagree with itself.
+ */
+export const RIVAL_MATCH_DISTRICTS = HIGHWAY_MIN_DISTRICTS;
+
+/**
+ * What a fully established rival takes off commercial and industrial demand.
+ *
+ * Sized against the *surcharge* rather than against the signal, which is the
+ * trap the brief names: `priceModifier` is asymmetric on purpose — a discount
+ * is `1 - 0.45 d` and a surcharge is `1 + 0.60 d` — so a rival that pinned a
+ * signal negative would not slow the city down, it would make shops 60% dearer
+ * forever. Measured in tools/rival.calibrate.mjs as what it does to the cost of
+ * filling one district: +6.5% on commerce and +7.6% on industry at its worst,
+ * against the 60% a pinned signal would have cost.
+ *
+ * Industry takes more of it than commerce, and the asymmetry is the same one
+ * DEMAND_TERMS already carries for the tax rate: a shop sells to the people
+ * standing in front of it and a works sells to whoever will buy, so a rival
+ * next door is a competitor for the second and an inconvenience to the first.
+ */
+// The two weights themselves live in DEMAND_TERMS, because that is the table
+// the HUD walks — see the two `rival` rows, and RIVAL_COMMERCIAL_DEMAND beside
+// them, which reads them back so this comment has a name to point at.
+
+// ---------------------------------------------------------------- trade
+
+/**
+ * Where the city's power comes from, when it does not come from its own plants.
+ *
+ * A table and an index, exactly as TAX_STEPS is: one policy scalar in the save
+ * and the whole of what it does stated in one place. Behind `hasPolicy` like
+ * every other policy, because a treaty needs somebody to sign it.
+ *
+ *   - **import** raises `powerSupply` by a share of what the city draws, and
+ *     charges for it every second. It is the answer to a brownout the city
+ *     cannot build its way out of yet — POWER_PLANT_BASE is 900 and compounds
+ *     at 1.6, so the fourth plant is 3,686 and the eighth is 38,700;
+ *   - **export** sells whatever the city's own plants make over its draw. It
+ *     is what makes over-building the grid a decision rather than a waste, and
+ *     it earns nothing at all until there is a surplus, so switching it on in a
+ *     brownout is inert rather than harmful.
+ *
+ * Neither is free and neither is strictly better. A plant is a one-off against
+ * a per-second bill and wins overwhelmingly whenever a *site* is free — which
+ * is the shape wanted: the import is the answer to `plantCapacity` running out
+ * at one plant a district, not an alternative to building one. And leaving
+ * either switch on when it is not needed costs: the import buys half the city's
+ * draw whether or not the ratio was already over 1.
+ *
+ * Measured at 10 districts, as a share of the city's own income (see
+ * tools/rival.calibrate.mjs): importing costs 13.7% at detached houses, 5.2% at
+ * terraces, 1.8% at towers and 0.2% at arcologies; exporting earns 9.7%, 3.7%,
+ * 1.2% and 0.1%. The fall is structural rather than a mis-set price — power
+ * draw carries POWER_EXPONENT and is sub-linear in the ladder where income is
+ * quadratic in it — so no single per-unit price is a constant share. What that
+ * buys is the right shape anyway: a lifeline in the hour a player first meets a
+ * brownout, and a rounding error to a city that is rich and out of sites.
+ */
+export interface PowerTrade {
+  readonly label: string;
+  /** Extra supply, as a share of the city's own draw. */
+  readonly imports: number;
+  /** What that costs a second, per unit imported. */
+  readonly price: number;
+  /** What a unit of surplus sells for. Zero unless the city is exporting. */
+  readonly sells: number;
+}
+
+export const POWER_TRADES: readonly PowerTrade[] = [
+  { label: 'Off', imports: 0, price: 0, sells: 0 },
+  { label: 'Import', imports: 0.5, price: 0.85, sells: 0 },
+  { label: 'Export', imports: 0, price: 0, sells: 0.6 },
+];
+
+/**
+ * The most of its own draw the city can sell, as a share.
+ *
+ * The neighbours will take half again of what the city uses and no more, and
+ * the cap is load-bearing rather than flavour: POWER_BASE alone is a floor
+ * under the grid and `POWER_PER_PLANT` is multiplied by `cityScale`, so a small
+ * city with a plant a district makes many times what it draws. Uncapped,
+ * selling that surplus is worth 582% of the ledger at its worst — an arbitrage
+ * rather than a trade.
+ *
+ * Two things bring it down, and the *second* is the larger of them, which is
+ * worth stating because it is not the one this constant is. The cap takes the
+ * worst case to 39% — better, and still too much. What makes it about a tenth
+ * is that the switch is behind `hasPolicy`: a hall needs RANK_GATES.cityHall,
+ * which is 1,200 people, and the 39% city is a village of 88. Swept over every
+ * district count and level that could hold a hall at all, the worst is 8.9% —
+ * one district of terraces, the smallest town there is. See
+ * tools/rival.calibrate.mjs, which prints the uncapped worst, the capped worst
+ * and the rank that rules the capped one out.
+ *
+ * Symmetric with the import's own share on purpose: the city can buy half its
+ * draw and sell half its draw, so the switch is one decision at one scale
+ * rather than two mechanisms that happen to share an index.
+ */
+export const POWER_EXPORT_CAP = 0.5;
+
+/** The step a fresh city starts on, and the one a save without one defaults to. */
+export const POWER_TRADE_NEUTRAL = 0;
+
+/**
+ * What a goods agreement is worth, and what it costs to keep.
+ *
+ * The same shape CARGO_EXPORT_LIFT already is — a multiplier on the export tap
+ * rather than a second tap beside it — so there is still one number the outside
+ * world's appetite is made of. Bigger than a cargo berth's 0.4 because it is
+ * bought with a running cost rather than with a building, and because it is the
+ * answer to the rival: a city that has signed the treaty takes back the trade
+ * the rival was taking, which is what makes the rival a thing to push against
+ * rather than a tax.
+ *
+ * The upkeep is a share of the *ledger* rather than a flat rate, for the reason
+ * `civicPayroll` is: a flat fee is a decision for the first hour and a rounding
+ * error after it. `ledgerScale` times `housingPlots`, and both factors are
+ * needed — `ledgerScale` alone is what a *plot* is worth, and the ledger is
+ * plots times that, so a fee scaled by it alone falls away exactly as a flat
+ * one does. Measured over three city sizes it lands at 2.9%, 2.9% and 2.9% of
+ * income; scaled by `ledgerScale` alone it was 0.31%, 0.03% and 0.01%.
+ */
+export const GOODS_TRADE_LIFT = 0.55;
+export const GOODS_TRADE_UPKEEP = 0.015;
+
+/**
+ * How much of the rival a goods agreement answers.
+ *
+ * Not all of it, deliberately. A treaty that erased the rival would make the
+ * switch a one-time chore rather than a lever, and the other half of the answer
+ * is the one the city was always going to reach for: `RIVAL_MATCH_DISTRICTS`,
+ * which is to say growing.
+ */
+export const GOODS_TRADE_ANSWER = 0.6;
+
+// --------------------------------------------------------------- ascension
+
+/**
+ * What a founding is worth to the next city, and how fast that compounds.
+ *
+ * `achievements.ts` refuses to grant anything and explains why at length: every
+ * bonus in this game is a multiplier on a ledger that already compounds to
+ * 9e9/s, so a payout is "a multiplier handed to the player for doing what they
+ * were going to do anyway". This feature violates that rule, and the violation
+ * is the point rather than an oversight — an achievement fires for playing, and
+ * ascension fires for *giving a city up*. The player pays 49 districts and an
+ * hour of their life for it. That is a decision, which is exactly the thing the
+ * achievements argument says a bonus has to be attached to.
+ *
+ * What is kept from the argument is the shape. The multiplier is
+ * `1 + LEGACY_YIELD * sqrt(legacy)`, and every part of that is doing work:
+ *
+ *   - `legacy` counts *districts given up*, so one founding contributes at most
+ *     MAX_DISTRICTS however long it is left running. A run's contribution is
+ *     bounded by the map rather than by the player's patience;
+ *   - the square root is what makes it compound slowly. Four full runs are
+ *     twice the bonus of one, not four times it. Measured in
+ *     tools/ascension.calibrate.mjs, at the ceiling of a full 49-district run
+ *     each time: the second city runs at 2.05x, the third at 2.48x, the fifth
+ *     at 3.10x, the twentieth at 5.58x and the fiftieth at 8.35x;
+ *   - 0.15 is set from the guard the brief names — time to the first
+ *     annexation, run by run. Run 1 buys its second district at 1:30:18, run 2
+ *     at 49:35, run 3 at 43:05, run 5 at 36:05 and run 20 at 22:47, against a
+ *     rule that says run 3 clearing its first district inside a minute means
+ *     the multiplier is too strong. The reason it can be as large as it is is
+ *     that cash is only half of that gate: `activeDeveloped` has to reach
+ *     ANNEX_MIN_OCCUPANCY before a district can be bought at any price, so a
+ *     rich second city still has to build its first one out.
+ */
+export const LEGACY_YIELD = 0.15;
+
+// ------------------------------------------------------------------- ranks
+
+/**
+ * What the city is called, and what it has to be to be called it.
+ *
+ * A rank is derived and never stored — see `cityRank` — so an offline catch-up
+ * and a watched session agree by construction, and a save written under an
+ * older balance pass opens on whatever rank its counts now imply.
+ *
+ * Two thresholds a rung, and the city has to clear *both*. That is the whole of
+ * why it is not simply a population count: LEVEL_HOUSING spans 4 to 2,400, so
+ * one district of arcologies holds 28,800 people on 24 plots. It is dense, and
+ * a dense village is still a village. The mirror case is a sprawl of bungalows
+ * across half the map, which is large and empty. Neither is a metropolis, and
+ * requiring both is the shortest thing that says so.
+ */
+export interface CityRank {
+  /** Position on the ladder. What a gate is expressed in. */
+  readonly index: number;
+  /** What the treasury strip calls it, and what a blocker names. */
+  readonly name: string;
+  /** Districts the city must hold. */
+  readonly districts: number;
+  /** People its housing must be built for — `population`, not `residents`. */
+  readonly population: number;
+}
+
+/**
+ * The ladder.
+ *
+ * Every threshold is measured rather than round. `tools/ranks.calibrate.mjs`
+ * plays the game forward — `autoDevelop`'s own policy by hand until the city
+ * hall, the real thing after it — and prints the elapsed time at which each
+ * rung falls. The rule it enforces is the one the brief states: a rank that
+ * arrives in the first ninety seconds is not a rank.
+ *
+ *   Village       0:00   every city starts here
+ *   Town       1:27:51   the first district is full and climbing
+ *   City       1:57:22   three districts, and the ladder past terraces
+ *   Conurbation  never   see below
+ *   Metropolis   never
+ *
+ * The two upper rungs are "never" for a reason that predates them, and the
+ * calibrator prints it: an auto-developed run plateaus at 5 districts, because
+ * the level ladder houses everyone on a third of the land, housing demand goes
+ * negative and auto-development will not build into oversupply. Measured
+ * identically on master at 4b9dae6 — HIGHWAY_MIN_DISTRICTS was already out of
+ * an auto-developer's reach before any of this. So those two are measured
+ * against cities built out to their own frontage instead: at 14 districts a
+ * city of towers is a Conurbation, and Metropolis wants 28 districts of
+ * arcologies.
+ *
+ * The population column is `population`, not `residents`: a city that has just
+ * lost half its people to a bad tax rate has not been demoted to a town, and a
+ * rank that flickered with the occupancy integrator would be a rank that
+ * unlocked and re-locked a button while the player watched.
+ */
+export const RANKS: readonly CityRank[] = [
+  { index: 0, name: 'Village',     districts: 1,  population: 0 },
+  { index: 1, name: 'Town',        districts: 1,  population: 1_200 },
+  { index: 2, name: 'City',        districts: 3,  population: 12_000 },
+  { index: 3, name: 'Conurbation', districts: HIGHWAY_MIN_DISTRICTS, population: 60_000 },
+  { index: 4, name: 'Metropolis',  districts: 28, population: 400_000 },
+];
+
+/**
+ * What each gated thing needs, as a position on the ladder.
+ *
+ * Four entries, and every one of them bites — the calibrator prints how long
+ * each gate holds a button that the price would otherwise have opened: the city
+ * hall by 12:41, the museum by 7:52, the stadium by 33:33. A gate that opened
+ * before the price did would be decoration.
+ *
+ * The brief's other candidates were examined and left alone, because a second
+ * gate on the same button is two numbers saying one thing:
+ *
+ *   - the airport has the highway, and stands at the end of its spur;
+ *   - port terminals have `hasCoast`, which is the seed rather than
+ *     progression. A coastal city has already paid for its coast by annexing
+ *     toward it, and the terminal is what makes that pay;
+ *   - power plants were rejected outright rather than found already gated. A
+ *     brownout caps occupancy at POWER_FLOOR, so the grid is something a city
+ *     needs *before* it is big, and a rank on it would gate the thing that lets
+ *     a city reach the rank;
+ *   - the university looks like the archetypal late building and is measured
+ *     out. See `serviceBlocker`, which carries the numbers: it is what a city
+ *     needs to reach level 2 housing, and a rank on it deadlocks the ladder.
+ *
+ * The highway is the one that was *replaced* rather than left: it had
+ * HIGHWAY_MIN_DISTRICTS, the Conurbation rung is set to exactly that number,
+ * and `highwayAllowed` now reads the rank. The constant stays, because
+ * HIGHWAY_COST and AIRPORT_BASE are priced from it.
+ */
+export const RANK_GATES = {
+  /** Policy, and with it the tax rate, free transport and auto-development. */
+  cityHall: 1,
+  /** A village with a museum is a village with a museum. */
+  museum: 1,
+  stadium: 2,
+  /** Replaces HIGHWAY_MIN_DISTRICTS as the gate. See `highwayAllowed`. */
+  highway: 3,
+  /**
+   * Founding the city again. Not a building — a rank gate on the one button
+   * that takes the city away — but the same ladder answers it, and a second
+   * mechanism for "are you big enough yet" would be a second thing to tune.
+   */
+  ascend: 2,
+} as const;
+
+export type RankGate = keyof typeof RANK_GATES;
 
 /**
  * What the airport is worth, in cruise berths.

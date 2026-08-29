@@ -842,6 +842,16 @@ const OFFSET = (DISTRICT_SPAN - 1) / 2;
 export const worldX = (x: number): number => (x - OFFSET) * CELL;
 export const worldZ = (z: number): number => (z - OFFSET) * CELL;
 
+/**
+ * The inverse: a world position -> the grid cell it stands in.
+ *
+ * Exported so the street camera can ask `isRoad` where its eye is without a
+ * second opinion about the mapping. One expression each way, in one place —
+ * two would eventually be a camera that thought it was on the pavement.
+ */
+export const cellX = (x: number): number => Math.round(x / CELL + OFFSET);
+export const cellZ = (z: number): number => Math.round(z / CELL + OFFSET);
+
 /** Side length of one district in world units. */
 export const DISTRICT_WIDTH = DISTRICT_SPAN * CELL;
 

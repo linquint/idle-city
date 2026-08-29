@@ -25,6 +25,12 @@ export interface GrowableOptions {
 export class GrowableInstancedMesh {
   mesh: THREE.InstancedMesh;
 
+  /**
+   * What this mesh covers, stated rather than derived. Null leaves the frustum
+   * test off, which is the default. See `setBounds`.
+   */
+  private bounds: THREE.Sphere | null = null;
+
   constructor(
     private readonly parent: THREE.Object3D,
     private readonly geometry: THREE.BufferGeometry,
@@ -41,14 +47,61 @@ export class GrowableInstancedMesh {
     mesh.receiveShadow = this.options.receiveShadow ?? false;
     mesh.renderOrder = this.options.renderOrder ?? 0;
     mesh.name = this.options.name ?? '';
-    // The city is always the thing on screen, so a per-object frustum test can
-    // only ever cost us. Skipping it also avoids stale bounds, since instance
-    // matrices change every frame that anything is still growing.
+    // Off until someone says what the mesh covers — see `setBounds`, which is
+    // what turns it on. The default has to be off rather than on: three derives
+    // an InstancedMesh's bounds by walking every instance matrix, caches the
+    // answer and never looks again, so a mesh that grew or animated after its
+    // first frustum test would be culled against where it used to be. A
+    // building that vanishes when the camera turns is a worse bug than a draw
+    // call that was never worth saving.
     mesh.frustumCulled = false;
     mesh.count = 0;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.parent.add(mesh);
+    this.applyBounds(mesh);
     return mesh;
+  }
+
+  /**
+   * States what this mesh covers, and turns the frustum test on.
+   *
+   * Stated rather than computed, and that is the whole of the stale-bounds
+   * answer. `InstancedMesh.computeBoundingSphere` is O(instances) and three
+   * caches it forever, so the two honest options were "recompute every frame
+   * anything is growing" — nine thousand matrix decompositions a frame on the
+   * pavement mesh alone — or "say what it covers". The renderer already knows:
+   * the city's extent is `cityRadius(state.districts)`, which moves only when
+   * land is annexed. Asking three to rediscover it from the instance buffer is
+   * paying a great deal to learn something the simulation states directly.
+   *
+   * It must over-estimate rather than under-estimate. The sphere is also what
+   * `InstancedMesh.raycast` broad-phases against, so bounds tighter than the
+   * truth would drop clicks on the buildings outside them.
+   *
+   * Re-applied across a reallocation, because `build` makes a new mesh and the
+   * old one's bounds would go with it.
+   *
+   * @param x      centre of the covered ground, world space
+   * @param z      centre of the covered ground, world space
+   * @param reach  how far from that centre the instances can stand
+   * @param top    the highest an instance reaches
+   * @param bottom the lowest one reaches. Not always 0 — a district rises in
+   *               from LIFT below grade, and a sphere that did not cover the
+   *               approach would cull the land tile on the frame it is bought.
+   */
+  setBounds(x: number, z: number, reach: number, top: number, bottom = 0): void {
+    const half = (top - bottom) / 2;
+    this.bounds = new THREE.Sphere(
+      new THREE.Vector3(x, bottom + half, z),
+      Math.hypot(reach, half),
+    );
+    this.applyBounds(this.mesh);
+  }
+
+  private applyBounds(mesh: THREE.InstancedMesh): void {
+    if (!this.bounds) return;
+    mesh.boundingSphere = this.bounds;
+    mesh.frustumCulled = true;
   }
 
   get capacity(): number {

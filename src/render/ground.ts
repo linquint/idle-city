@@ -1,6 +1,10 @@
 import * as THREE from 'three';
-import { hash01, mixSeed } from '../core/rng';
-import { CELL, MAX_DISTRICTS, SEED } from '../sim/config';
+// Explicit .ts extensions, per the convention `tsconfig.json` documents: this
+// module carries the road cell's geometry, `src/render/pedestrians.ts` stands
+// people on the footway it defines, and `tools/pedestrians.calibrate.mjs` has
+// to load both without a build step.
+import { hash01, mixSeed } from '../core/rng.ts';
+import { CELL, MAX_DISTRICTS, SEED } from '../sim/config.ts';
 import {
   DISTRICT_WIDTH,
   isRoad,
@@ -8,10 +12,10 @@ import {
   worldZ,
   type CityLayout,
   type District,
-} from '../sim/layout';
-import { cityRadius } from '../sim/layout';
-import { GrowableInstancedMesh } from './growable';
-import { PALETTE } from './palette';
+} from '../sim/layout.ts';
+import { cityCentre, cityRadius } from '../sim/layout.ts';
+import { GrowableInstancedMesh } from './growable.ts';
+import { PALETTE } from './palette.ts';
 
 /**
  * A road cell is a carriageway plus the footways that flank it. The footway
@@ -26,9 +30,18 @@ import { PALETTE } from './palette';
  */
 export const ROAD_W = 2.4;
 export const ROAD_H = 0.18;
-const FOOT_W = (CELL - ROAD_W) / 2;
-const FOOT_OFF = (CELL - FOOT_W) / 2;
-const PAVE_H = 0.3;
+/**
+ * The footway: how wide one is, how far its centre sits from the road's, and
+ * how high it stands.
+ *
+ * Exported because the pedestrians stand on it. A walker placed against a
+ * second opinion about where the kerb is would eventually be a walker in the
+ * gutter, which is the argument `routeHighway` already makes for taking its
+ * lane geometry from `highway.ts` rather than working it out again.
+ */
+export const FOOT_W = (CELL - ROAD_W) / 2;
+export const FOOT_OFF = (CELL - FOOT_W) / 2;
+export const PAVE_H = 0.3;
 const TUCK = 0.04;
 const LAND_H = 1.2;
 const MAX_FOOTWAYS_PER_CELL = 4;
@@ -181,14 +194,14 @@ export class Ground {
       new THREE.BoxGeometry(DISTRICT_WIDTH, LAND_H, DISTRICT_WIDTH),
       new THREE.MeshLambertMaterial({ color: PALETTE.land }),
       4,
-      { receiveShadow: true },
+      { receiveShadow: true, name: 'ground:land' },
     );
     this.asphalt = new GrowableInstancedMesh(
       scene,
       new THREE.BoxGeometry(1, ROAD_H, 1),
       new THREE.MeshLambertMaterial({ color: PALETTE.asphalt }),
       256,
-      { receiveShadow: true },
+      { receiveShadow: true, name: 'ground:asphalt' },
     );
     // The kerb throws a hairline shadow, which is most of what sells the street.
     this.pavement = new GrowableInstancedMesh(
@@ -196,7 +209,7 @@ export class Ground {
       new THREE.BoxGeometry(1, PAVE_H, 1),
       new THREE.MeshLambertMaterial({ color: PALETTE.kerb }),
       1024,
-      { castShadow: true, receiveShadow: true },
+      { castShadow: true, receiveShadow: true, name: 'ground:pavement' },
     );
   }
 
@@ -212,6 +225,7 @@ export class Ground {
       return;
     }
     this.layout.ensureFixed(districts);
+    this.fitBounds(districts);
 
     for (let i = this.ranges.length; i < districts; i++) {
       const district = this.layout.districts[i] as District;
@@ -273,6 +287,25 @@ export class Ground {
     this.rising = moving;
     this.flush();
     return moving;
+  }
+
+  /**
+   * States what the street grid covers, so the three meshes can be
+   * frustum-culled — the pavement is the largest instance buffer in the whole
+   * scene (9,092 instances at 49 districts, a quarter of every triangle
+   * submitted), which is what makes it worth stating.
+   *
+   * The floor is -LIFT rather than 0: a district that has just been annexed is
+   * still rising, and bounds that stopped at grade would cull the land tile on
+   * exactly the frames it is being revealed. See `GrowableInstancedMesh.setBounds`
+   * for why they are stated rather than derived.
+   */
+  private fitBounds(districts: number): void {
+    const centre = cityCentre(districts);
+    const reach = cityRadius(districts) + DISTRICT_WIDTH / 2;
+    for (const mesh of [this.land, this.asphalt, this.pavement]) {
+      mesh.setBounds(centre.x, centre.z, reach, PAVE_H, -LIFT - LAND_H);
+    }
   }
 
   private flush(): void {

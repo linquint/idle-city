@@ -1,6 +1,15 @@
-import { FRONTAGE_TARGET, LEVEL_FOOTPRINT, LEVELS, MAX_DISTRICTS, MERGE_LEVEL } from '../src/sim/config';
+import {
+  FRONTAGE_TARGET,
+  LEVELS,
+  LEVEL_FOOTPRINT,
+  LEVEL_HOUSING,
+  MAX_DISTRICTS,
+  MERGE_LEVEL,
+  RANKS,
+  type CityRank,
+} from '../src/sim/config';
 import { districtLand, type Zoning } from '../src/sim/layout';
-import { cohortOf, type GameState, type LevelCohort } from '../src/sim/state';
+import { cohortOf, createState, type GameState, type LevelCohort } from '../src/sim/state';
 
 /**
  * Test helpers for building states with a known level mix.
@@ -185,3 +194,63 @@ export const zoning = (districts: number): Partial<GameState> => {
     surveyedI: [...z.surveyedI],
   };
 };
+
+/**
+ * A city big enough to be the given rank, and no bigger.
+ *
+ * `cityRank` asks for two things at once — districts *and* the population the
+ * housing is built for — so a fixture that only set one of them would sit a
+ * rung below where its author thought it did, and the failure would show up as
+ * a disabled button in an unrelated test. This states both.
+ *
+ * The top of the level ladder rather than the bottom, and that is what keeps
+ * the fixture land-legal: an arcology holds 2,400 on two plots, so the top rung
+ * of the rank ladder is a few hundred plots rather than two hundred thousand —
+ * and a state whose housing does not fit its districts is one `migrate` will
+ * clamp out from under a round-trip test. What is being fixed is the rank, not
+ * the skyline; a test that cares which level the housing is at should say so
+ * with `housed` instead.
+ */
+export function atRank(index: number, districts?: number): Partial<GameState> {
+  const rank = RANKS[Math.max(0, Math.min(RANKS.length - 1, index))] as CityRank;
+  const homes = Math.ceil(rank.population / (LEVEL_HOUSING[LEVELS - 1] ?? 1));
+  return {
+    districts: Math.max(rank.districts, districts ?? 0),
+    ...(homes > 0 ? housed(homes, LEVELS - 1) : {}),
+  };
+}
+
+/**
+ * A city built out to its own frontage at one level, in every zone.
+ *
+ * The shape every calibrator builds by hand and no test could say: `built`
+ * takes three counts and the counts that matter are the ones FRONTAGE_TARGET
+ * implies, which move with the level's footprint. What it is for is the sweeps
+ * — a property asserted over "every district count and every level" is only
+ * worth asserting on cities that are actually the size they claim, and a
+ * fixture with eight houses in a district is not one.
+ *
+ * `districts` and the cohort, and nothing else. A caller that wants the city
+ * served, lit or governed says so; this says how much of it there is.
+ */
+export function atFrontage(
+  districts: number,
+  level = 0,
+  patch: Partial<GameState> = {},
+): GameState {
+  const clamped = Math.max(0, Math.min(LEVELS - 1, level));
+  const foot = LEVEL_FOOTPRINT[clamped] ?? 1;
+  const fit = (per: number): number => Math.floor((Math.max(1, districts) * per) / foot);
+  return {
+    ...createState(0),
+    districts,
+    ...built(
+      fit(FRONTAGE_TARGET.residential),
+      fit(FRONTAGE_TARGET.commercial),
+      fit(FRONTAGE_TARGET.industrial),
+      clamped,
+    ),
+    happiness: 1,
+    ...patch,
+  };
+}
