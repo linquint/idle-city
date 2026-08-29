@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CELL } from '../sim/config.ts';
 import { cellX, cellZ, isRoad } from '../sim/layout.ts';
+import type { TourStop } from './tour.ts';
 
 /**
  * What separates a click from a drag: the pointer came back up within this many
@@ -20,6 +21,49 @@ const MAX_PHI = 1.36;
 const MIN_RADIUS = 26;
 const DAMPING = 12;
 const DRIFT = 0.02;
+
+// ------------------------------------------------------------- tour mode
+
+/**
+ * How hard the camera is pulled toward a stop while the tour is running.
+ *
+ * The same exponential damping the player's camera uses, at a tenth of the
+ * constant — which is what makes this a *mode* rather than a second camera or a
+ * spline. DAMPING at 12 puts the camera on its want in about half a second,
+ * which reads as a cut; 1.2 takes about two and a half, so a stop spends its
+ * opening still gliding in and the arrival is the shot rather than the start of
+ * it. There is nothing else between two stops: no keyframes, no easing curve,
+ * no path. The rig chases a want and the tour moves the want.
+ */
+const TOUR_DAMPING = 1.2;
+
+/**
+ * How fast the camera arcs while it is holding at a stop, in radians a second.
+ *
+ * Ten times the idle DRIFT, which is deliberately slow enough that a player who
+ * walks away does not come back to a spinning city. A tour is being *watched*,
+ * so it can afford a bearing that visibly moves — a quarter turn over a
+ * six-second hold, which is enough for the light to travel across a facade.
+ */
+const TOUR_ORBIT = 0.2;
+
+/**
+ * How much longer everything takes under reduced motion.
+ *
+ * The tour is *offered* rather than withheld, and that is the decision. Reduced
+ * motion is about motion the player did not ask for — an autoplaying carousel,
+ * a parallax header, a sun crossing the sky — and this is a control they went
+ * and pressed. Withholding it would be answering a preference about
+ * interruption with a refusal to do what was asked.
+ *
+ * What it does instead is take the aggressive parts out. Everything holds twice
+ * as long and glides at half the rate, so no shot is a swing; and the street
+ * passes are dropped entirely, because a low pass through traffic is the most
+ * vestibularly aggressive thing here — and under reduced motion the traffic is
+ * held still anyway, so a street stop would be a long look at a photograph.
+ * See `tourStops`, which is handed the flag.
+ */
+export const TOUR_CALM = 2;
 
 /**
  * How high the orbit camera's target floats above the ground.
@@ -187,13 +231,47 @@ export class CameraRig {
   private readonly keys = new Set<string>();
   private readonly detach: Array<() => void> = [];
 
+  /**
+   * The stops the tour is playing, or null when it is not running.
+   *
+   * View state, and it stays view state: it is a list of camera positions
+   * derived from `GameState` every time the tour starts, and nothing about it
+   * is written anywhere. The rig holds no copy of the simulation's numbers —
+   * `tourStops` was handed the state, answered, and is done with it.
+   */
+  private tour: readonly TourStop[] | null = null;
+  private tourAt = 0;
+  private tourHeld = 0;
+  /** How much slower everything runs. 1 normally; see TOUR_CALM. */
+  private tourCalm = 1;
+  /**
+   * Told when the tour moves on or ends, so the HUD can say where it is.
+   *
+   * A hook rather than the rig reaching into a panel, in the shape `onClick`
+   * already is. Null names no stop, which is what ending looks like.
+   */
+  onTour: ((stop: TourStop | null) => void) | null = null;
+
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
     private readonly dom: HTMLElement,
-    private readonly drift: boolean,
+    private drift: boolean,
   ) {
     this.listen();
     this.apply();
+  }
+
+  /**
+   * Whether the camera drifts when nobody is touching it.
+   *
+   * A switch rather than a constructor argument, so the motion preference can
+   * be answered without rebuilding the rig. The drift only ever moves `theta`
+   * toward a want that the damping is already chasing, so turning it off stops
+   * the city rotating on the next frame and leaves the camera exactly where the
+   * player last left it.
+   */
+  setDrift(on: boolean): void {
+    this.drift = on;
   }
 
   /**
@@ -289,6 +367,93 @@ export class CameraRig {
     }
   }
 
+  /** Whether the tour is running. Read by the view and the HUD. */
+  get touring(): boolean {
+    return this.tour !== null;
+  }
+
+  /**
+   * Starts the tour, or stops it if it is already running.
+   *
+   * The stops arrive from outside rather than being built here, because what a
+   * city has is the simulation's business and where a camera stands is the
+   * rig's. See `tourStops`.
+   */
+  startTour(stops: readonly TourStop[], calm = 1): void {
+    if (stops.length === 0) return;
+    this.tour = stops;
+    this.tourAt = -1;
+    this.tourHeld = 0;
+    this.tourCalm = Math.max(1, calm);
+    this.advanceTour();
+  }
+
+  /**
+   * Ends it, wherever it had got to.
+   *
+   * Nothing is restored. The camera stays where the tour left it and the
+   * player's next drag carries on from there, which is the only behaviour that
+   * does not feel like the game taking the camera back — and every number the
+   * rig holds is already a damped want, so there is no state to unwind.
+   *
+   * Street mode is the one exception and it is not an exception to that rule:
+   * it is *left on* if the tour was at a street stop, because the player has
+   * just been handed a camera at pavement level and snatching it back to
+   * altitude on the first click would be the game overruling them. V brings
+   * them up when they want to come up.
+   */
+  stopTour(): void {
+    if (!this.tour) return;
+    this.tour = null;
+    // The wants are pulled back onto where the camera *is*, and this is the
+    // whole of "stops dead". Leaving them pointed at the stop it was gliding
+    // toward would hand the player's own DAMPING — ten times the tour's — a
+    // target most of a city away, and the camera would lunge there over the
+    // next half second. Stopping a tour has to stop the camera.
+    this.wantTarget.copy(this.target);
+    this.wantTheta = this.theta;
+    this.wantPhi = this.phi;
+    this.wantRadius = this.radius;
+    this.onTour?.(null);
+  }
+
+  /** Moves to the next stop, or ends the tour after the last. */
+  private advanceTour(): void {
+    const stops = this.tour;
+    if (!stops) return;
+    this.tourAt++;
+    const stop = stops[this.tourAt];
+    if (!stop) {
+      this.stopTour();
+      return;
+    }
+    this.tourHeld = 0;
+    // Street mode first, because entering it snaps the target onto a road and
+    // leaving it multiplies the radius — both of which have to happen before
+    // the stop states what it wants.
+    if (stop.street !== this.streetMode) {
+      this.wantTarget.x = stop.x;
+      this.wantTarget.z = stop.z;
+      this.setStreet(stop.street);
+    }
+    this.wantTarget.x = stop.x;
+    this.wantTarget.z = stop.z;
+    this.wantTarget.y = this.targetY;
+    this.wantTheta = stop.theta;
+    const [lowPhi, highPhi] =
+      this.streetMode ? [STREET_MIN_PHI, STREET_MAX_PHI] : [MIN_PHI, MAX_PHI];
+    if (stop.phi >= 0) this.wantPhi = THREE.MathUtils.clamp(stop.phi, lowPhi, highPhi);
+    if (stop.radius >= 0) {
+      const [lowR, highR] =
+        this.streetMode ? [STREET_MIN_RADIUS, STREET_MAX_RADIUS] : [MIN_RADIUS, this.maxRadius];
+      this.wantRadius = THREE.MathUtils.clamp(stop.radius, lowR, highR);
+    }
+    // On a street stop the target has to be on a road, or `moveTarget` has
+    // nowhere to let the camera go and `arm` has nothing to measure against.
+    if (this.streetMode) this.snapToRoad();
+    this.onTour?.(stop);
+  }
+
   /** How high this mode's target floats above the ground. */
   private get targetY(): number {
     return this.streetMode ? STREET_TARGET_Y : ORBIT_TARGET_Y;
@@ -325,10 +490,22 @@ export class CameraRig {
 
   update(dt: number): void {
     this.applyKeys(dt);
-    if (this.drift && !this.interacting) this.wantTheta += dt * DRIFT;
+    if (this.tour) {
+      // The whole of the tour's per-frame work: hold a clock, arc the bearing,
+      // and move on when the stop is done. Everything else is the damping
+      // below doing what it does for the player's own camera.
+      this.tourHeld += dt;
+      this.wantTheta += (dt * TOUR_ORBIT) / this.tourCalm;
+      const stop = this.tour[this.tourAt];
+      if (stop && this.tourHeld >= stop.hold * this.tourCalm) this.advanceTour();
+    } else if (this.drift && !this.interacting) {
+      this.wantTheta += dt * DRIFT;
+    }
 
-    // Frame-rate independent exponential damping.
-    const k = 1 - Math.exp(-DAMPING * dt);
+    // Frame-rate independent exponential damping. The tour runs the same
+    // expression at a tenth of the constant — see TOUR_DAMPING, and note that
+    // this is the only interpolator in the file.
+    const k = 1 - Math.exp(-(this.tour ? TOUR_DAMPING / this.tourCalm : DAMPING) * dt);
     this.theta += (this.wantTheta - this.theta) * k;
     this.phi += (this.wantPhi - this.phi) * k;
     this.radius += (this.wantRadius - this.radius) * k;
@@ -501,6 +678,10 @@ export class CameraRig {
     };
 
     on(dom, 'pointerdown', (event: PointerEvent) => {
+      // Any input ends the tour, and this is the whole of that contract for a
+      // touch device: there is no keyboard to press anything on, so the first
+      // finger on the canvas is how a tour is stopped.
+      this.stopTour();
       dom.setPointerCapture(event.pointerId);
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.interacting = true;
@@ -555,6 +736,7 @@ export class CameraRig {
       'wheel',
       (event: WheelEvent) => {
         event.preventDefault();
+        this.stopTour();
         // Line-mode wheels report ~3 lines where pixel-mode reports ~100px.
         this.zoom(event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY);
       },
@@ -566,6 +748,7 @@ export class CameraRig {
     on(window, 'keydown', (event: KeyboardEvent) => {
       if (event.target instanceof HTMLElement && event.target.tagName === 'BUTTON') return;
       if (PAN_KEYS[event.key]) {
+        this.stopTour();
         this.keys.add(event.key);
         this.interacting = true;
       }

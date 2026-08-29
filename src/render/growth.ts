@@ -12,7 +12,20 @@ export class GrowthSchedule {
   private birth = new Float64Array(0);
   private active = new Set<number>();
 
-  constructor(private readonly duration: number) {}
+  constructor(private duration: number) {}
+
+  /**
+   * How long an animation runs, changed under the running game.
+   *
+   * Mutable so the motion preference can be a switch rather than a restart. It
+   * is safe mid-flight because the schedule stores a *birth time* and derives
+   * the scale from the age each frame: shortening the duration finishes what is
+   * in the air on the next frame rather than leaving it stranded, and
+   * lengthening it lets it carry on from wherever it had got to.
+   */
+  setDuration(seconds: number): void {
+    this.duration = seconds;
+  }
 
   ensure(capacity: number): void {
     if (capacity <= this.birth.length) return;

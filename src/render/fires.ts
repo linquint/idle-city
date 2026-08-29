@@ -4,7 +4,7 @@ import { CELL, CIVIC_SERVICES, LEVELS, MAX_ACTIVE_FIRES } from '../sim/config.ts
 /** Where fire stations sit in the 2x2 site interleave. See `civicSiteFor`. */
 const FIRE_SITE_OFFSET = CIVIC_SERVICES.findIndex((service) => service.key === 'fire');
 import { ZONE } from '../sim/citygen.ts';
-import { levelAt } from '../sim/economy.ts';
+import { countOf, levelAt, levelsOf, mergedOf, ZONE_KINDS } from '../sim/economy.ts';
 import {
   createPlacement,
   worldX,
@@ -12,8 +12,8 @@ import {
   type CityLayout,
   type Placement,
 } from '../sim/layout.ts';
-import type { Fire, GameState } from '../sim/state.ts';
-import { roofline } from './buildings.ts';
+import type { Fire, GameState, ZoneKind } from '../sim/state.ts';
+import { bodyFootprint, roofline } from './buildings.ts';
 import { Glow } from './glow.ts';
 import { ROAD_H } from './ground.ts';
 import { GrowableInstancedMesh } from './growable.ts';
@@ -61,9 +61,42 @@ interface Blaze {
   z: number;
   /** Top of the building underneath, so the flame sits on it. */
   top: number;
+  /**
+   * How wide and deep the building underneath actually stands.
+   *
+   * Not used by the flame, which is a fixed-width column — kept because it is
+   * the only record of the *shape* of a building a fire is about to destroy,
+   * and the collapse animation has to be the size of what fell. Refreshed
+   * wherever `top` is, and for the same reason.
+   */
+  width: number;
+  depth: number;
   /** Stable per-fire offset, so six fires do not flicker in unison. */
   offset: number;
 }
+
+/**
+ * A building a fire has just destroyed, and where it was standing.
+ *
+ * A position rather than a slot, and captured rather than looked up, because by
+ * the time anything draws this the building is gone from the simulation and its
+ * slot means a different building — or nothing at all. See `Collapse`.
+ */
+export interface Loss {
+  readonly kind: ZoneKind;
+  /** The slot the flames were on. Still valid this frame; not for long. */
+  readonly slot: number;
+  readonly x: number;
+  readonly z: number;
+  /** Top of what was standing there, from `roofline`. */
+  readonly top: number;
+  /** And how wide and deep, from `bodyFootprint`. */
+  readonly width: number;
+  readonly depth: number;
+}
+
+/** Returned when nothing was lost, so the common path allocates nothing. */
+const EMPTY_LOSSES: readonly Loss[] = [];
 
 interface Truck {
   /** Journey ends. A truck only ever runs between a station and a fire. */
@@ -109,12 +142,33 @@ export class Fires {
    * roofline can only change when a building's level does.
    */
   private shownSkyline = -1;
+  /**
+   * What each zone last held, so a loss can be told from a merge.
+   *
+   * Three pairs of integers, and they are what makes the demolition animation
+   * possible without the simulation recording anything. Both a merge and a
+   * fatal fire take one off a zone's count; what separates them is that a merge
+   * raises `merged` by one and a loss does not, so
+   * `(count fallen) - (merged risen)` is the number of buildings that were
+   * *destroyed* between two syncs. See `losses`.
+   */
+  private readonly shownCount: Record<ZoneKind, number> = { home: -1, shop: -1, industry: -1 };
+  private readonly shownMerged: Record<ZoneKind, number> = { home: -1, shop: -1, industry: -1 };
+  /**
+   * Buildings destroyed since the last drain, with where they stood.
+   *
+   * Filled by `sync` and taken by the view, which owns the collapse animation.
+   * Captured here because this is the layer that knows *which plot* — the fire
+   * list is the only record of it and the simulation drops it the moment the
+   * fire ends.
+   */
+  private readonly lost: Loss[] = [];
 
   constructor(
     scene: THREE.Scene,
     private readonly layout: CityLayout,
     /** Reduced motion holds the flame steady and puts the truck straight there. */
-    private readonly moving: boolean,
+    private moving: boolean,
   ) {
     this.flames = new GrowableInstancedMesh(
       scene,
@@ -145,7 +199,17 @@ export class Fires {
     );
 
     for (let i = 0; i < MAX_ACTIVE_FIRES; i++) {
-      this.blazes.push({ kind: '', index: -1, startedAt: -1, x: 0, z: 0, top: 0, offset: i * 1.37 });
+      this.blazes.push({
+        kind: '',
+        index: -1,
+        startedAt: -1,
+        x: 0,
+        z: 0,
+        top: 0,
+        width: 0,
+        depth: 0,
+        offset: i * 1.37,
+      });
       this.fleet.push({
         ax: 0,
         az: 0,
@@ -160,6 +224,97 @@ export class Fires {
         heading: 0,
       });
     }
+  }
+
+  /**
+   * Turns the animation on or off under the running game.
+   *
+   * The pool is untouched: what `moving` decides is whether a mover advances
+   * along its route each frame and whether a fresh one is placed at the start
+   * of its run or somewhere random along it. Held still, everything is exactly
+   * where it was, which is what makes the switch a switch rather than a
+   * rebuild.
+   */
+  setMoving(on: boolean): void {
+    this.moving = on;
+  }
+
+  /**
+   * Notices buildings the fire destroyed, and where they were standing.
+   *
+   * This is the one place in the renderer that has to *infer* something the
+   * simulation did rather than read it, and it is worth being precise about
+   * what the inference is and where it can be wrong.
+   *
+   * What is read: a zone's count and its merged-parcel count, against what they
+   * were at the last sync, and the fire list against the one this layer already
+   * mirrors slot for slot. Three things take a building off a zone's count and
+   * they are separable:
+   *
+   *   - a **merge** takes one off the count and puts one on `merged`;
+   *   - a **fatal fire** takes one off the count and leaves `merged` alone;
+   *   - an **abandonment** takes nothing off the count at all — a ruin keeps
+   *     its plot and its slot, which is what `abandonedR` is for.
+   *
+   * So `(count fallen) - (merged risen)` is exactly the number of buildings
+   * destroyed, and the fires that vanished from the list this sync are which
+   * ones. `resolveFires` decides `wouldBurnOut` once for the whole tick, so
+   * when several end together they were all fatal or none were, and pairing
+   * them in list order is not a guess.
+   *
+   * Where it is wrong: `demolish` clamps `merged` down when the zone has no
+   * unmerged building left to lose, which happens only in a zone whose every
+   * standing building is a merged tower. There the loss is undercounted by one
+   * and the collapse simply does not play. A missing animation on a
+   * fully-merged zone is the right way for this to fail.
+   *
+   * Nothing here is stored, read back or told to the simulation. Delete the
+   * whole method and the city is identical.
+   */
+  private recordLosses(state: Readonly<GameState>): void {
+    for (const kind of ZONE_KINDS) {
+      const count = countOf(state, kind);
+      const merged = mergedOf(state, kind);
+      const wasCount = this.shownCount[kind];
+      const wasMerged = this.shownMerged[kind];
+      this.shownCount[kind] = count;
+      this.shownMerged[kind] = merged;
+      // The first sync of a session, and a `reset` or an ascension, both arrive
+      // as an enormous drop. Neither is a fire.
+      if (wasCount < 0 || wasMerged < 0) continue;
+      let losses = wasCount - count - (merged - wasMerged);
+      if (losses <= 0) continue;
+      for (const blaze of this.blazes) {
+        if (losses <= 0) break;
+        if (blaze.kind !== kind || blaze.index < 0) continue;
+        // Still in the list means it is still burning, so it is not this.
+        if (state.fires.some((fire) => fire.kind === kind && fire.index === blaze.index)) continue;
+        losses--;
+        this.lost.push({
+          kind,
+          slot: blaze.index,
+          x: blaze.x,
+          z: blaze.z,
+          top: blaze.top,
+          width: blaze.width,
+          depth: blaze.depth,
+        });
+      }
+    }
+  }
+
+  /**
+   * Takes what was destroyed since the last call.
+   *
+   * Drained rather than read, so a frame that does nothing with it cannot make
+   * the same building fall down twice. Bounded by MAX_ACTIVE_FIRES a sync,
+   * because only a fire ending can add to it.
+   */
+  drainLosses(): readonly Loss[] {
+    if (this.lost.length === 0) return EMPTY_LOSSES;
+    const taken = this.lost.slice();
+    this.lost.length = 0;
+    return taken;
   }
 
   /**
@@ -223,6 +378,7 @@ export class Fires {
    */
   sync(state: Readonly<GameState>): void {
     const fires = state.fires;
+    this.recordLosses(state);
     // A promotion rebuilds the roofline underneath a flame without the fire
     // itself changing, so the slots have to be invalidated when the housing
     // cohort moves. The top cohort is enough to notice by: a building can only
@@ -265,7 +421,9 @@ export class Fires {
       const at = this.placeOf(fire, state);
       blaze.x = at.x;
       blaze.z = at.z;
-      blaze.top = roofline(fire.kind, fire.index, levelAt(state.homeLevels, fire.index));
+      const level = levelAt(levelsOf(state, fire.kind), fire.index);
+      blaze.top = roofline(fire.kind, fire.index, level);
+      bodyFootprint(fire.kind, fire.index, level, at.plots, at.alongX, blaze);
       if (same) continue;
       blaze.kind = fire.kind;
       blaze.index = fire.index;

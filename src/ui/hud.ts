@@ -9,12 +9,21 @@ import {
   type HistoryTierKey,
 } from '../sim/history';
 import {
-  ACHIEVEMENT_COUNT,
   ACHIEVEMENT_GROUPS,
-  achievementReadings,
+  achievementDenominator,
   unlockedCount,
+  visibleReadings,
+  type Achievement,
+  type AchievementGroup,
 } from '../sim/achievements';
 import { fmt, fmtDuration, fmtInt } from '../core/format';
+import {
+  systemPrefersReducedMotion,
+  type MotionSetting,
+  type Settings,
+  type SettingsStore,
+  type ShadowQuality,
+} from '../core/settings';
 import {
   ANNEX_MIN_OCCUPANCY,
   CELL,
@@ -175,7 +184,8 @@ import {
 import { ESTATE_CELLS } from '../sim/estates';
 import type { BuildingRef } from '../render/buildings';
 import { ZONE_MODES, type ZoneMode } from '../render/zones';
-import type { AwayReport, Game } from '../sim/game';
+import type { AwayReport } from '../sim/game';
+import type { Command, GameFacade } from '../sim/commands';
 import {
   createPlacement,
   districtOfPlot,
@@ -211,10 +221,47 @@ export interface HudHooks {
   onStreet?: () => boolean;
   /** Whether the camera is at street level, so the switch opens marked right. */
   street?: () => boolean;
+  /**
+   * Starts the camera tour, or stops it, and reports what it settled on. Same
+   * contract again: the camera is view state and the HUD asks rather than
+   * deciding.
+   */
+  onTour?: () => boolean;
+  /** Whether the tour is running, so the switch opens marked correctly. */
+  touring?: () => boolean;
   /** Dev-only time travel, wired to a button that only exists in dev builds. */
   onSkip?: (seconds: number) => void;
   /** Told when the card is dismissed, so the outline goes with it. */
   onDeselect?: () => void;
+  /**
+   * The display preferences, if this build has any.
+   *
+   * The store rather than a pair of hooks, and it is the one thing in here that
+   * is not a hook, because it is not a request: the HUD reads the current value
+   * to mark the controls and writes the new one, and `main.ts` is subscribed to
+   * the same store and applies whatever comes out. Nothing about it touches the
+   * game — the panel would render identically against a `Game` that had been
+   * thrown away.
+   *
+   * Optional, exactly as `onZoneMode` is: without one the disclosure is hidden
+   * rather than rendered empty.
+   */
+  settings?: SettingsStore;
+}
+
+/**
+ * One row of the display panel.
+ *
+ * `choices` present means a radiogroup and absent means a switch, which is the
+ * only structural difference between the four rows — everything else about them
+ * is a name and a line of prose.
+ */
+interface SettingRow {
+  readonly key: keyof Settings;
+  readonly name: string;
+  readonly choices?: readonly { readonly value: string; readonly label: string }[];
+  /** What to say under the control, given what it is set to. Empty says nothing. */
+  readonly note: (value: Settings[keyof Settings]) => string;
 }
 
 /** What each zone is called in the inspector, and what its capacity is called. */
@@ -500,6 +547,10 @@ export class Hud {
     overlays: el('overlays'),
     overlayNote: el('overlay-note'),
     streetView: el('street-view'),
+    tour: el('tour'),
+    tourNote: el('tour-note'),
+    settings: el('settings'),
+    settingsBody: el('settings-body'),
     corner: el('corner'),
     sheetGrip: el<HTMLButtonElement>('sheet-grip'),
     education: el('education'),
@@ -729,14 +780,40 @@ export class Hud {
    * to avoid.
    */
   private readonly awardRows = new Map<string, { row: HTMLElement; at: HTMLElement }>();
+  /**
+   * The last node in each group's run, so a row that appears later lands in the
+   * right section.
+   *
+   * The markup is one flat list of headings and rows rather than a container
+   * per group, and it stays that way — the sections are a `margin-top` on the
+   * heading, and wrapping them would change the layout to buy nothing. So the
+   * one thing an insert needs is where its section currently ends, which is
+   * this. Updated on every insert, so two secrets found in the same group keep
+   * their table order.
+   *
+   * Only hidden rows ever use it: everything else is in the list from the
+   * first paint. See `buildAwards`.
+   */
+  private readonly awardGroupTail = new Map<AchievementGroup, HTMLElement>();
   /** What the awards list last rendered, so an unchanged panel is left alone. */
   private awardsShown = '';
   /** What the awards tab label last said. Painted on every tick — see `paint`. */
   private awardsTabShown = '';
   /** One chip per overlay mode, built once. See `buildOverlays`. */
   private readonly overlayButtons = new Map<ZoneMode, HTMLButtonElement>();
+  /** Every control on the display panel, with the row and value it stands for. */
+  private readonly settingButtons: Array<{
+    row: SettingRow;
+    button: HTMLButtonElement;
+    /** The choice this button selects, or null for a switch. */
+    value: string | null;
+  }> = [];
+  /** The line under each setting, so it can be repainted when the value moves. */
+  private readonly settingNotes = new Map<keyof Settings, HTMLElement>();
   /** The mode the picker is marking, so the note can be repainted live. */
   private overlayShown: ZoneMode = 'off';
+  /** What the tour note last said, so an unchanged one is left alone. */
+  private tourNoteShown = '';
   /** What that note last said, so an unchanged one is left alone. */
   private overlayNoteShown = '';
   /** What the rank strip last said, so a repaint a frame is a string compare. */
@@ -755,50 +832,50 @@ export class Hud {
   private graphsShown = '';
 
   constructor(
-    private readonly game: Game,
+    private readonly game: GameFacade,
     private readonly layout: CityLayout,
     private readonly hooks: HudHooks,
   ) {
     const n = this.nodes;
-    n.home.addEventListener('click', () => this.act(() => this.game.buildHome()));
-    n.shop.addEventListener('click', () => this.act(() => this.game.buildShop()));
-    n.industry.addEventListener('click', () => this.act(() => this.game.buildIndustry()));
-    n.park.addEventListener('click', () => this.act(() => this.game.buildPark()));
-    n.plant.addEventListener('click', () => this.act(() => this.game.buildPlant()));
+    n.home.addEventListener('click', () => this.act({ kind: 'home' }, n.home));
+    n.shop.addEventListener('click', () => this.act({ kind: 'shop' }, n.shop));
+    n.industry.addEventListener('click', () => this.act({ kind: 'industry' }, n.industry));
+    n.park.addEventListener('click', () => this.act({ kind: 'park' }, n.park));
+    n.plant.addEventListener('click', () => this.act({ kind: 'plant' }, n.plant));
     for (const row of this.landmarkNodes) {
       row.button.addEventListener('click', () =>
-        this.act(() => this.game.buildLandmark(row.landmark)),
+        this.act({ kind: 'landmark', key: row.landmark.key }, row.button),
       );
     }
     for (const row of this.terminalNodes) {
       row.button.addEventListener('click', () =>
-        this.act(() => this.game.buildTerminal(row.terminal)),
+        this.act({ kind: 'terminal', key: row.terminal.key }, row.button),
       );
     }
-    n.airport.addEventListener('click', () => this.act(() => this.game.buildAirport()));
-    n.highway.addEventListener('click', () => this.act(() => this.game.buildHighway()));
-    n.estate.addEventListener('click', () => this.act(() => this.game.buildEstate()));
-    n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
+    n.airport.addEventListener('click', () => this.act({ kind: 'airport' }, n.airport));
+    n.highway.addEventListener('click', () => this.act({ kind: 'highway' }, n.highway));
+    n.estate.addEventListener('click', () => this.act({ kind: 'estate' }, n.estate));
+    n.annex.addEventListener('click', () => this.act({ kind: 'annex' }, n.annex));
 
     for (const { service, button } of this.serviceNodes) {
-      button.addEventListener('click', () => this.act(() => this.game.buildService(service)));
+      button.addEventListener('click', () =>
+        this.act({ kind: 'service', key: service.key }, button),
+      );
     }
 
-    n.cityHall.addEventListener('click', () => this.act(() => this.game.buildCityHall()));
+    n.cityHall.addEventListener('click', () => this.act({ kind: 'cityHall' }, n.cityHall));
 
     n.freeTransport.addEventListener('click', () => {
-      this.game.setFreeTransport(!this.game.state.freeTransport);
-      this.paint();
+      this.act({ kind: 'freeTransport', on: !this.game.state.freeTransport });
     });
 
     n.auto.addEventListener('click', () => {
-      this.game.setAutoDevelop(!this.game.state.autoDevelop);
-      this.paint();
+      this.act({ kind: 'autoDevelop', on: !this.game.state.autoDevelop });
     });
 
     n.reset.addEventListener('click', () => {
       if (!confirm('Clear the city and start over? This cannot be undone.')) return;
-      this.game.reset();
+      this.act({ kind: 'reset' });
       // The ticker is the one part of the HUD that holds anything across a
       // paint, so it is the one part a reset has to be told about.
       this.ticker.clear();
@@ -822,7 +899,7 @@ export class Hud {
       ) {
         return;
       }
-      this.game.ascend();
+      this.act({ kind: 'ascend' });
       // The ticker is the one part of the HUD that holds anything across a
       // paint, so it is the one part a founding has to be told about — same as
       // a reset, because underneath it is one.
@@ -855,10 +932,7 @@ export class Hud {
       button.className = 'step';
       button.setAttribute('role', 'radio');
       button.textContent = step.label;
-      button.addEventListener('click', () => {
-        this.game.setTaxRate(i);
-        this.paint();
-      });
+      button.addEventListener('click', () => this.act({ kind: 'taxRate', step: i }));
       this.taxButtons.push(button);
       n.taxSteps.append(button);
     }
@@ -872,22 +946,20 @@ export class Hud {
       button.className = 'step';
       button.setAttribute('role', 'radio');
       button.textContent = trade.label;
-      button.addEventListener('click', () => {
-        this.game.setPowerTrade(i);
-        this.paint();
-      });
+      button.addEventListener('click', () => this.act({ kind: 'powerTrade', step: i }));
       this.powerButtons.push(button);
       n.powerSteps.append(button);
     }
 
     n.goodsTrade.addEventListener('click', () => {
-      this.game.setGoodsTrade(!this.game.state.goodsTrade);
-      this.paint();
+      this.act({ kind: 'goodsTrade', on: !this.game.state.goodsTrade });
     });
 
     this.wireSheet();
     this.buildOverlays();
     this.buildStreetView();
+    this.buildTour();
+    this.buildSettings();
     this.buildGraphs();
     this.buildAwards();
 
@@ -905,8 +977,35 @@ export class Hud {
     this.paint();
   }
 
-  private act(run: () => boolean): void {
-    if (run()) this.paint();
+  /**
+   * Sends one command, and acknowledges the click at once.
+   *
+   * The whole of the answer to a simulation that is a message away. `send` is
+   * fire-and-forget — the worker applies the command and the next state reply
+   * carries the result, which is at most one tick behind — so without this a
+   * button would sit there for up to a tenth of a second having visibly done
+   * nothing, which is exactly how a broken button feels.
+   *
+   * What it does *not* do is guess. There is no optimistic mutation of the
+   * state: a second write path on this side would be a second implementation of
+   * `Game.buildHome`, and the two would drift the first time a cost curve
+   * moved. The acknowledgement is a class on the button and nothing more, and
+   * the numbers change when the simulation says they changed.
+   *
+   * So what happens when the worker refuses a purchase the player just clicked?
+   * Nothing visible. The button flashes, no state arrives that spent the money,
+   * and the panel goes on saying what it said — which is precisely what the
+   * game already did when a click landed on a button the last paint had
+   * disabled. The refusal has never been reported and does not start being.
+   */
+  private act(command: Command, button?: HTMLElement): void {
+    this.game.send(command);
+    if (!button) return;
+    // Restarted rather than added: a second click inside the animation would
+    // otherwise do nothing at all, which is the failure this exists to fix.
+    button.classList.remove('acted');
+    void button.offsetWidth;
+    button.classList.add('acted');
   }
 
   /** Opens one tab. Nothing about the data moves; only which nodes are visible. */
@@ -1220,6 +1319,152 @@ export class Hud {
   }
 
   /**
+   * The display settings, as a table.
+   *
+   * A table rather than four hand-written blocks, because the four rows differ
+   * only in what they choose between and what they are called — and writing
+   * that out four times is how a panel ends up with three chips that mark
+   * themselves and one that does not. Each row is either a set of choices (a
+   * radiogroup) or a switch, and that distinction is real rather than
+   * cosmetic: a screen reader told that "Fog" is one of two overlays would be
+   * told something false.
+   *
+   * The order is what a player reaches for in anger. Shadows first because it
+   * is the one with real frame time behind it, fog second because it is the
+   * most visible change, motion third because most people who want it have
+   * already set it at the OS level, and the frame-rate readout last because it
+   * is an instrument rather than a preference.
+   */
+  private settingRows(): readonly SettingRow[] {
+    const shadow = (key: ShadowQuality, label: string) => ({ value: key, label });
+    const motion = (key: MotionSetting, label: string) => ({ value: key, label });
+    return [
+      {
+        key: 'shadows',
+        name: 'Shadows',
+        choices: [shadow('high', 'High'), shadow('low', 'Low'), shadow('off', 'Off')],
+        note: (value) =>
+          value === 'off'
+            ? 'No shadow pass at all. The cheapest thing on this panel.'
+            : value === 'low'
+              ? 'A quarter of the texels and a cheaper filter.'
+              : 'A soft 2048px map. What the game has always drawn.',
+      },
+      {
+        key: 'fog',
+        name: 'Haze',
+        note: (value) =>
+          value ? '' : 'The grassland now ends at a line rather than fading into one.',
+      },
+      {
+        key: 'motion',
+        name: 'Motion',
+        choices: [motion('system', 'System'), motion('full', 'Full'), motion('reduced', 'Reduced')],
+        note: (value) =>
+          value === 'system'
+            ? `Following your machine, which currently asks for ${
+                systemPrefersReducedMotion() ? 'reduced' : 'full'
+              } motion.`
+            : value === 'reduced'
+              ? 'Traffic held still, the sun held at midday, buildings arriving without ceremony.'
+              : 'Traffic, the day/night cycle and the arrival animations, whatever your machine asks for.',
+      },
+      {
+        key: 'fps',
+        name: 'Frame rate',
+        note: () => '',
+      },
+    ];
+  }
+
+  /**
+   * Builds the display panel once, and keeps it marked.
+   *
+   * Hidden rather than rendered empty when no store was handed in, which is the
+   * rule `buildStreetView` already follows: the markup is in `index.html`
+   * either way and an empty disclosure is worse than none.
+   */
+  private buildSettings(): void {
+    const store = this.hooks.settings;
+    if (!store) {
+      this.nodes.settings.hidden = true;
+      return;
+    }
+    for (const row of this.settingRows()) {
+      const block = document.createElement('div');
+      block.className = 'setting';
+      const name = document.createElement('p');
+      name.className = 'setting-name';
+      name.textContent = row.name;
+      const controls = document.createElement('div');
+      controls.className = 'setting-row';
+      const note = document.createElement('p');
+      note.className = 'setting-note';
+      block.append(name, controls, note);
+
+      if (row.choices) {
+        controls.setAttribute('role', 'radiogroup');
+        controls.setAttribute('aria-label', row.name);
+        for (const choice of row.choices) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'overlay';
+          button.setAttribute('role', 'radio');
+          button.textContent = choice.label;
+          button.addEventListener('click', () => {
+            store.set(row.key, choice.value as Settings[typeof row.key]);
+            this.markSettings();
+          });
+          controls.append(button);
+          this.settingButtons.push({ row, button, value: choice.value });
+        }
+      } else {
+        // A switch, and it says so. The overlays above are one-of-seven and
+        // these are on-or-off; a screen reader told otherwise would announce a
+        // fog toggle as an eighth map overlay.
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'overlay';
+        button.addEventListener('click', () => {
+          store.set(row.key, !store.value[row.key] as Settings[typeof row.key]);
+          this.markSettings();
+        });
+        controls.append(button);
+        this.settingButtons.push({ row, button, value: null });
+      }
+      this.settingNotes.set(row.key, note);
+      this.nodes.settingsBody.append(block);
+    }
+    this.markSettings();
+  }
+
+  /**
+   * Marks every control against what the store currently holds.
+   *
+   * Read back from the store rather than from what was clicked, so a value the
+   * store refused — or one another surface changed — cannot leave the panel
+   * saying something the renderer is not doing.
+   */
+  private markSettings(): void {
+    const store = this.hooks.settings;
+    if (!store) return;
+    const settings = store.value;
+    for (const { row, button, value } of this.settingButtons) {
+      const current = settings[row.key];
+      if (value === null) {
+        button.setAttribute('aria-pressed', String(current === true));
+        button.textContent = current === true ? 'On' : 'Off';
+      } else {
+        button.setAttribute('aria-checked', String(current === value));
+      }
+    }
+    for (const row of this.settingRows()) {
+      const note = this.settingNotes.get(row.key);
+      if (note) note.textContent = row.note(settings[row.key]);
+    }
+  }
+
+  /**
    * Marks whether the camera is at street level.
    *
    * Public for the reason `markOverlay` is: the V key belongs to the view, so
@@ -1228,6 +1473,36 @@ export class Hud {
    */
   markStreet(street: boolean): void {
     this.nodes.streetView.setAttribute('aria-pressed', String(street));
+  }
+
+  /** Wires the tour switch, if the view offered one. Same shape as the street one. */
+  private buildTour(): void {
+    const button = this.nodes.tour;
+    if (!this.hooks.onTour) {
+      button.hidden = true;
+      return;
+    }
+    button.addEventListener('click', () => this.markTour(this.hooks.onTour?.() ?? false));
+    this.markTour(this.hooks.touring?.() ?? false);
+  }
+
+  /**
+   * Marks whether the tour is running, and says where it has got to.
+   *
+   * Public for the reason `markStreet` is: the T key belongs to the view, and
+   * so does *every other key* — any input ends the tour — so the view reports
+   * what happened and the switch follows rather than the two disagreeing.
+   */
+  markTour(running: boolean, where?: string): void {
+    this.nodes.tour.setAttribute('aria-pressed', String(running));
+    // `where` left out means "the switch moved and nobody said where" — which
+    // is the click handler, firing after the view has already announced the
+    // first stop. Clearing the note there would wipe the name a moment after
+    // writing it.
+    const text = !running ? '' : (where ?? this.tourNoteShown);
+    if (text === this.tourNoteShown) return;
+    this.tourNoteShown = text;
+    this.nodes.tourNote.textContent = text;
   }
 
   /**
@@ -1402,7 +1677,7 @@ export class Hud {
    */
   private buildAwards(): void {
     const list = this.nodes.awardsList;
-    const readings = achievementReadings(this.game.state);
+    const readings = visibleReadings(this.game.state);
     for (const group of ACHIEVEMENT_GROUPS) {
       const rows = readings.filter((reading) => reading.achievement.group === group.key);
       if (rows.length === 0) continue;
@@ -1410,22 +1685,39 @@ export class Hud {
       heading.className = 'award-group';
       heading.textContent = group.name;
       list.append(heading);
+      // The heading is the section's tail until a row lands under it, which is
+      // the case that matters: a group whose only entries are secrets nobody
+      // has found yet still has somewhere to put the first one.
+      this.awardGroupTail.set(group.key, heading);
       for (const { achievement } of rows) {
-        const row = document.createElement('div');
-        row.className = 'award locked';
-        const name = document.createElement('span');
-        name.className = 'k';
-        name.textContent = achievement.name;
-        const at = document.createElement('span');
-        at.className = 'at';
-        const note = document.createElement('p');
-        note.className = 'note';
-        note.textContent = achievement.note;
-        row.append(name, at, note);
-        list.append(row);
-        this.awardRows.set(achievement.key, { row, at });
+        list.append(this.awardRow(achievement));
       }
     }
+  }
+
+  /**
+   * One row's markup, and the record of where it went.
+   *
+   * Split out of `buildAwards` because a hidden row is built by the *paint*
+   * rather than by the build — it does not exist in the list until the tick it
+   * fires on. Everything about it is the same row every other award gets, which
+   * is the point: once found, a secret is an ordinary award forever.
+   */
+  private awardRow(achievement: Achievement): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'award locked';
+    const name = document.createElement('span');
+    name.className = 'k';
+    name.textContent = achievement.name;
+    const at = document.createElement('span');
+    at.className = 'at';
+    const note = document.createElement('p');
+    note.className = 'note';
+    note.textContent = achievement.note;
+    row.append(name, at, note);
+    this.awardRows.set(achievement.key, { row, at });
+    this.awardGroupTail.set(achievement.group, row);
+    return row;
   }
 
   /**
@@ -1438,26 +1730,43 @@ export class Hud {
    * instruction and a greyed instruction is still an instruction.
    */
   private paintAwards(s: Readonly<GameState>): void {
-    const readings = achievementReadings(s);
+    const readings = visibleReadings(s);
     // One string compare against a list of two dozen rows, for the reason the
     // card does it: the panel is static between unlocks and rewriting it ten
-    // times a second is DOM traffic carrying no new information.
+    // times a second is DOM traffic carrying no new information. A secret
+    // firing changes the *length* of the list, which this catches for free.
     const shown = readings.map((reading) => `${reading.achievement.key}:${reading.at ?? ''}`).join('|');
     if (shown === this.awardsShown) return;
     this.awardsShown = shown;
 
     for (const { achievement, at } of readings) {
-      const row = this.awardRows.get(achievement.key);
-      if (!row) continue;
+      let row = this.awardRows.get(achievement.key);
+      if (!row) {
+        // A secret, on the tick it was found. It has no markup yet — that is
+        // what hiding it meant — so it is built now and inserted at the end of
+        // its own section rather than at the end of the list.
+        const node = this.awardRow(achievement);
+        this.awardGroupTail.get(achievement.group)?.after(node);
+        // `awardRow` moved the tail to this node, so a second secret in the
+        // same group lands after this one and the section keeps table order.
+        row = this.awardRows.get(achievement.key);
+        if (!row) continue;
+      }
       const locked = at === null;
       row.row.classList.toggle('locked', locked);
       row.at.textContent = locked ? '' : fmtDuration(at);
     }
   }
 
-  /** The count on the tab itself, which is the reason to open it. */
+  /**
+   * The count on the tab itself, which is the reason to open it.
+   *
+   * The denominator is this city's, not the table's — see
+   * `achievementDenominator`. A secret moves both halves at once, so the label
+   * never states how many are left to find.
+   */
   private paintAwardsTab(s: Readonly<GameState>): void {
-    const label = `Awards ${unlockedCount(s)}/${ACHIEVEMENT_COUNT}`;
+    const label = `Awards ${unlockedCount(s)}/${achievementDenominator(s)}`;
     if (label === this.awardsTabShown) return;
     this.awardsTabShown = label;
     const tab = this.tabs.find((entry) => entry.key === 'awards');

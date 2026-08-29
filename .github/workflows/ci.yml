@@ -17,4 +17,18 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npx vite build
+      # `npm run build` rather than `npx vite build`, because the build is two
+      # steps now: the bundle, and then the service worker's precache list,
+      # which is `readdirSync` over what the bundle just produced and cannot be
+      # written before it exists.
+      - run: npm run build
+      # What the build is allowed to weigh, per chunk. Runs against the `dist`
+      # the step above just produced, so it measures the artefact rather than a
+      # guess at it — and it is the same script and the same numbers a
+      # contributor gets from `npm run budget:size` on their own machine.
+      - run: npm run budget:size
+      # And what a simulation tick is allowed to cost. A *ratio* rather than a
+      # time, because a wall-clock assertion on a shared runner measures the
+      # runner — see the header of tools/budget.tick.mjs, and the two vitest
+      # cases that timed out here for exactly that reason.
+      - run: npm run budget:tick

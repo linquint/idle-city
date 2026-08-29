@@ -1,6 +1,15 @@
 import * as THREE from 'three';
 
 export interface GrowableOptions {
+  /**
+   * Whether the mesh joins the shadow pass.
+   *
+   * Mutable, unlike the rest of this, because a shadow-quality step turns it
+   * off for the dressing — see `setCastShadow`. Kept here rather than only on
+   * the mesh so a reallocation reapplies whatever it was last set to: `build`
+   * makes a *new* `InstancedMesh` and a flag that lived only on the old one
+   * would silently come back on the first time a district was annexed.
+   */
   castShadow?: boolean;
   receiveShadow?: boolean;
   renderOrder?: number;
@@ -102,6 +111,17 @@ export class GrowableInstancedMesh {
     if (!this.bounds) return;
     mesh.boundingSphere = this.bounds;
     mesh.frustumCulled = true;
+  }
+
+  /**
+   * Puts the mesh in or out of the shadow pass, under the running game.
+   *
+   * Written to the options as well as to the mesh, for the reason the option's
+   * own comment gives: `ensure` rebuilds the mesh and reads the options back.
+   */
+  setCastShadow(on: boolean): void {
+    this.options.castShadow = on;
+    this.mesh.castShadow = on;
   }
 
   get capacity(): number {

@@ -40,11 +40,21 @@
  * actually tests rather than for the event it stands in for — see `fire-held`,
  * `recovering` and `funded`. The difference is at most a tick, and the reading
  * stays honest.
+ *
+ * ---
+ *
+ * Some rows are `hidden`, and the flag changes nothing about any of the above:
+ * a hidden row is tested on the same pass, records the same entry in `unlocked`
+ * and grants the same nothing. What it changes is the *panel*, and only until
+ * it fires — see `visibleReadings` and `achievementDenominator` for why the
+ * count has to move with it rather than sit above it.
  */
 import {
   CIVIC_SERVICES,
+  FRONTAGE_TARGET,
   HAPPINESS_SERVICES,
   LEVELS,
+  MAX_ACTIVE_FIRES,
   MAX_DISTRICTS,
   MERGE_LEVEL,
   TAX_STEPS,
@@ -52,10 +62,13 @@ import {
 import {
   annexCost,
   coverage,
+  goodsTraded,
   plotsOf,
   educationCoverage,
   hasCoast,
   isRecovering,
+  powerRatio,
+  powerTradeStep,
   recreationCoverage,
   taxStep,
   wouldBurnOut,
@@ -91,6 +104,21 @@ export interface Achievement {
    * every test twice against the same frozen state.
    */
   readonly test: (s: GameState) => boolean;
+  /**
+   * Whether the panel shows the row before it fires.
+   *
+   * Optional and absent everywhere it is false, so every row that was here
+   * before this existed is byte-identical to what it was — which is what keeps
+   * `test/achievements.test.ts`'s "no payout" assertion able to stay a strict
+   * key-set check on the ordinary rows.
+   *
+   * It is a *display* flag and nothing more. A hidden row is tested on the same
+   * pass as every other, records the same entry in `unlocked`, is announced by
+   * the same ticker line when it fires, and grants the same nothing. Once fired
+   * it is an ordinary row forever: full name, full note, its timestamp, and it
+   * never goes back into hiding.
+   */
+  readonly hidden?: true;
 }
 
 /**
@@ -206,6 +234,18 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     note: 'Raise anything to the top of the ladder.',
     test: (s) => anyAtLeastLevel(s, LEVELS - 1),
   },
+  {
+    key: 'dormitory',
+    group: 'growth',
+    name: 'Nowhere to go',
+    hidden: true,
+    // A district's worth of housing is what the generator lays out for one —
+    // read off FRONTAGE_TARGET rather than typed, so the row still means "a
+    // whole district of it" if the plan ever moves.
+    note: `House a district — ${FRONTAGE_TARGET.residential} plots — with not one shop or works in the city.`,
+    test: (s) =>
+      homePlots(s) >= FRONTAGE_TARGET.residential && s.shops === 0 && s.industry === 0,
+  },
 
   // -------------------------------------------------------------------- land
   {
@@ -316,6 +356,26 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
       recreationCoverage(s) >= 1 &&
       HAPPINESS_SERVICES.every((service) => coverage(s, service) >= 1),
   },
+  {
+    key: 'bread-and-circuses',
+    group: 'civic',
+    name: 'Bread and circuses',
+    hidden: true,
+    note: 'Stand a museum and a stadium in a city with no hospital in it.',
+    test: (s) => s.museums >= 1 && s.stadiums >= 1 && s.hospitals === 0,
+  },
+  {
+    key: 'brownout-export',
+    group: 'civic',
+    name: 'Selling what you have not got',
+    hidden: true,
+    note: 'Hold the export agreement while your own grid is short.',
+    // `powerTradeStep` rather than `s.powerTrade`, so a city that set the
+    // agreement and then lost its hall reads as being on neutral — which is
+    // what it is actually running. `powerSurplus` caps the sale at zero in this
+    // state, which is the joke: the agreement is signed and sells nothing.
+    test: (s) => powerTradeStep(s).sells > 0 && powerRatio(s) < 1,
+  },
 
   // ------------------------------------------------------------------- money
   {
@@ -351,6 +411,17 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     // the top of this file.
     test: (s) => s.districts >= 2 && s.cash >= annexCost(s),
   },
+  {
+    key: 'empty-treaty',
+    group: 'money',
+    name: 'A treaty about nothing',
+    hidden: true,
+    note: 'Keep a goods agreement with nothing anywhere to export.',
+    // `goodsTraded` rather than the stored flag, for the reason
+    // `punitive-and-happy` reads `taxStep`: without a hall the policy is not in
+    // force, and the row is about paying `tradeUpkeep` for a tap on nothing.
+    test: (s) => goodsTraded(s) && s.industry === 0 && s.estates === 0,
+  },
 
   // --------------------------------------------------------------- adversity
   {
@@ -379,10 +450,46 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     note: 'Run the punitive rate with happiness above 80%.',
     test: (s) => taxStep(s).income === PUNITIVE_INCOME && s.happiness > 0.8,
   },
+  {
+    key: 'all-boarded',
+    group: 'adversity',
+    name: 'Every window boarded',
+    hidden: true,
+    note: 'Have housing, commerce and industry all boarded up at once.',
+    test: (s) => s.abandonedR > 0 && s.abandonedC > 0 && s.abandonedI > 0,
+  },
+  {
+    key: 'fully-alight',
+    group: 'adversity',
+    name: 'Everything is fine',
+    hidden: true,
+    note: `Have all ${MAX_ACTIVE_FIRES} fires the city can hold burning at the same time.`,
+    test: (s) => s.fires.length >= MAX_ACTIVE_FIRES,
+  },
 ];
 
-/** Rows in the table. What the tab label counts against. */
-export const ACHIEVEMENT_COUNT = ACHIEVEMENTS.length;
+/**
+ * Rows the panel shows a city that has found no secrets — the denominator a
+ * fresh install counts against.
+ *
+ * The *visible* rows, not every row, and that is the whole of the leak. The
+ * label is read constantly and is the only place in the game that states how
+ * many awards exist; counting the hidden ones in it would tell a player exactly
+ * how many secrets there are and — the moment the visible list is complete —
+ * that they are missing some. Knowing there are two left to find is most of the
+ * way to finding them, and it turns a discovery into a checklist.
+ *
+ * So the count only ever covers what can be worked toward, and a hidden row
+ * joins it by *firing*. See `achievementDenominator`, which is what the label
+ * actually reads: it is this plus the hidden rows this city has found, so the
+ * fraction moves from n/27 to n+1/28 on the tick a secret lands. Both halves
+ * move together, which says "you found something that was not on the list"
+ * without ever saying how many more there are.
+ *
+ * Still `ACHIEVEMENTS.length` for a table with no hidden rows in it, which is
+ * what it was before there were any.
+ */
+export const ACHIEVEMENT_COUNT = ACHIEVEMENTS.filter((a) => !a.hidden).length;
 
 /**
  * Simulated seconds between passes over the table.
@@ -401,11 +508,29 @@ export const ACHIEVEMENT_COUNT = ACHIEVEMENTS.length;
  */
 export const ACHIEVEMENT_TEST_SECONDS = 1;
 
-/** How many the city has unlocked. */
+/** How many the city has unlocked, hidden rows included once they have fired. */
 export const unlockedCount = (s: GameState): number => {
   let n = 0;
   for (const achievement of ACHIEVEMENTS) {
     if (s.unlocked[achievement.key] !== undefined) n++;
+  }
+  return n;
+};
+
+/** Whether a row is one the panel has to show this city. */
+const shows = (s: GameState, achievement: Achievement): boolean =>
+  !achievement.hidden || s.unlocked[achievement.key] !== undefined;
+
+/**
+ * What the tab label counts against for *this* city.
+ *
+ * The visible table plus whatever secrets this city has already turned up. See
+ * ACHIEVEMENT_COUNT for why it is not simply the length of the table.
+ */
+export const achievementDenominator = (s: GameState): number => {
+  let n = ACHIEVEMENT_COUNT;
+  for (const achievement of ACHIEVEMENTS) {
+    if (achievement.hidden && s.unlocked[achievement.key] !== undefined) n++;
   }
   return n;
 };
@@ -419,9 +544,24 @@ export interface AchievementReading {
   readonly at: number | null;
 }
 
-/** The whole table with its record applied, in one read, for the HUD. */
+/** The whole table with its record applied, in one read. Hidden rows included. */
 export const achievementReadings = (s: GameState): readonly AchievementReading[] =>
   ACHIEVEMENTS.map((achievement) => ({
     achievement,
     at: s.unlocked[achievement.key] ?? null,
   }));
+
+/**
+ * The rows the panel is allowed to draw, in table order.
+ *
+ * A hidden row that has not fired is *absent* rather than blanked: a greyed row
+ * with its text taken out is still a row, and a player counting them knows both
+ * that a secret exists and roughly where in the ladder it sits. Nothing to
+ * count is the only version of hidden that holds.
+ *
+ * Once fired it is an ordinary reading in its ordinary place — full name, full
+ * note, its timestamp — and it stays there forever, because `unlocked` is only
+ * ever written to.
+ */
+export const visibleReadings = (s: GameState): readonly AchievementReading[] =>
+  achievementReadings(s).filter((reading) => shows(s, reading.achievement));

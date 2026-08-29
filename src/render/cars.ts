@@ -311,7 +311,7 @@ export class Cars {
     scene: THREE.Scene,
     private readonly layout: CityLayout,
     /** Reduced motion parks the fleet. Static cars on a street still read as a city. */
-    private readonly moving: boolean,
+    private moving: boolean,
   ) {
     this.bodies = new GrowableInstancedMesh(
       scene,
@@ -367,6 +367,19 @@ export class Cars {
         to: 0,
       });
     }
+  }
+
+  /**
+   * Turns the animation on or off under the running game.
+   *
+   * The pool is untouched: what `moving` decides is whether a mover advances
+   * along its route each frame and whether a fresh one is placed at the start
+   * of its run or somewhere random along it. Held still, everything is exactly
+   * where it was, which is what makes the switch a switch rather than a
+   * rebuild.
+   */
+  setMoving(on: boolean): void {
+    this.moving = on;
   }
 
   /**

@@ -29,6 +29,12 @@ export const PALETTE = {
   // reads as a parade from the play camera rather than as one long block.
   awning: 0xb9c2cf,
   sodium: 0xf0a64b,
+  // Scaffolding, up around whatever is being built and down the frame it
+  // finishes. A warm ochre against a city of cool concrete, dark shop blue and
+  // darker industry: a site has to be findable across a district, and the only
+  // other warm things on the map are a pitched roof (browner) and a sodium lamp
+  // (which is a glow material and reads as light rather than as timber).
+  scaffold: 0xc99a4e,
   // Survey ground: sellable frontage the city owns and has zoned to nothing.
   // A dry, pale earth against the courtyard's grey — it has to read as *land*
   // rather than as an empty civic square, because the two are next to each other

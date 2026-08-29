@@ -1,3 +1,7 @@
+/* The two families, self-hosted and precached. Generated — see tools/fonts.mjs.
+   First, because an @import has to precede every rule in the sheet. */
+@import './fonts.css';
+
 /* Kept in step with PALETTE in src/render/palette.ts. The panel colours are a
    shade lighter than the world behind them now that the world is daylit — a
    near-black HUD over a blue sky reads as a hole punched in the scene. */
@@ -478,6 +482,76 @@ button.overlay[aria-checked='true'] {
   color: var(--dim);
 }
 .overlay-note:empty { display: none; }
+
+/* A click, acknowledged before the simulation has answered.
+   The simulation is a message away — up to a tenth of a second, which is one
+   tick — so a button that waited for the numbers to move would sit there having
+   visibly done nothing, and that is exactly how a broken button feels. This is
+   an acknowledgement and *not* a promise: nothing about the city is drawn until
+   the simulation says it changed, so a purchase the simulation refuses ends
+   with the flash and no other consequence, which is what a click on a disabled
+   button has always done.
+   Under reduced motion it is a flat highlight rather than a pulse, for the
+   reason every other animation in here answers the flag. */
+@keyframes acted {
+  from { background: rgba(240, 166, 75, 0.30); }
+  to { background: transparent; }
+}
+button.acted { animation: acted 260ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  button.acted { animation-duration: 90ms; }
+}
+
+/* The display settings, under the overlay chips and wearing their chip styling
+   on the summary, so the shelf still reads as one strip of map controls rather
+   than as a widget that wandered in. A native <details>, so open/closed,
+   keyboard focus and the screen-reader announcement all come free. */
+.settings {
+  margin-top: 6px;
+  pointer-events: auto;
+}
+/* The marker is the wrong affordance here: every other control on this shelf is
+   a chip, and a disclosure triangle beside one would be the only triangle on
+   the screen. The open state is carried by the panel appearing. */
+.settings > summary {
+  display: inline-block;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.settings > summary::-webkit-details-marker { display: none; }
+.settings[open] > summary {
+  border-color: var(--sodium);
+  color: var(--concrete);
+  background: rgba(240, 166, 75, 0.14);
+}
+.settings-body {
+  margin-top: 6px;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--line);
+  background: rgba(12, 17, 27, 0.86);
+  backdrop-filter: blur(3px);
+}
+.setting + .setting { margin-top: 9px; }
+.setting-name {
+  margin: 0 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.setting-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.setting-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--dim);
+}
+.setting-note:empty { display: none; }
 
 /* The graphs.
 
@@ -1254,6 +1328,9 @@ button.primary {
   .overlays::-webkit-scrollbar { display: none; }
   button.overlay { flex: 0 0 auto; }
   .overlay-note { padding-right: 20px; }
+  /* The panel would otherwise run to the edge of the phone, where the overlay
+     row's own gutter is what everything else on this shelf is measured from. */
+  .settings-body { max-width: 320px; }
 
   /* Two columns for the treasury's rows, which are label/value pairs and waste
      a full-width sheet one at a time. */

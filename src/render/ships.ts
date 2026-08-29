@@ -103,7 +103,7 @@ export class Ships {
   constructor(
     scene: THREE.Scene,
     /** Reduced motion parks the fleet. Ships at anchor still read as a port. */
-    private readonly moving: boolean,
+    private moving: boolean,
   ) {
     this.hulls = new GrowableInstancedMesh(
       scene,
@@ -138,6 +138,19 @@ export class Ships {
         routed: false,
       });
     }
+  }
+
+  /**
+   * Turns the animation on or off under the running game.
+   *
+   * The pool is untouched: what `moving` decides is whether a mover advances
+   * along its route each frame and whether a fresh one is placed at the start
+   * of its run or somewhere random along it. Held still, everything is exactly
+   * where it was, which is what makes the switch a switch rather than a
+   * rebuild.
+   */
+  setMoving(on: boolean): void {
+    this.moving = on;
   }
 
   /**

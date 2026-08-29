@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { CELL, LEVELS, SEED } from '../src/sim/config';
+import { CELL, LEVELS, MAX_DISTRICTS, SEED } from '../src/sim/config';
 import { CityLayout } from '../src/sim/layout';
 import {
   bodyExtent,
@@ -9,7 +9,7 @@ import {
   buildingStyle,
 } from '../src/render/buildings';
 import { createState, type GameState, type ZoneKind } from '../src/sim/state';
-import { housed, making, mix, trading } from './levels';
+import { cohort, housed, making, mix, trading } from './levels';
 
 /**
  * The building layer, checked as a black box.
@@ -346,5 +346,134 @@ describe('building style', () => {
     for (const key of keys) expect(key.toLowerCase()).not.toContain('variant');
     // And the seed is genuinely an input: a different seed is a different city.
     expect(SEED).toBeTypeOf('number');
+  });
+});
+
+describe('the cages on what is being built', () => {
+  /** The one scaffold mesh, found the way every other test finds a mesh. */
+  const cage = (root: THREE.Object3D): THREE.InstancedMesh => {
+    const found = meshes(root, 'part:scaffold');
+    expect(found).toHaveLength(1);
+    return found[0] as THREE.InstancedMesh;
+  };
+
+  /** What the cage mesh actually submits: nothing at all when it is hidden. */
+  const standing = (mesh: THREE.InstancedMesh): number => (mesh.visible ? mesh.count : 0);
+
+  it('costs one mesh, and draws none of it on a settled city', () => {
+    const root = new THREE.Scene();
+    const buildings = new Buildings(root, new CityLayout());
+    const mesh = cage(root);
+    expect(mesh.visible).toBe(false);
+
+    // A city that arrived already built — a save being loaded — animates, so
+    // it is caged; run past the animation and the cages come down.
+    buildings.sync(state({ ...housed(24) }), 0);
+    buildings.update(0.1);
+    expect(standing(mesh)).toBeGreaterThan(0);
+    buildings.update(10);
+    expect(standing(mesh)).toBe(0);
+    expect(mesh.visible).toBe(false);
+  });
+
+  it('cages exactly what is mid-growth, and nothing that has finished', () => {
+    const root = new THREE.Scene();
+    const buildings = new Buildings(root, new CityLayout());
+    const mesh = cage(root);
+    // Settle the opening city first, so the only thing moving is the purchase.
+    buildings.sync(state({ ...housed(24) }), 0);
+    buildings.update(10);
+    expect(standing(mesh)).toBe(0);
+
+    buildings.sync(state({ ...housed(28) }), 10);
+    buildings.update(10.1);
+    expect(standing(mesh)).toBe(4);
+    expect(buildings.scaffolds).toBe(4);
+  });
+
+  it('takes the cage down on the same frame the growth retires', () => {
+    // The bug this is here for: a cage keyed to a building rather than to the
+    // animation would need something to come back and remove it, and nothing
+    // does. `GrowthSchedule` drops an index the frame its scale reaches 1, so
+    // the cage list simply does not include it on that frame.
+    const root = new THREE.Scene();
+    const buildings = new Buildings(root, new CityLayout());
+    const mesh = cage(root);
+    buildings.sync(state({ ...housed(1) }), 0);
+
+    let lastCaged = 0;
+    let lastMoving = true;
+    for (let frame = 1; frame <= 200 && lastMoving; frame++) {
+      const now = frame * 0.02;
+      lastMoving = buildings.update(now);
+      lastCaged = standing(mesh);
+      // Never a cage on a frame with nothing in flight, at any point.
+      if (!lastMoving) expect(lastCaged).toBe(0);
+      else expect(lastCaged).toBe(1);
+    }
+    expect(lastMoving).toBe(false);
+    expect(lastCaged).toBe(0);
+    // And it stays down: a frame after the animation ended writes nothing.
+    buildings.update(20);
+    expect(standing(mesh)).toBe(0);
+  });
+
+  it('is sized for a wave rather than for the city', () => {
+    // The case the budget exists for: a twelve-hour catch-up staging a full
+    // wave in all three zones at once. `stage` caps each at WAVE_BUDGET, so the
+    // cage count is bounded by the budget and not by the four thousand
+    // buildings standing around it.
+    const root = new THREE.Scene();
+    const buildings = new Buildings(root, new CityLayout());
+    const mesh = cage(root);
+    const huge = state({
+      districts: MAX_DISTRICTS,
+      homes: 4_000,
+      homeLevels: mix(4_000),
+      shops: 2_000,
+      shopLevels: mix(2_000),
+      industry: 600,
+      industryLevels: mix(600),
+    });
+    buildings.sync(huge, 0);
+    buildings.update(0.01);
+    const caged = standing(mesh);
+    expect(caged).toBeGreaterThan(0);
+    // Three zones, one wave each, and never one cage per building.
+    expect(caged).toBeLessThanOrEqual(3 * 320);
+    expect(caged).toBeLessThan(4_000);
+    buildings.update(100);
+    expect(standing(mesh)).toBe(0);
+  });
+
+  it('wraps a merged parcel rather than one plot of it', () => {
+    // A cage sized for a detached house standing around an arcology would read
+    // as a bug, so the cage takes the *drawn* footprint — the same number the
+    // body's own merged stretch is built from.
+    const box = new THREE.Matrix4();
+    const size = new THREE.Vector3();
+
+    // A fresh layer per reading, because a merge is exactly what `stage` now
+    // clears in-flight animations on — see its note. Two readings from one
+    // layer would be measuring the second against a wiped schedule.
+    const spanOf = (levels: number[], homes: number, merged = 0): number => {
+      const root = new THREE.Scene();
+      const buildings = new Buildings(root, new CityLayout());
+      const mesh = cage(root);
+      buildings.sync(state({ homes, homeLevels: [...levels], mergedR: merged }), 0);
+      buildings.update(0.01);
+      expect(standing(mesh)).toBeGreaterThan(0);
+      mesh.getMatrixAt(0, box);
+      size.setFromMatrixScale(box);
+      return Math.max(size.x, size.z);
+    };
+
+    const detached = spanOf(mix(4), 4);
+    // The top rung is above MERGE_LEVEL, so the parcel is two plots long and
+    // the cage has to be too.
+    const merged = spanOf(cohort(4, LEVELS - 1), 4, 4);
+    expect(merged).toBeGreaterThan(detached * 1.5);
+    // Both stand on the ground rather than floating, whatever they wrap.
+    expect(size.y).toBeGreaterThan(0);
   });
 });
