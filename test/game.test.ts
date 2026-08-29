@@ -5,6 +5,7 @@ import {
   CATCHUP_MAX_LOSSES,
   CATCHUP_MAX_STEPS,
   CATCHUP_STEP_SECONDS,
+  FRONTAGE_TARGET,
   MAX_DISTRICTS,
   OFFLINE_CAP_SECONDS,
   START_CASH,
@@ -395,6 +396,14 @@ describe('pacing', () => {
  * homes burned down" are different reports, and the second explains the first.
  */
 describe('the away timeline', () => {
+  /** A city of `districts`, zoned and built out to the frontage each one sells. */
+  const builtOut = (districts: number): Partial<GameState> => ({
+    ...zoning(districts),
+    ...housedOn(FRONTAGE_TARGET.residential * districts),
+    ...trading(FRONTAGE_TARGET.commercial * districts),
+    ...making(FRONTAGE_TARGET.industrial * districts),
+  });
+
   const busy = (): GameState =>
     state({
       ...zoning(6),
@@ -430,12 +439,18 @@ describe('the away timeline', () => {
   });
 
   it('is bounded across a twelve-hour absence, and says what it dropped', () => {
-    const game = new Game(busy());
+    // A bigger city than `busy()`, and the reason is worth recording. The ring
+    // fills mostly with level-ups, and what drives those is occupancy, which
+    // carries a demand term — so the commercial price repair, which stopped the
+    // away city pouring everything into a pinned commercial signal, halved the
+    // level-ups a six-district absence produces. Measured: `busy()` went from
+    // 102 entries over twelve hours to 52, under a ring of 64, which would have
+    // left this asserting the bound against a city that never reached it. A
+    // district built out to its frontage produces about 7 entries per district
+    // per absence, so twelve districts is 90 against the ring's 64.
+    const game = new Game(state({ ...busy(), ...builtOut(12) }));
     const report = game.catchUp(OFFLINE_CAP_SECONDS);
     expect(report.timeline.length).toBeLessThanOrEqual(AWAY_EVENT_BUFFER);
-    // Measured: a mid-size auto-developing city produces 117 distinct entries
-    // over twelve hours against a ring of 64, so the bound genuinely bites and
-    // the count of what it lost is what keeps the sheet honest.
     expect(report.dropped).toBeGreaterThan(0);
     expect(report.timeline.length + report.dropped).toBeGreaterThan(AWAY_EVENT_BUFFER);
   });

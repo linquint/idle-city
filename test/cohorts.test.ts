@@ -448,6 +448,15 @@ describe('abandonment', () => {
   });
 
   it('leaves a written-off city something to climb out on', () => {
+    // Seven hours in tenth-second ticks is 252,000 of them, and the budget is
+    // stated for the same reason `fire.test.ts` states its own: a test whose
+    // cost is the tick count has no business inheriting a 5-second default it
+    // is already inside. Measured on this city, 5.16 us a tick — 1.3 seconds
+    // outside vitest and 3.1 inside it, which cleared the default locally and
+    // did not clear it on a CI runner. It has timed out there twice on two
+    // different commits, once on master before any of the work this budget
+    // arrived with. The number is what the measurement says, not cover for a
+    // hang: nothing about the loop below is unbounded.
     const game = at({
       ...housed(2 * COVERAGE_GRACE_PLOTS),
       ...trading(15),
@@ -479,7 +488,7 @@ describe('abandonment', () => {
     const hospital = SERVICES.find((service) => service.key === 'hospital') as Service;
     const hours = hospital.base / (game.state.cash - before);
     expect(hours).toBeLessThan(2);
-  });
+  }, 20_000);
 });
 
 describe('promotion', () => {

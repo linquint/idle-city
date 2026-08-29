@@ -85,9 +85,21 @@ Prices follow the allotment, per district: each district contributes the share
 of its *own* land that is built on, so filling any district costs one district's
 multiple whether that district holds eight commercial plots or fifty-five — and
 annexation is price-neutral by construction, because a new district appends a
-term whose numerator is zero. At the split every district sold before this
-existed the curve is `BASE × 1.14 ** n` to fifteen digits, so a v9 save reopens
-on exactly the land and exactly the prices it was left on.
+term whose numerator is zero.
+
+**Both pool zones fill a district for the same multiple.** Housing and commerce
+compound at `1.14` and `1.0724` a plot, and the two rates are the same number
+said twice: a district sells 45 commercial plots against 24 residential, so
+matching the *rates* charged commerce `1.14 ** 45` to fill a district against
+housing's `1.14 ** 24`. Sixteen times as much, compounding again with every
+district the city took — 2,737x by the eighth — which is how a city ends up
+staring at a commercial demand bar pinned at +100% and a shop it can never buy.
+Nothing on the demand side reaches that: the two prices diverge as
+`16 ** districts` whatever the city wants. So the gap between the zones lives on
+the base, where a gap stays a gap — a shop is 1.375 houses at every share of the
+land its zone has been given — and the exponent is one number for both. Industry
+keeps its own, because `INDUSTRY_RESERVE` caps its allotment at 13 plots and an
+exponent with no pool to win cannot run away.
 
 **Generated districts.** Streets are not a grid. Each axis of a district is a
 seeded walk in steps of 3-7, so blocks come out anywhere from 2x2 to 6x6, and
@@ -288,14 +300,21 @@ stops "press whichever button is cheapest" from being the dominant strategy.
 
 **A bigger shop serves a bigger crowd, sub-linearly.** Jobs are flat per plot at
 every level and always will be — that is the arc `WORKING_SHARE` describes, and
-a ladder on them freezes it — but trips, goods drawn and goods made climb at the
-square root of capacity. Flat, they made the city want 0.29 commercial plots per
-housing plot at the bottom of the ladder and 85.71 at the top, against the 1.88 a
-district sells: 45.7x short of commerce with nothing a player could do about it,
-which is what pinned commerce at +1 and housing at -1 the moment the two drifted
-apart. What it costs is build-out — a demand-neutral district of towers settles
-at 24.7% against a 70% annexation gate where it settled at 89.9% — and the
-answer to that is land supply rather than a constant.
+a ladder on them freezes it — but trips, goods drawn and goods made climb with
+capacity to the power 0.65. Flat, they made the city want 0.29 commercial plots
+per housing plot at the bottom of the ladder and 85.71 at the top, against the
+1.88 a district sells: 45.7x short of commerce with nothing a player could do
+about it, which is what pinned commerce at +1 and housing at -1 the moment the
+two drifted apart.
+
+The exponent is set by where the ask *ends*, not where it crosses the land. At
+the square root it ended at 4.95 commercial plots per housing plot — still 2.6x
+the land, so a city that climbed to the top rung spent its whole endgame with the
+signal against its bound, and reaching the ratio meant zoning a district 11
+residential against 57 commercial one parcel at a time. At 0.65 the top rung asks
+for 2.10, or 12% more than a district already sells, which is a couple of parcels
+of surveying. Higher than about 0.7 and the top rung wants *less* commerce than
+the land offers, and the zone stops being something the city has to argue for.
 
 **Services reach demand directly, not only through mood.** Until `DEMAND_TERMS`
 existed, everything the player built reached the demand loop through exactly one

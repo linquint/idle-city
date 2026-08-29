@@ -72,7 +72,16 @@ describe('costs', () => {
  * Housing and commerce are two curves out of one starting price now, rather
  * than two different games. A shop used to open at 11.3x a house and reach
  * 43.7x by the twentieth of each, which made commerce something you unlocked;
- * it opens at 1.13x and reaches 2.24x, which makes it something you choose.
+ * it opens at 1.375x and stays there, which makes it something you choose.
+ *
+ * "Stays there" is measured per *share of the land the zone is given*, not per
+ * count, and that is the change this block last took. A district sells 45
+ * commercial plots against 24 residential, so matching the two growth rates
+ * charged commerce `1.14 ** 45` to fill a district against housing's
+ * `1.14 ** 24` — 16x, compounding again with every district the city took, and
+ * a built city could no longer afford the one thing its own demand panel was
+ * asking for. Both zones fill a district for the same multiple now. See
+ * DISTRICT_FILL_MULTIPLE.
  *
  * Undiscounted throughout: a fresh city sits at zero demand, so these are the
  * constants themselves and not what a demand swing did to them.
@@ -87,30 +96,50 @@ describe('residential and commercial parity', () => {
   });
 
   /**
-   * Commerce and housing compound at the *same* rate now, and the wider district
-   * is why. A shop used to compound faster than a house, which was fine over 31
-   * plots and is not over 45: 9 x 1.18^45 fills a district's commerce for 67.6x
-   * what its housing costs, where 31 plots came to 6.6x. Matching the curves
-   * fixes the exponent and leaves the whole gap on the base, so a shop is 1.375
-   * times a house at every n rather than 1.13 at the first and 8x at the last.
+   * The price *order* being constant is what a discount-chasing player is held
+   * up by: they buy whatever is cheapest, so a curve that crosses housing's is
+   * a curve that eventually makes shops the only thing worth buying — measured,
+   * one such pair stalled that policy at 15 shops, four homes and no hospital
+   * it could ever save up for.
    *
-   * The price *order* being constant is worth more than the gap widening. A
-   * discount-chasing player buys whatever is cheapest, so a curve that crosses
-   * housing's is a curve that eventually makes shops the only thing worth
-   * buying — measured, that policy stalled at 15 shops, four homes and no
-   * hospital it could ever save up for.
+   * What that order is measured over is the share of the land each zone is
+   * given, not the count. The two are the same thing only while a district
+   * sells both zones the same number of plots, and it does not: 45 against 24.
+   * So the sixth shop and the sixth house are an eighth of a district's
+   * commerce against a quarter of its housing, and comparing them was standing
+   * in for this. At equal share the ratio is exactly the ratio of the two bases,
+   * at every share, and it never crosses.
+   *
+   * The raw order does cross, from the sixth of each on, and that is stated
+   * rather than hidden — see SHOP_BASE, where the livelock above was re-measured
+   * against the crossing curve rather than assumed away.
    */
-  it('keeps commerce dearer than housing at every step', () => {
-    for (let n = 0; n <= FRONTAGE_TARGET.commercial; n++) {
-      expect(shop(n)).toBeGreaterThan(home(n));
+  it('keeps commerce dearer than housing at every share of its own land', () => {
+    // Thirds, because 45 and 24 are both divisible by 3 and a share has to land
+    // on a whole plot in each zone to be a price at all.
+    const steps = 3;
+    const shopsPer = FRONTAGE_TARGET.commercial / steps;
+    const homesPer = FRONTAGE_TARGET.residential / steps;
+    expect(Number.isInteger(shopsPer) && Number.isInteger(homesPer)).toBe(true);
+    for (let k = 0; k <= steps; k++) {
+      expect(shop(shopsPer * k)).toBeGreaterThan(home(homesPer * k));
+      expect(shop(shopsPer * k) / home(homesPer * k)).toBeCloseTo(SHOP_BASE / HOME_BASE, 9);
     }
-    expect(shop(20) / home(20)).toBeCloseTo(shop(0) / home(0), 6);
   });
 
   /**
-   * The trap this change had to avoid. Cheap shops are only a rebalance if the
-   * bonus moves with them; left alone, the strongest income multiplier in the
-   * game goes on sale and the opening collapses into one button.
+   * The trap every commercial rebalance has to avoid. Cheap shops are only a
+   * rebalance if what they buy is priced against them; left alone, the strongest
+   * income multiplier in the game goes on sale and the opening collapses into
+   * one button.
+   *
+   * The floor has real margin at neither end now, and that is deliberate: the
+   * flatter curve puts ten shops at 307 per 1.0 of SHOP_BONUS against the 425
+   * the last rebalance aimed at, so this assertion is a canary rather than a
+   * bound with room in it. Anything that lowers SHOP_BASE or flattens the curve
+   * further has to come back here and answer for it. SHOP_BASE carries what was
+   * measured instead — the shop multiplier's share of income, which is what
+   * "collapses into one button" actually looks like in a 24-hour run.
    */
   it('keeps the price of the shop multiplier from collapsing', () => {
     const tenShops = Array.from({ length: 10 }, (_, n) => shop(n)).reduce((a, b) => a + b, 0);
@@ -123,10 +152,16 @@ describe('residential and commercial parity', () => {
 
   /**
    * A district sells 45 commercial plots against 24 residential, so commerce is
-   * the expensive half by *count* now rather than by curve — each shop is 1.375
-   * houses and there are 88% more of them. That is what stops "shops are cheap
-   * now" becoming "shops are free", and it is a bound the plot split can be
-   * read off rather than a coincidence of two exponents.
+   * the expensive half by *count* and by nothing else — each shop is 1.375
+   * houses and there are 88% more of them, which multiplies out to about 2.6x.
+   * That is what stops "shops are cheap now" becoming "shops are free", and it
+   * is a bound the plot split can be read straight off.
+   *
+   * The upper bound is the one that moved and it is the point of the change:
+   * this used to read 22.5x, because the two zones filled a district for
+   * `1.14 ** 45` against `1.14 ** 24`, and an exponent charged for the width of
+   * a frontage is a gap that compounds with every district rather than a price.
+   * A ceiling of 4x is what says the gap now lives on the base.
    */
   it('leaves commerce the dearer half of a district to fill', () => {
     const fill = (cost: (n: number) => number, plots: number): number =>
@@ -134,8 +169,12 @@ describe('residential and commercial parity', () => {
     const housing = fill(home, FRONTAGE_TARGET.residential);
     const commerce = fill(shop, FRONTAGE_TARGET.commercial);
     expect(FRONTAGE_TARGET.commercial).toBeGreaterThan(FRONTAGE_TARGET.residential);
-    expect(commerce).toBeGreaterThan(housing * 4);
-    expect(commerce).toBeLessThan(housing * 40);
+    // More than the plot count alone would give, because each of them is 1.375
+    // houses, and less than the base ratio times the count with room to spare.
+    expect(commerce / housing).toBeGreaterThan(
+      FRONTAGE_TARGET.commercial / FRONTAGE_TARGET.residential,
+    );
+    expect(commerce / housing).toBeLessThan(4);
   });
 });
 
