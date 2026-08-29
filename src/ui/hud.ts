@@ -64,6 +64,16 @@ import {
   POWER_TRADES,
   RIVAL_MATCH_DISTRICTS,
   TERMINALS,
+  TRANSIT_LINES,
+  CULTURE,
+  CRIME_FROM_IDLENESS,
+  WASTE_RECYCLING,
+  LIBRARY_CRIME_RELIEF,
+  THEATRE_VISITORS,
+  NETWORK_EXPORT_LIFT,
+  FIRE_RESPONSE,
+  POLICE_RESPONSE,
+  RAIL_VISITORS,
   type PowerTrade,
 } from '../sim/config';
 import {
@@ -89,6 +99,22 @@ import {
   canBuildCityHall,
   canBuildPlant,
   canBuildTerminal,
+  canBuildLine,
+  canBuildCulture,
+  garbageRate,
+  recyclingCoverage,
+  cultureBlocker,
+  cultureReadings,
+  libraryCoverage,
+  theatreCoverage,
+  lineBlocker,
+  missesDeadline,
+  responseSeconds,
+  responseThreshold,
+  networkCapacity,
+  networkReach,
+  networkService,
+  transitLineReadings,
   ascendBlocker,
   canAscend,
   cityHallBlocker,
@@ -192,6 +218,7 @@ import {
   housingCentrality,
   portDistrict,
   type CityLayout,
+  networkedDistricts,
 } from '../sim/layout';
 import type { GameState, ZoneKind } from '../sim/state';
 
@@ -626,8 +653,26 @@ export class Hud {
     transitCongestion: el('transit-congestion'),
     crimeRate: el('crime-rate'),
     crimeMood: el('crime-mood'),
+    callResponse: el('call-response'),
+    callOutcome: el('call-outcome'),
+    fireResponse: el('fire-response'),
+    fireOutcome: el('fire-outcome'),
     garbageRate: el('garbage-rate'),
     garbageMood: el('garbage-mood'),
+    wasteCut: el('waste-cut'),
+    wasteEffect: el('waste-effect'),
+    culture: el('culture'),
+    cultureLibrary: el('culture-library'),
+    cultureIdleness: el('culture-idleness'),
+    cultureTheatre: el('culture-theatre'),
+    cultureAudience: el('culture-audience'),
+    network: el('network'),
+    networkReach: el('network-reach'),
+    networkWhere: el('network-where'),
+    networkCapacity: el('network-capacity'),
+    networkService: el('network-service'),
+    networkFreight: el('network-freight'),
+    networkArrivals: el('network-arrivals'),
     transitCongestionMood: el('transit-congestion-mood'),
     landmarkShare: el('landmark-share'),
     landmarkMood: el('landmark-mood'),
@@ -693,6 +738,28 @@ export class Hud {
     button: el<HTMLButtonElement>(`build-${terminal.key}`),
     cost: el(`build-${terminal.key}-cost`),
     allowance: el(`build-${terminal.key}-built`),
+  }));
+
+  /**
+   * One row per rung of the network, in the same shape as the two above.
+   *
+   * In the Services tab rather than in Trade, because the thing a line is a
+   * rung *above* — the depot — lives there, and a player looking for what to do
+   * about their traffic should find both in one place.
+   */
+  /** One row per culture type, in the same shape as the landmark rows. */
+  private readonly cultureNodes = CULTURE.map((culture) => ({
+    culture,
+    button: el<HTMLButtonElement>(`build-${culture.key}`),
+    cost: el(`build-${culture.key}-cost`),
+    allowance: el(`build-${culture.key}-built`),
+  }));
+
+  private readonly lineNodes = TRANSIT_LINES.map((line) => ({
+    line,
+    button: el<HTMLButtonElement>(`build-${line.key}`),
+    cost: el(`build-${line.key}-cost`),
+    allowance: el(`build-${line.key}-built`),
   }));
 
   private readonly tabs = TAB_KEYS.map((key) => ({
@@ -850,6 +917,16 @@ export class Hud {
     for (const row of this.terminalNodes) {
       row.button.addEventListener('click', () =>
         this.act({ kind: 'terminal', key: row.terminal.key }, row.button),
+      );
+    }
+    for (const row of this.lineNodes) {
+      row.button.addEventListener('click', () =>
+        this.act({ kind: 'line', key: row.line.key }, row.button),
+      );
+    }
+    for (const row of this.cultureNodes) {
+      row.button.addEventListener('click', () =>
+        this.act({ kind: 'culture', key: row.culture.key }, row.button),
       );
     }
     n.airport.addEventListener('click', () => this.act({ kind: 'airport' }, n.airport));
@@ -1156,6 +1233,15 @@ export class Hud {
       case 'fire-lost':
         return {
           text: `${many(event.count)} ${zonePlural(event.zone, event.count)} lost to fire`,
+          tone: 'bad',
+        };
+      case 'call-missed':
+        // Nothing is lost, so this is the one `bad` line in the log that names
+        // no casualty. What it costs is on the crime bar — see UNANSWERED_CRIME.
+        return {
+          text: event.count > 1
+            ? `${many(event.count)} calls in the ${ZONE_LABEL[event.zone].toLowerCase()} zone went unanswered`
+            : `A call in the ${ZONE_LABEL[event.zone].toLowerCase()} zone went unanswered`,
           tone: 'bad',
         };
       case 'blocked':
@@ -2014,6 +2100,29 @@ export class Hud {
       `Crime ${Math.round(crimeAt * 100)} percent` +
         (crimeAt > 0 ? `, costing ${(CRIME_MOOD * crimeAt * 100).toFixed(1)} points of mood` : ''),
     );
+
+    // The two emergency responses, in one shape because they are one model.
+    // Both say the same three things: how long the answer takes, whether that
+    // beats the deadline, and what is open right now. See RESPONSES.
+    for (const [row, seconds, outcome, open, lost] of [
+      [POLICE_RESPONSE, n.callResponse, n.callOutcome, s.calls.length, 'goes unanswered'],
+      [FIRE_RESPONSE, n.fireResponse, n.fireOutcome, s.fires.length, 'takes the building'],
+    ] as const) {
+      const answer = responseSeconds(s, row);
+      const misses = missesDeadline(s, row);
+      seconds.textContent = `${answer.toFixed(0)}s`;
+      const at = `${Math.round(responseThreshold(row) * 100)}%`;
+      outcome.textContent =
+        open > 0
+          ? `${fmtInt(open)} open, ${misses ? `each ${lost}` : 'all answered in time'}`
+          : misses
+            ? `too slow — ${at} coverage answers in time`
+            : 'inside the deadline';
+      spoken.push(
+        `${row.key === 'fire' ? 'Fire' : 'Police'} response ${answer.toFixed(0)} seconds, ` +
+          `${misses ? 'past' : 'inside'} the ${row.deadline} second deadline.`,
+      );
+    }
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
     // Power gets a block of its own because it is the one thing the city can run
@@ -2066,6 +2175,56 @@ export class Hud {
       bins <= 0
         ? 'no effect on mood'
         : `−${(GARBAGE_MOOD * bins * 100).toFixed(1)} points of mood`;
+    // What recycling keeps out of the stream, which is the waste depot's whole
+    // job — it is not a second collector. Stated as bags a second rather than
+    // as a share, because the share is on the row above it and what a player
+    // wants from this one is the size of the thing it is cutting.
+    const kept = WASTE_RECYCLING * recyclingCoverage(s);
+    n.wasteCut.textContent = pct(kept);
+    n.wasteEffect.textContent =
+      kept <= 0
+        ? 'nothing kept out of the stream'
+        : `${fmt((garbageRate(s) * kept) / Math.max(1e-9, 1 - kept))} bags a second kept out`;
+
+    // And the network above it. Two numbers rather than one, because
+    // `networkService` is the *lesser* of reach and capacity and a single
+    // figure would leave the player unable to tell which line to lay next.
+    for (const { line, built, allowed, cost } of transitLineReadings(s)) {
+      const row = this.lineNodes.find((entry) => entry.line.key === line.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(cost);
+      row.button.disabled = !canBuildLine(s, line);
+      row.button.title = lineBlocker(s, line) ?? line.buildLabel;
+    }
+    const joined = networkReach(s);
+    const room = networkCapacity(s);
+    const served = networkService(s);
+    const lines = s.tramLines + s.railLines;
+    n.networkReach.textContent = pct(joined);
+    n.networkWhere.textContent =
+      lines <= 0
+        ? 'no line laid'
+        : `${fmtInt(networkedDistricts(s.tramLines, s.railLines, s.districts))} of ` +
+          `${fmtInt(s.districts)} districts joined`;
+    n.networkCapacity.textContent = pct(room);
+    n.networkService.textContent =
+      served <= 0 ? 'carries nothing yet'
+      : room < reach ? 'short of capacity — more lines'
+      : reach < room ? 'short of track — more districts'
+      : 'the whole city, carried';
+    n.networkFreight.textContent =
+      served <= 0 ? '—' : `+${Math.round(NETWORK_EXPORT_LIFT * served * 100)}%`;
+    n.networkArrivals.textContent =
+      served <= 0
+        ? 'no arrivals by rail'
+        : `${fmt(visitorSources(s).rail)} arriving by rail`;
+    n.network.setAttribute(
+      'aria-label',
+      `Network: ${lines} lines reaching ${Math.round(joined * 100)} percent of the city ` +
+        `and carrying ${Math.round(room * 100)} percent of it.`,
+    );
+
     n.transit.setAttribute(
       'aria-label',
       `Transport: ${s.depots} depots covering ${Math.round(transitCoverage(s) * 100)} percent, ` +
@@ -2165,6 +2324,38 @@ export class Hud {
    */
   private paintLandmarks(s: Readonly<GameState>): void {
     const n = this.nodes;
+    // Culture first, because it is the cheap tier and sits above the landmarks
+    // in the panel. Neither row says "points of mood", and that is the feature
+    // rather than an omission — see CULTURE.
+    for (const { culture, built, allowed, cost } of cultureReadings(s)) {
+      const row = this.cultureNodes.find((entry) => entry.culture.key === culture.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(cost);
+      row.button.disabled = !canBuildCulture(s, culture);
+      row.button.title = cultureBlocker(s, culture) ?? culture.buildLabel;
+    }
+    const reading = libraryCoverage(s);
+    const stage = theatreCoverage(s);
+    n.cultureLibrary.textContent = pct(reading);
+    // Stated as what it takes off the idleness half rather than as a coverage,
+    // because a coverage on its own says nothing a player can act on.
+    n.cultureIdleness.textContent =
+      reading <= 0
+        ? 'no effect on crime'
+        : `−${Math.round(LIBRARY_CRIME_RELIEF * reading * CRIME_FROM_IDLENESS * 100)}% of crime pressure`;
+    n.cultureTheatre.textContent = pct(stage);
+    n.cultureAudience.textContent =
+      stage <= 0
+        ? 'no audience yet'
+        : `${fmt(visitorSources(s).stage)} arriving for the show`;
+    n.culture.setAttribute(
+      'aria-label',
+      `Culture: libraries reaching ${Math.round(reading * 100)} percent of the city, ` +
+        `theatres ${Math.round(stage * 100)} percent, worth ` +
+        `${(THEATRE_VISITORS * stage).toFixed(1)} berths of arrivals.`,
+    );
+
     for (const { landmark, built, allowed, cost } of landmarkReadings(s)) {
       const row = this.landmarkNodes.find((entry) => entry.landmark.key === landmark.key);
       if (!row) continue;
@@ -2228,7 +2419,12 @@ export class Hud {
     // road tourism is ROAD_VISITORS berths times a coverage, so a city with two
     // museums is landing a fraction of one and flooring it to zero would say it
     // had none. The allowance counts the road's two the same way.
-    const allowed = berths + (s.airport ? AIRPORT_VISITORS : 0) + ROAD_VISITORS;
+    const allowed =
+      berths +
+      (s.airport ? AIRPORT_VISITORS : 0) +
+      ROAD_VISITORS +
+      RAIL_VISITORS +
+      THEATRE_VISITORS;
     n.portBerths.textContent = `${fmt(berthsLanding(s))}/${fmt(allowed)}`;
     n.portWhere.textContent =
       first >= 0 ? `first quay on district ${fmtInt(first + 1)}`
@@ -2251,6 +2447,8 @@ export class Hud {
     if (from.quay > 0) parts.push(`${fmt(from.quay)} sea`);
     if (from.air > 0) parts.push(`${fmt(from.air)} air`);
     if (from.road > 0) parts.push(`${fmt(from.road)} road`);
+    if (from.rail > 0) parts.push(`${fmt(from.rail)} rail`);
+    if (from.stage > 0) parts.push(`${fmt(from.stage)} stage`);
     n.portSources.textContent = parts.length > 0 ? parts.join(' · ') : '—';
     const share = visitorShare(s);
     n.portShopping.textContent =
@@ -2262,7 +2460,8 @@ export class Hud {
     const lift =
       CARGO_EXPORT_LIFT * s.cargoTerminals +
       (s.airport ? AIRPORT_EXPORT_LIFT : 0) +
-      (goodsTraded(s) ? GOODS_TRADE_LIFT : 0);
+      (goodsTraded(s) ? GOODS_TRADE_LIFT : 0) +
+      NETWORK_EXPORT_LIFT * networkService(s);
     n.portLift.textContent =
       lift <= 0 ? 'no freight yet' : `+${Math.round(lift * 100)}% on the tap`;
 

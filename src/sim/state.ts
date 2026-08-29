@@ -88,7 +88,24 @@ export interface Fire {
   readonly startedAt: number;
 }
 
-export const SAVE_VERSION = 14;
+/**
+ * One thing the police have been called to and have not yet finished with.
+ *
+ * The same three fields a `Fire` carries and for the same reasons — an
+ * *ordinal* rather than a coordinate, and an age rather than a deadline, so a
+ * station opened while the call is open still shortens it. A separate type
+ * rather than a `kind` on `Fire`, because the two lists are resolved by
+ * different rules against different services and a shared type would have to be
+ * narrowed at every use.
+ */
+export interface Call {
+  readonly kind: ZoneKind;
+  readonly index: number;
+  /** Value of `elapsed` when it came in. */
+  readonly startedAt: number;
+}
+
+export const SAVE_VERSION = 15;
 
 /**
  * The entire game, in a handful of fields.
@@ -196,6 +213,17 @@ export interface GameState {
    */
   depots: number;
   /**
+   * Waste depots. The sixth type on the 2x2 interleave, and the one that made
+   * it a six.
+   *
+   * It does not collect: `garbageCollection` is a plot count clamped at 1 and
+   * one finished collector already covers the city, so a second at the same
+   * reach would be a second button buying one number. It lowers `garbageRate`
+   * at source instead, which stacks with the bus rather than competing with it.
+   * See WASTE_RECYCLING.
+   */
+  wasteDepots: number;
+  /**
    * Landmarks, on the squares FRONTAGE_TARGET reserves for them: one 2x2 and
    * one 3x3 a district.
    *
@@ -208,6 +236,35 @@ export interface GameState {
    */
   museums: number;
   stadiums: number;
+  /**
+   * The cheap culture tier, on the square the eleventh FRONTAGE_TARGET square
+   * bought: one site a district, and the two types interleave across it the way
+   * the civic types interleave across theirs.
+   *
+   * Two counts and nothing else, exactly as the landmarks above are. Neither
+   * carries mood: a library answers the idleness half of `crimePressure` and a
+   * theatre lands an audience on `berthsLanding`, both of which are quantities
+   * the game already had. See CULTURE for why a fourth happiness weight and a
+   * seventh bracket modifier were both costed and refused.
+   */
+  libraries: number;
+  theatres: number;
+  /**
+   * Lines of each kind the city has laid.
+   *
+   * Two counts and no routes, which is the whole of the network. The k-th line
+   * of a kind joins the k-th pair of districts `linePairAt` enumerates, and that
+   * enumeration is a pure function of the ordinal, the district count and the
+   * seed — the same rule `civicSiteFor` follows and the same reason: a stored
+   * route would be a fourth exception to "the save is counts" and, unlike the
+   * three that exist, it would grow with the thing the player buys.
+   *
+   * The enumeration is append-only in the district count, so annexing land adds
+   * pairs to the end and re-routes nothing the city already owns. See
+   * `networkedDistricts`, which is where the two counts become a reach.
+   */
+  tramLines: number;
+  railLines: number;
   /**
    * Terminals on the city's waterfront: one berth of each per coastal district.
    *
@@ -289,6 +346,7 @@ export interface GameState {
   schoolStaff: number;
   universityStaff: number;
   depotStaff: number;
+  wasteStaff: number;
   /**
    * Happiness, lagged behind the coverage it is chasing. Same reasoning as the
    * demand signals: the lag is the mechanic, so it has to survive a reload.
@@ -333,6 +391,31 @@ export interface GameState {
    * thresholds gives the same answer at any step size the loop is run at.
    */
   fireHazard: number;
+  /**
+   * Calls the police have open, capped at MAX_ACTIVE_CALLS.
+   *
+   * The second emergency, in the same shape as `fires` and on the same terms:
+   * a bounded list of *ordinals* rather than positions, so it stays on the
+   * right side of the line `LevelCohort` draws. It grows with the cap and never
+   * with the city — eight entries at most, whatever a save has been left
+   * running for — which is the property that makes it the same exception
+   * `fires` already is rather than a new one.
+   *
+   * What it feeds is `crime`, not a happiness weight of its own. See
+   * UNANSWERED_CRIME for why that is the whole of the design.
+   */
+  calls: Call[];
+  /**
+   * How many random draws the call process has taken, and the pressure banked
+   * toward the next one.
+   *
+   * Exactly `fireCursor` and `fireHazard`, on their own stream. Without the
+   * cursor a reload would rearrange the calls; without the hazard a 60-second
+   * catch-up step and 600 tenth-second ticks would be different distributions
+   * and the away report would be a lie about a city the player never had.
+   */
+  callCursor: number;
+  callHazard: number;
   /** Districts annexed. Always at least 1. */
   districts: number;
   /**
@@ -492,8 +575,12 @@ export function createState(now = Date.now()): GameState {
     parks: 0,
     museums: 0,
     stadiums: 0,
+    libraries: 0,
+    theatres: 0,
     cruiseTerminals: 0,
     cargoTerminals: 0,
+    tramLines: 0,
+    railLines: 0,
     plants: 0,
     plantStaff: 0,
     cityHall: false,
@@ -506,12 +593,14 @@ export function createState(now = Date.now()): GameState {
     schools: 0,
     universities: 0,
     depots: 0,
+    wasteDepots: 0,
     hospitalStaff: 0,
     policeStaff: 0,
     fireStaff: 0,
     schoolStaff: 0,
     universityStaff: 0,
     depotStaff: 0,
+    wasteStaff: 0,
     // An empty city has nobody to be unhappy: coverage is a share of residents,
     // and the share of nobody is everybody. It lags down as the first homes fill.
     happiness: 1,
@@ -521,6 +610,9 @@ export function createState(now = Date.now()): GameState {
     fires: [],
     fireCursor: 0,
     fireHazard: 0,
+    calls: [],
+    callCursor: 0,
+    callHazard: 0,
     districts: 1,
     // A fresh district opens on exactly the split every district sold before
     // zoning floated, so the opening minute, RENT, HOME_BASE and every pacing

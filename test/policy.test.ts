@@ -232,17 +232,20 @@ describe('the transit depot', () => {
 
   it('joins the 2x2 pool as a fifth type, and the interleave follows', () => {
     expect(CIVIC_SERVICES.map((s) => s.key)).toContain('transit');
-    expect(CIVIC_SERVICES.length).toBe(5);
+    // Six since the waste depot took the sixth slot. The property this test is
+    // about is that the types *divide* the shared list exactly, whatever the
+    // divisor is — so the count is read off the table rather than typed.
+    expect(CIVIC_SERVICES.length).toBe(6);
     for (const districts of [1, 2, 5, 9, MAX_DISTRICTS]) {
       const s = state({ districts });
       const shared = CIVIC_SERVICES.reduce((sum, svc) => sum + siteCapacity(s, svc.key), 0);
-      // Nothing stranded and nothing double-counted: the five divide the list.
+      // Nothing stranded and nothing double-counted: the six divide the list.
       expect(shared).toBe(civicSiteCapacity(s));
     }
   });
 
   it('leaves a young city able to open one of everything', () => {
-    // Six sites in the first district against five types. The gate that has to
+    // Six sites in the first district against six types. The gate that has to
     // stay open is the *land* one — the population gate is the pacing lever and
     // is supposed to bite — so this asks whether a district has room, not
     // whether a city can afford it.
@@ -250,8 +253,9 @@ describe('the transit depot', () => {
     for (const service of CIVIC_SERVICES) {
       expect(siteCapacity(one, service.key)).toBeGreaterThanOrEqual(1);
     }
-    // And the spare site goes to the type a young city needs most of.
-    expect(siteCapacity(one, 'hospital')).toBe(2);
+    // And there is no spare any more: the sixth type spent the hospital's
+    // second square, which is the visible half of what the divisor change cost.
+    expect(siteCapacity(one, 'hospital')).toBe(1);
   });
 
   it('earns fares, which no other civic building does', () => {

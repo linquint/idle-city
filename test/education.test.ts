@@ -225,6 +225,7 @@ describe('education land', () => {
       'fire',
       'school',
       'transit',
+      'waste',
     ]);
     for (const districts of [1, 2, 5, 9]) {
       const s = state({ districts });
@@ -232,10 +233,11 @@ describe('education land', () => {
       // Divides the shared list exactly: nothing stranded, nothing shared.
       expect(shared).toBe(civicSiteCapacity(s));
     }
-    // The first district's six sites split 2/1/1/1/1 across the five types, so
-    // a young city can open one of each and still have a site to spare.
+    // The first district's six sites split 1/1/1/1/1/1 across the six types, so
+    // a young city can open exactly one of each. It was 2/1/1/1/1 with a spare
+    // hospital until the waste depot took the sixth slot — see SERVICES.
     const one = state({ districts: 1 });
-    expect(CIVIC_SERVICES.map((svc) => siteCapacity(one, svc.key))).toEqual([2, 1, 1, 1, 1]);
+    expect(CIVIC_SERVICES.map((svc) => siteCapacity(one, svc.key))).toEqual([1, 1, 1, 1, 1, 1]);
   });
 
   it('gives the university its own list, one to a district', () => {

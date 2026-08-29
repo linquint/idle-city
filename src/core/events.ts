@@ -50,6 +50,23 @@ export type GameEvent =
   | { readonly kind: 'fire-out'; readonly at: number; readonly zone: EventZone; readonly count: number }
   | { readonly kind: 'fire-lost'; readonly at: number; readonly zone: EventZone; readonly count: number }
   /**
+   * The second emergency, and it gets *one* line where fire gets three.
+   *
+   * Fire announces its start, its end and its loss because a fire is on screen
+   * and costs a building: all three are things the player can watch happening
+   * and would ask about. A call has no vehicle and no casualty, and a call the
+   * police answered is the system working — which is the rule
+   * EVENT_COVERAGE_LOST already states in its own words: 0.99 is not news.
+   *
+   * It is also what keeps the log readable. Emitting the arrivals and the
+   * answers as well was tried and measured out: a promotion wave that used to
+   * coalesce into four lines came back as twelve, because two level-ups with a
+   * call between them are not adjacent and `sameSubject` only merges
+   * neighbours. A stream that fragments every other stream is a stream that has
+   * taken the log for itself.
+   */
+  | { readonly kind: 'call-missed'; readonly at: number; readonly zone: EventZone; readonly count: number }
+  /**
    * The housing button is dead for a reason, and the player has the money.
    *
    * The cash test is the whole point of the event. "You cannot afford it" is
@@ -223,6 +240,7 @@ function sameSubject(a: GameEvent, b: GameEvent): boolean {
     case 'fire-started':
     case 'fire-out':
     case 'fire-lost':
+    case 'call-missed':
     case 'abandoned':
     case 'recovered':
     // Two surveys into the same zone are the same subject, so a frontier that

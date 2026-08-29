@@ -1,0 +1,1549 @@
+/**
+ * Phase 7's measurement gate, run before any of its eight features is designed.
+ *
+ * Same contract as every other calibrator in this directory: it prints, it does
+ * not assert. Nothing here changes the build — the whole point is to find out
+ * what the eight features would cost before one of them is written.
+ *
+ * Two parts, matching the brief:
+ *
+ *   0a. the civic land budget. Four of the eight want a new 2x2 civic type, and
+ *       `siteCapacity` divides by `CIVIC_SERVICES.length` — so the question is
+ *       not "is there a square" but "what does moving the divisor do". Sites per
+ *       type, the re-derived `Service.plots` column, whether schools still land
+ *       inside LEVEL_EDUCATION's window, whether the >= 0.95 happiness ceiling
+ *       survives, and how many already-built buildings move or lose their site;
+ *   0b. what is already built. Three of the eight are amendments to working
+ *       systems rather than new systems, and the brief's stated numbers are
+ *       reproduced here rather than taken on trust.
+ *
+ *   node tools/phase7.calibrate.mjs
+ */
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  ANSWER_MAX,
+  ANSWER_MIN,
+  BASE_CALL_PER_BUILDING_HOUR,
+  BASE_IGNITION_PER_BUILDING_HOUR,
+  BURN_OUT_SECONDS,
+  CRIME_MOOD,
+  MAX_ACTIVE_CALLS,
+  MAX_ACTIVE_FIRES,
+  RESPONSES,
+  UNANSWERED_CRIME,
+  UNANSWERED_SECONDS,
+  NETWORK_EXPORT_LIFT,
+  NETWORK_ROAD_SHARE,
+  NETWORK_WORKFORCE,
+  RANKS,
+  RANK_GATES,
+  RAIL_VISITORS,
+  TRANSIT_LINES,
+  TRANSIT_MAX_SHARE,
+  CIVIC_SERVICES,
+  CONGESTION_DENSITY_EXPONENT,
+  CONGESTION_MOOD,
+  CONGESTION_SCALE,
+  DEMAND_TERMS,
+  EXTINGUISH_MAX,
+  EXTINGUISH_MIN,
+  FIRE_UNHAPPINESS,
+  FREE_TRANSPORT_MOOD,
+  FREE_TRANSPORT_RIDERSHIP,
+  FRONTAGE_TARGET,
+  GARBAGE_MOOD,
+  GARBAGE_PER_RESIDENT,
+  GARBAGE_PER_SHOP,
+  GARBAGE_PER_WORKS,
+  GARBAGE_SATURATION,
+  LANDMARK_MOOD,
+  LEVELS,
+  LEVEL_EDUCATION,
+  LEVEL_FOOTPRINT,
+  MAX_DISTRICTS,
+  OCCUPANCY_FULL,
+  CULTURE,
+  CRIME_FROM_IDLENESS,
+  WASTE_RECYCLING,
+  LANDMARKS,
+  LIBRARY_CRIME_RELIEF,
+  THEATRE_VISITORS,
+  RECREATION_WEIGHT,
+  ROAD_CELLS_PER_DISTRICT,
+  TRIPS_PER_RESIDENT,
+  SERVICES,
+  TRANSIT_LABOUR_DRAW,
+  TRANSIT_ROAD_SHARE,
+  TRANSIT_WORKFORCE,
+} from '../src/sim/config.ts';
+import {
+  activeOf,
+  burnableBuildings,
+  callRate,
+  cityRank,
+  crime,
+  cultureAllowed,
+  cultureCoverage,
+  cultureCost,
+  libraryCoverage,
+  theatreCoverage,
+  unemployment,
+  ignitionRate,
+  missesDeadline,
+  responseResolvesAt,
+  responseSeconds,
+  responseThreshold,
+  unansweredCrime,
+  lineAllowed,
+  lineCost,
+  lineRoute,
+  networkCapacity,
+  networkReach,
+  networkService,
+  income,
+  exportMarket,
+  visitorSources,
+  visitors,
+  cityScale,
+  congestion,
+  coverage,
+  covered as coveredPlots,
+  crimePressure,
+  demandScale,
+  demandTargets,
+  effectiveOf,
+  faresWaived,
+  garbageLoad,
+  garbage,
+  garbageRate,
+  garbageCollection,
+  recyclingCoverage,
+  serviceCount,
+  siteCapacity,
+  happinessTarget,
+  housingPlots,
+  jobs,
+  landmarkCoverage,
+  parkCapacity,
+  recreationCoverage,
+  residents,
+  serviceAllowed,
+  shortfallShare,
+  taxStep,
+  transitCoverage,
+  trips,
+  workers,
+} from '../src/sim/economy.ts';
+import { createState } from '../src/sim/state.ts';
+
+const SIZES = [1, 4, 12, MAX_DISTRICTS];
+const TYPE_COUNTS = [5, 6, 7, 8, 9];
+
+const pad = (v, w) => String(v).padStart(w);
+const fixed = (v, w, d = 2) => pad(Number(v).toFixed(d), w);
+const pct = (v, w, d = 1) => pad(`${(v * 100).toFixed(d)}%`, w);
+
+/** A city of `districts` districts built out at `level`, served to `serve`. */
+function city(districts, level, serve = 0) {
+  const s = createState(0);
+  s.districts = districts;
+  const foot = LEVEL_FOOTPRINT[level] ?? 1;
+  const fit = (per) => Math.floor((districts * per) / foot);
+  const cohort = (n) => {
+    const levels = new Array(LEVELS).fill(0);
+    levels[level] = n;
+    return levels;
+  };
+  const homes = fit(FRONTAGE_TARGET.residential);
+  const shops = fit(FRONTAGE_TARGET.commercial);
+  const works = fit(FRONTAGE_TARGET.industrial);
+  Object.assign(s, {
+    homes,
+    shops,
+    industry: works,
+    homeLevels: cohort(homes),
+    shopLevels: cohort(shops),
+    industryLevels: cohort(works),
+    mergedR: foot > 1 ? homes : 0,
+    mergedC: foot > 1 ? shops : 0,
+    mergedI: foot > 1 ? works : 0,
+    occupancyR: OCCUPANCY_FULL,
+    occupancyC: OCCUPANCY_FULL,
+    occupancyI: OCCUPANCY_FULL,
+    happiness: 1,
+    plants: districts,
+    plantStaff: 1,
+  });
+  if (serve > 0) {
+    s.parks = Math.round(parkCapacity(s) * serve);
+    for (const service of SERVICES) {
+      const n = Math.round(serviceAllowed(s, service) * serve);
+      setCount(s, service.key, n);
+    }
+    s.hospitalStaff = 1;
+    s.policeStaff = 1;
+    s.fireStaff = 1;
+    s.schoolStaff = 1;
+    s.universityStaff = 1;
+    s.depotStaff = 1;
+  }
+  return s;
+}
+
+function setCount(s, key, n) {
+  if (key === 'hospital') s.hospitals = n;
+  else if (key === 'police') s.police = n;
+  else if (key === 'fire') s.fire = n;
+  else if (key === 'school') s.schools = n;
+  else if (key === 'transit') s.depots = n;
+  else s.universities = n;
+}
+
+// ==================================================================== 0a
+
+/**
+ * Sites the `offset`-th of `n` interleaved 2x2 types gets at `districts`.
+ *
+ * `siteCapacity`'s own arithmetic with the divisor lifted out, so the table
+ * below is the real interleave rather than a model of it.
+ */
+const sitesFor = (districts, offset, n) =>
+  Math.max(0, Math.ceil((districts * FRONTAGE_TARGET.civicSites - offset) / n));
+
+/**
+ * The `plots` column re-derived for a table of `n` 2x2 types.
+ *
+ * The rule is the one SERVICES states: the hospital is the anchor and is exactly
+ * full coverage when every allowed building of its type is standing, so
+ * `sites/district/type x plots / 24 = 1`, and with `civicSites/n` sites a
+ * district that is `plots = 24n / civicSites`. The other 2x2 rows keep their
+ * ratio to the anchor, which is what preserves the weight ordering the current
+ * column encodes. The university is untouched: it stands on its own 3x3 list,
+ * one to a district, and the interleave never reaches it.
+ */
+function derivedPlots(n) {
+  const anchor = (FRONTAGE_TARGET.residential * n) / FRONTAGE_TARGET.civicSites;
+  const base = Object.fromEntries(SERVICES.map((x) => [x.key, x.plots]));
+  const scale = anchor / base['hospital'];
+  const out = {};
+  for (const service of SERVICES) {
+    out[service.key] =
+      service.span === 3 ? service.plots : Math.round(service.plots * scale);
+  }
+  return { anchor, plots: out };
+}
+
+/** Schools alone, at every district count, for a candidate `plots` and divisor. */
+function schoolWindow(n, plots, offset) {
+  let lo = 1;
+  let hi = 0;
+  for (let d = 1; d <= MAX_DISTRICTS; d++) {
+    const land = FRONTAGE_TARGET.residential * d;
+    const allowed = Math.min(Math.floor(land / plots) + 1, sitesFor(d, offset, n));
+    const cov = Math.min(1, (allowed * plots) / land);
+    lo = Math.min(lo, cov);
+    hi = Math.max(hi, cov);
+  }
+  return { lo, hi };
+}
+
+/** Every integer `plots` that keeps schools inside LEVEL_EDUCATION's window. */
+function schoolCandidates(n, offset) {
+  const floor = LEVEL_EDUCATION[2] ?? 0.6;
+  const ceil = LEVEL_EDUCATION[3] ?? 0.85;
+  const ok = [];
+  for (let plots = 1; plots <= 80; plots++) {
+    const { lo, hi } = schoolWindow(n, plots, offset);
+    if (lo >= floor && hi < ceil) ok.push({ plots, lo, hi });
+  }
+  return ok;
+}
+
+/**
+ * The happiness target with a re-derived civic table, in the shape
+ * `happinessTarget` computes it.
+ *
+ * Written out here rather than imported for the reason `ceilingBefore` in
+ * garbage.calibrate.mjs is: the constants it needs do not exist in the build.
+ * Everything that does not depend on the civic table — the pressure behind
+ * crime, the load behind rubbish, the trips behind congestion — is imported, so
+ * only the coverages are modelled.
+ */
+function ceilingWith(s, table, n) {
+  const plots = housingPlots(s);
+  const cov = (key) => {
+    const row = table.find((x) => x.key === key);
+    if (!row) return 1;
+    if (plots <= 0) return 1;
+    return Math.min(1, coveredPlots(s, row) / plots);
+  };
+  let short = RECREATION_WEIGHT * (1 - recreationCoverage(s));
+  for (const row of table) if (row.weight > 0) short += row.weight * (1 - cov(row.key));
+  const earned = 1 - shortfallShare(s) * short;
+
+  const crime = Math.max(0, crimePressure(s) * (1 - cov('police')));
+  const bins = Math.max(0, garbageLoad(s) * (1 - cov('transit')));
+  const carried = Math.min(
+    1,
+    TRANSIT_ROAD_SHARE * cov('transit') * (faresWaived(s) ? 1 + FREE_TRANSPORT_RIDERSHIP : 1),
+  );
+  const road = ROAD_CELLS_PER_DISTRICT * Math.max(1, s.districts);
+  const density = cityScale(s) ** CONGESTION_DENSITY_EXPONENT;
+  const jam = Math.max(
+    0,
+    Math.min(1, (trips(s) * (1 - carried)) / road / Math.max(1e-9, density) / CONGESTION_SCALE),
+  );
+
+  const policy =
+    taxStep(s).mood +
+    (faresWaived(s) ? FREE_TRANSPORT_MOOD : 0) +
+    LANDMARK_MOOD * landmarkCoverage(s) -
+    CONGESTION_MOOD * jam -
+    0.26 * crime -
+    GARBAGE_MOOD * bins;
+  return {
+    target: Math.max(0, Math.min(1, earned + policy) - FIRE_UNHAPPINESS * s.fires.length),
+    cov,
+    n,
+  };
+}
+
+/** A city built out to the top with every 2x2 type at its allowance under `n`. */
+function maxedUnder(districts, table, n) {
+  const s = city(districts, LEVELS - 1, 0);
+  s.parks = parkCapacity(s);
+  const land = housingPlots(s);
+  for (const row of table) {
+    const allowed =
+      row.span === 3
+        ? Math.min(Math.floor(land / row.plots) + 1, districts * FRONTAGE_TARGET.universitySites)
+        : Math.min(Math.floor(land / row.plots) + 1, sitesFor(districts, row.offset, n));
+    setCount(s, row.key, allowed);
+  }
+  s.hospitalStaff = 1;
+  s.policeStaff = 1;
+  s.fireStaff = 1;
+  s.schoolStaff = 1;
+  s.universityStaff = 1;
+  s.depotStaff = 1;
+  return s;
+}
+
+console.log('='.repeat(78));
+console.log('0a  the civic land budget');
+console.log('='.repeat(78));
+console.log('');
+console.log(`  FRONTAGE_TARGET.squares ${FRONTAGE_TARGET.squares}: ${FRONTAGE_TARGET.civicSites} civic,` +
+  ` ${FRONTAGE_TARGET.landmarkSmallSites} small landmark,` +
+  ` ${FRONTAGE_TARGET.cityHallSites} city hall, ${FRONTAGE_TARGET.powerSites} power.`);
+console.log(`  CIVIC_SERVICES.length ${CIVIC_SERVICES.length}:` +
+  ` ${CIVIC_SERVICES.map((x) => x.key).join(', ')}`);
+console.log('');
+
+console.log('sites per district per type, and the anchor the plots column derives from\n');
+console.log('  types   sites/district/type   Service.plots anchor');
+for (const n of TYPE_COUNTS) {
+  const { anchor } = derivedPlots(n);
+  console.log(
+    `  ${pad(n, 5)}${fixed(FRONTAGE_TARGET.civicSites / n, 21, 2)}${fixed(anchor, 23, 0)}`,
+  );
+}
+console.log('');
+
+console.log('sites each type actually receives, by district count\n');
+for (const n of TYPE_COUNTS) {
+  const rows = SIZES.map((d) =>
+    Array.from({ length: n }, (_, offset) => sitesFor(d, offset, n)),
+  );
+  console.log(`  ${n} types`);
+  SIZES.forEach((d, i) => {
+    const row = rows[i];
+    console.log(
+      `    ${pad(`${d}d`, 4)}  ${pad(row.join(','), 30)}` +
+        `  ${row.filter((v) => v === 0).length} type(s) with no site at all`,
+    );
+  });
+  console.log('');
+}
+
+console.log('the re-derived plots column\n');
+{
+  const keys = SERVICES.map((x) => x.key);
+  console.log('  types' + keys.map((k) => pad(k, 13)).join(''));
+  for (const n of TYPE_COUNTS) {
+    const { plots } = derivedPlots(n);
+    console.log(`  ${pad(n, 5)}` + keys.map((k) => pad(plots[k], 13)).join(''));
+  }
+  console.log('');
+  console.log('  The university column does not move: a 3x3 site, one to a district, never on');
+  console.log('  the interleave. Every 2x2 row does, and each of them is a constant with its');
+  console.log('  own measurement in SERVICES.');
+  console.log('');
+}
+
+console.log("schools against LEVEL_EDUCATION's window: clear 0.60, miss 0.85, everywhere\n");
+{
+  const offset = CIVIC_SERVICES.findIndex((x) => x.key === 'school');
+  console.log(`  school offset in the interleave: ${offset}`);
+  console.log(`  window: [${LEVEL_EDUCATION[2]}, ${LEVEL_EDUCATION[3]})`);
+  console.log('');
+  console.log('  types   derived plots   in window?   every integer that works   schools alone');
+  for (const n of TYPE_COUNTS) {
+    const { plots } = derivedPlots(n);
+    const p = plots['school'];
+    const { lo, hi } = schoolWindow(n, p, offset);
+    const ok = lo >= (LEVEL_EDUCATION[2] ?? 0.6) && hi < (LEVEL_EDUCATION[3] ?? 0.85);
+    const cands = schoolCandidates(n, offset);
+    const list = cands.length > 0 ? cands.map((c) => c.plots).join(',') : 'none';
+    console.log(
+      `  ${pad(n, 5)}${pad(p, 16)}${pad(ok ? 'yes' : 'NO', 13)}${pad(list, 27)}` +
+        `   ${pct(lo, 6)} - ${pct(hi, 6)}`,
+    );
+  }
+  console.log('');
+}
+
+console.log('the guard: the >= 0.95 happiness ceiling, re-run under each divisor\n');
+{
+  console.log('  types   worst service coverage   worst target   worst education   where');
+  for (const n of TYPE_COUNTS) {
+    const { plots } = derivedPlots(n);
+    const offset = CIVIC_SERVICES.findIndex((x) => x.key === 'school');
+    const cands = schoolCandidates(n, offset);
+    const schoolPlots = cands.length > 0 ? cands[cands.length - 1].plots : plots['school'];
+    const table = SERVICES.map((service, i) => ({
+      ...service,
+      plots: service.key === 'school' ? schoolPlots : plots[service.key],
+      offset: service.span === 2 ? CIVIC_SERVICES.findIndex((x) => x.key === service.key) : -1,
+    }));
+    let worstCov = 1;
+    let worstTarget = 1;
+    let worstEdu = 1;
+    let where = '';
+    for (let d = 1; d <= MAX_DISTRICTS; d++) {
+      const s = maxedUnder(d, table, n);
+      const { target, cov } = ceilingWith(s, table, n);
+      if (target < worstTarget) {
+        const short = table
+          .filter((row) => row.span === 2 && cov(row.key) < 0.999)
+          .map((row) => `${row.key} ${(cov(row.key) * 100).toFixed(0)}%`);
+        where = `${d}d` + (short.length > 0 ? `, ${short.join(' ')}` : '');
+      }
+      for (const row of table) {
+        if (row.weight > 0 && cov(row.key) < worstCov) worstCov = cov(row.key);
+      }
+      const land = housingPlots(s);
+      const edu =
+        land > 0
+          ? Math.min(
+              1,
+              (coveredPlots(s, table.find((x) => x.key === 'school')) +
+                coveredPlots(s, table.find((x) => x.key === 'university'))) /
+                land,
+            )
+          : 1;
+      worstEdu = Math.min(worstEdu, edu);
+      worstTarget = Math.min(worstTarget, target);
+    }
+    console.log(
+      `  ${pad(n, 5)}${fixed(worstCov, 25, 4)}${fixed(worstTarget, 15, 4)}` +
+        `${fixed(worstEdu, 18, 4)}   ${where}`,
+    );
+  }
+  console.log('');
+  console.log(`  test/services.test.ts asserts >= 0.95 on the first two columns and` +
+    ` >= ${LEVEL_EDUCATION[LEVELS - 1]} on the third.`);
+  console.log('');
+}
+
+console.log('what a divisor change does to a save that already exists\n');
+{
+  console.log('  A 12-district city with every 2x2 type at its current allowance, re-read');
+  console.log('  under each divisor. "moves" is buildings whose square changes; "homeless"');
+  console.log('  is buildings the new interleave has no site for at all.\n');
+  const districts = 12;
+  const s = city(districts, 2, 1);
+  console.log('  types   civic buildings   moves   homeless   share moved');
+  for (const n of TYPE_COUNTS) {
+    let total = 0;
+    let moved = 0;
+    let homeless = 0;
+    CIVIC_SERVICES.forEach((service, offset) => {
+      const built =
+        service.key === 'hospital' ? s.hospitals
+        : service.key === 'police' ? s.police
+        : service.key === 'fire' ? s.fire
+        : service.key === 'school' ? s.schools
+        : s.depots;
+      const room = sitesFor(districts, offset, n);
+      total += built;
+      for (let i = 0; i < built; i++) {
+        if (i >= room) homeless++;
+        else if (i * CIVIC_SERVICES.length + offset !== i * n + offset) moved++;
+      }
+    });
+    console.log(
+      `  ${pad(n, 5)}${pad(total, 18)}${pad(moved, 8)}${pad(homeless, 11)}` +
+        `${pct(total > 0 ? moved / total : 0, 14)}`,
+    );
+  }
+  console.log('');
+}
+
+// ==================================================================== 0b
+
+console.log('='.repeat(78));
+console.log('0b  what is already built');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('garbage: a complete system, with a placeholder collector\n');
+console.log(`  GARBAGE_MOOD ${GARBAGE_MOOD}, GARBAGE_PER_RESIDENT ${GARBAGE_PER_RESIDENT},` +
+  ` GARBAGE_PER_SHOP ${GARBAGE_PER_SHOP},`);
+console.log(`  GARBAGE_PER_WORKS ${GARBAGE_PER_WORKS}, GARBAGE_SATURATION ${GARBAGE_SATURATION}`);
+{
+  const src = readFileSync('src/sim/economy.ts', 'utf8');
+  const m = src.match(/GARBAGE_COLLECTORS[^=]*=\s*(\[[^\]]*\])/);
+  console.log(`  GARBAGE_COLLECTORS = ${m ? m[1] : '?'}  <- the bus depot collects the rubbish`);
+}
+console.log('');
+console.log('  load at 10 districts, up the level ladder');
+console.log('  level   rate/s   per plot    load');
+for (let level = 0; level < LEVELS; level++) {
+  const s = city(10, level);
+  const plots = housingPlots(s);
+  console.log(
+    `  ${pad(level, 5)}${fixed(garbageRate(s), 9, 0)}${fixed(plots > 0 ? garbageRate(s) / plots : 0, 11, 1)}` +
+      `${fixed(garbageLoad(s), 8, 3)}`,
+  );
+}
+console.log('');
+console.log('  sources at 10 districts, level 2: ' +
+  (() => {
+    const s = city(10, 2);
+    const h = residents(s) * GARBAGE_PER_RESIDENT;
+    const c = effectiveOf(s, 'shop') * GARBAGE_PER_SHOP;
+    const w = activeOf(s, 'industry') * GARBAGE_PER_WORKS;
+    const t = h + c + w;
+    return `homes ${pct(h / t, 0, 0)}, shops ${pct(c / t, 0, 0)}, works ${pct(w / t, 0, 0)}`;
+  })());
+console.log('');
+
+console.log('congestion: one city-wide scalar, with very little headroom left\n');
+console.log(`  CONGESTION_SCALE ${CONGESTION_SCALE}, CONGESTION_DENSITY_EXPONENT ${CONGESTION_DENSITY_EXPONENT},` +
+  ` CONGESTION_MOOD ${CONGESTION_MOOD}`);
+console.log(`  TRANSIT_ROAD_SHARE ${TRANSIT_ROAD_SHARE}, FREE_TRANSPORT_RIDERSHIP ${FREE_TRANSPORT_RIDERSHIP}` +
+  ` -> ${pct(TRANSIT_ROAD_SHARE * (1 + FREE_TRANSPORT_RIDERSHIP), 6, 1)} of trips off the road`);
+console.log('');
+console.log('  12 districts        transit-free   fully covered   covered + fares waived');
+for (let level = 0; level < LEVELS; level++) {
+  const bare = city(12, level);
+  const full = city(12, level, 1);
+  const free = city(12, level, 1);
+  free.cityHall = true;
+  free.freeTransport = true;
+  console.log(
+    `    level ${level}` + fixed(congestion(bare), 20, 3) + fixed(congestion(full), 16, 3) +
+      fixed(congestion(free), 25, 3),
+  );
+}
+console.log('');
+console.log('  The last twentieth is freight and the people who will drive whatever is');
+console.log('  running. Rail must not spend it — see FREE_TRANSPORT_RIDERSHIP.');
+console.log('');
+
+console.log('the transit contribution to commerce, combined — the figure rail lands on\n');
+{
+  const footfall = DEMAND_TERMS.find((t) => t.key === 'transit' && t.zone === 'shop');
+  console.log(`  TRANSIT_LABOUR_DRAW ${TRANSIT_LABOUR_DRAW} (labourReach, in demandTargets.c)`);
+  console.log(`  DEMAND_TERMS transit/shop weight ${footfall ? footfall.weight : 0}, centred` +
+    ` — worth ${footfall ? (footfall.weight * 0.5).toFixed(3) : 0} at full coverage`);
+  console.log('');
+  console.log('  districts   level   commerce, no depots   with every depot   combined lift');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const bare = city(d, level, 1);
+      setCount(bare, 'transit', 0);
+      const full = city(d, level, 1);
+      const a = demandTargets(bare).c;
+      const b = demandTargets(full).c;
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${fixed(a, 22, 3)}${fixed(b, 19, 3)}${fixed(b - a, 15, 3)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  This is the number to watch when rail lands: TRANSIT_LABOUR_DRAW was cut');
+  console.log('  0.35 -> 0.30 precisely because two channels were already reaching this');
+  console.log('  signal through one set of buses.');
+  console.log('');
+  console.log('  the spare labour rail would reach, for scale');
+  console.log('  districts   level      workers        jobs   spare   x TRANSIT_WORKFORCE');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    const s = city(d, 4, 1);
+    const w = workers(s);
+    const j = jobs(s);
+    console.log(
+      `  ${pad(d, 9)}${pad(4, 8)}${fixed(w, 13, 0)}${fixed(j, 12, 0)}` +
+        `${fixed(Math.max(0, w - j) / demandScale(s), 8, 2)}${fixed(TRANSIT_WORKFORCE, 22, 2)}`,
+    );
+  }
+  console.log('');
+}
+
+console.log('fire: the only emergency response, and the template for a second\n');
+{
+  const threshold = (EXTINGUISH_MAX - BURN_OUT_SECONDS) / (EXTINGUISH_MAX - EXTINGUISH_MIN);
+  console.log(`  EXTINGUISH_MAX ${EXTINGUISH_MAX}s, EXTINGUISH_MIN ${EXTINGUISH_MIN}s,` +
+    ` BURN_OUT_SECONDS ${BURN_OUT_SECONDS}s`);
+  console.log(`  response = ${EXTINGUISH_MAX} + (${EXTINGUISH_MIN} - ${EXTINGUISH_MAX}) x coverage`);
+  console.log(`  the building is saved from ${pct(threshold, 6, 1)} coverage up` +
+    '   <- quoted in three comments and one test');
+  console.log('');
+  console.log('  coverage   response   building');
+  for (const c of [0, 0.1, threshold - 0.001, threshold, 0.5, 1]) {
+    const r = EXTINGUISH_MAX + (EXTINGUISH_MIN - EXTINGUISH_MAX) * c;
+    console.log(`  ${pct(c, 8, 1)}${fixed(r, 11, 1)}s   ${r > BURN_OUT_SECONDS ? 'lost' : 'saved'}`);
+  }
+  console.log('');
+}
+
+console.log('rail: a citygen hint and nothing else\n');
+{
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (p.endsWith('.ts')) files.push(p);
+    }
+  };
+  walk('src');
+  const hits = [];
+  for (const file of files) {
+    const src = readFileSync(file, 'utf8');
+    const n = (src.match(/RAIL_SIDE|railSide/g) ?? []).length;
+    if (n > 0) hits.push(`${file} (${n})`);
+  }
+  console.log(`  RAIL_SIDE / railSide: ${hits.join(', ')}`);
+  console.log('  No network, no track, no vehicle. It says which edge industry clusters');
+  console.log('  toward and stops there.');
+  console.log('');
+}
+
+console.log('population: derived, with no birth, death, age or migration anywhere\n');
+{
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (p.endsWith('.ts')) files.push(p);
+    }
+  };
+  walk('src');
+  let refs = 0;
+  for (const file of files) {
+    refs += (readFileSync(file, 'utf8').match(/\bresidents\(|\bpopulation\(/g) ?? []).length;
+  }
+  // Fields, not prose: "migration" in this repo means the *save* migration and
+  // "birth" is the renderer's growth clock, so a text search over the tree
+  // finds twenty-five hits and none of them is a person. The honest question is
+  // whether GameState carries a demographic field, and it does not.
+  const state = readFileSync('src/sim/state.ts', 'utf8');
+  const body = state.slice(state.indexOf('export interface GameState'));
+  const fields = [...body.matchAll(/^  (\w+)[?]?:/gm)].map((m) => m[1]);
+  const demographic = fields.filter((f) => /age|birth|death|cohortAge|migrat/i.test(f));
+  console.log(`  population(s) = sum(homeLevels x LEVEL_HOUSING);  residents = population x occupancyR`);
+  console.log(`  call sites of residents()/population(): ${refs}`);
+  console.log(`  GameState fields: ${fields.length}; demographic among them: ${demographic.length}`);
+  console.log('');
+}
+
+console.log('happiness: three weights summing to exactly 1, and a modifier bracket\n');
+{
+  const weighted = SERVICES.filter((x) => x.weight > 0);
+  const sum = weighted.reduce((a, b) => a + b.weight, 0) + RECREATION_WEIGHT;
+  for (const service of weighted) console.log(`  ${pad(service.key, 12)}${fixed(service.weight, 8, 2)}`);
+  console.log(`  ${pad('recreation', 12)}${fixed(RECREATION_WEIGHT, 8, 2)}`);
+  console.log(`  ${pad('police', 12)}${fixed(0, 8, 2)}   <- crime replaced its weight`);
+  console.log(`  ${pad('sum', 12)}${fixed(sum, 8, 2)}`);
+  console.log('');
+  console.log('  the modifier bracket, which is where everything since the police');
+  console.log('  re-calibration has landed:');
+  console.log(`    crime      -${0.26}`);
+  console.log(`    congestion -${CONGESTION_MOOD}`);
+  console.log(`    garbage    -${GARBAGE_MOOD}`);
+  console.log(`    landmark   +${LANDMARK_MOOD}`);
+  console.log(`    transport  +${FREE_TRANSPORT_MOOD}`);
+  console.log(`    fire       -${FIRE_UNHAPPINESS} each`);
+  console.log('    tax        -0.14 .. +0.08');
+  console.log('');
+}
+
+// ==================================================================== 1
+
+console.log('='.repeat(78));
+console.log('1   rail and tram');
+console.log('='.repeat(78));
+console.log('');
+
+/**
+ * The same city with its happiness settled where the model would put it.
+ *
+ * `city` pins happiness at 1 so a coverage reading is a coverage reading. Every
+ * *income* reading has to undo that, because a modifier in the happiness
+ * bracket — which is where congestion is, and where the network reaches the
+ * ledger — does nothing at all to a city held at the top.
+ */
+const settled = (s) => ({ ...s, happiness: happinessTarget(s) });
+
+/** The same city, with `tram` tram lines and `rail` rail lines laid. */
+const wired = (districts, level, serve, tram, rail) => {
+  const s = city(districts, level, serve);
+  s.tramLines = tram;
+  s.railLines = rail;
+  return s;
+};
+
+console.log('the geometry: which districts the k-th line joins\n');
+{
+  console.log('  Ordered by the *later* district of each pair, one pair per later end, so');
+  console.log('  the list only ever grows at its end — annexing appends and re-routes');
+  console.log('  nothing. The k-th line is the same line at every city size:');
+  console.log('');
+  console.log('       k        tram at 12d / 25d / 49d        rail at 12d / 25d / 49d');
+  for (const k of [0, 1, 2, 5, 9]) {
+    const show = (kind, d) => {
+      const p = lineRoute({ districts: d }, kind, k);
+      return pad(p ? `${p.a}-${p.b}` : '—', 8);
+    };
+    console.log(
+      `  ${pad(k, 6)}  ${show('tram', 12)}${show('tram', 25)}${show('tram', 49)}` +
+        `      ${show('rail', 12)}${show('rail', 25)}${show('rail', 49)}`,
+    );
+  }
+  console.log('');
+  console.log('  pairs the land offers, and what one kind alone can reach');
+  console.log('  districts   tram pairs   rail pairs   tram lines to reach all   rail lines');
+  for (const d of [2, 4, 12, 25, MAX_DISTRICTS]) {
+    const bare = { districts: d, tramLines: 0, railLines: 0 };
+    const need = (kind) => {
+      for (let n = 0; n <= d + 2; n++) {
+        const s = { districts: d, tramLines: kind === 'tram' ? n : 0, railLines: kind === 'rail' ? n : 0 };
+        if (networkReach(s) >= 1) return n;
+      }
+      return '—';
+    };
+    console.log(
+      `  ${pad(d, 9)}${pad(lineAllowed({ ...bare }, TRANSIT_LINES[0]) >= 0 ? tramPairs(d) : 0, 13)}` +
+        `${pad(railPairs(d), 13)}${pad(need('tram'), 26)}${pad(need('rail'), 13)}`,
+    );
+  }
+  console.log('');
+}
+
+function tramPairs(d) {
+  let n = 0;
+  while (lineRoute({ districts: d }, 'tram', n) !== null) n++;
+  return n;
+}
+function railPairs(d) {
+  let n = 0;
+  while (lineRoute({ districts: d }, 'rail', n) !== null) n++;
+  return n;
+}
+
+console.log('reach against capacity: what separates the two rungs\n');
+{
+  console.log(`  tram carries ${TRANSIT_LINES[0].carries} districts, rail ${TRANSIT_LINES[1].carries}` +
+    ' — so a tram city saturates on capacity and a rail city on reach.');
+  console.log('');
+  for (const d of [12, 25]) {
+    console.log(`  ${d} districts        trams only                  rail only`);
+    console.log('    lines     reach  capacity   service      reach  capacity   service');
+    for (const n of [1, 2, 4, 8, 12, 20, 30]) {
+      const t = wired(d, 2, 0, n, 0);
+      const r = wired(d, 2, 0, 0, n);
+      console.log(
+        `  ${pad(n, 7)}` +
+          fixed(networkReach(t), 10, 2) + fixed(networkCapacity(t), 10, 2) + fixed(networkService(t), 10, 2) +
+          fixed(networkReach(r), 11, 2) + fixed(networkCapacity(r), 10, 2) + fixed(networkService(r), 10, 2),
+      );
+    }
+    console.log('');
+  }
+}
+
+console.log('what a line costs, against the rank it unlocks at\n');
+{
+  console.log(`  RANK_GATES.tram ${RANK_GATES.tram} (${RANKS[RANK_GATES.tram].name}),` +
+    ` RANK_GATES.rail ${RANK_GATES.rail} (${RANKS[RANK_GATES.rail].name})`);
+  console.log('');
+  console.log('  line   1st       4th        8th       16th      allowed at 12d / 25d / 49d');
+  for (const line of TRANSIT_LINES) {
+    const at = (n) => {
+      const s = city(25, 2, 0);
+      if (line.key === 'tram') s.tramLines = n; else s.railLines = n;
+      return lineCost(s, line);
+    };
+    const room = (d) => lineAllowed({ ...city(d, 2, 0), districts: d }, line);
+    console.log(
+      `  ${pad(line.key, 5)}${fixed(at(0), 7, 0)}${fixed(at(3), 10, 0)}${fixed(at(7), 11, 0)}` +
+        `${fixed(at(15), 11, 0)}      ${pad(room(12), 4)} /${pad(room(25), 5)} /${pad(room(49), 5)}`,
+    );
+  }
+  console.log('');
+  console.log('  against what a played run is holding (tools/economy.calibrate.mjs, 24h):');
+  console.log('    auto-develop 1.3e12 at 9 districts, discount-chasing 1.4e10 at 12,');
+  console.log('    disciplined 1.3e12 at 9. A museum is 4,000 and a cruise berth 20,000.');
+  console.log('');
+}
+
+console.log('congestion, with the network and without\n');
+{
+  console.log(`  NETWORK_ROAD_SHARE ${NETWORK_ROAD_SHARE}, clamped with the bus term at` +
+    ` TRANSIT_MAX_SHARE ${TRANSIT_MAX_SHARE.toFixed(3)}`);
+  console.log('  — which is TRANSIT_ROAD_SHARE x (1 + FREE_TRANSPORT_RIDERSHIP), so the');
+  console.log('    network cannot take a trip the fares could not already take.');
+  console.log('');
+  console.log('  12 districts, every depot open, fares charged');
+  console.log('    level   no network   half network   full network   + fares waived');
+  for (let level = 0; level < LEVELS; level++) {
+    const none = city(12, level, 1);
+    const half = wired(12, level, 1, 0, 3);
+    const full = wired(12, level, 1, 0, 12);
+    const free = wired(12, level, 1, 0, 12);
+    free.cityHall = true;
+    free.freeTransport = true;
+    console.log(
+      `    ${pad(level, 5)}` + fixed(congestion(none), 13, 3) + fixed(congestion(half), 15, 3) +
+        fixed(congestion(full), 15, 3) + fixed(congestion(free), 17, 3),
+    );
+  }
+  console.log('');
+  console.log('  and with no depots at all, which is what the network is worth on its own');
+  console.log('    level   nothing   full network');
+  for (let level = 0; level < LEVELS; level++) {
+    const none = city(12, level, 0);
+    const full = wired(12, level, 0, 0, 12);
+    console.log(`    ${pad(level, 5)}` + fixed(congestion(none), 10, 3) + fixed(congestion(full), 15, 3));
+  }
+  console.log('');
+}
+
+console.log('what a network is worth to commercial and industrial demand\n');
+{
+  console.log(`  NETWORK_EXPORT_LIFT ${NETWORK_EXPORT_LIFT} (freight),` +
+    ` RAIL_VISITORS ${RAIL_VISITORS} berths (shoppers),` +
+    ` NETWORK_WORKFORCE ${NETWORK_WORKFORCE} (labour, measured out)`);
+  console.log('');
+  console.log('  districts   level   depots   network      C before    C after     I before     I after');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const none = city(d, level, 1);
+      const full = wired(d, level, 1, 0, d);
+      const a = demandTargets(none);
+      const b = demandTargets(full);
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${pad('all', 9)}${fixed(networkService(full), 9, 2)}` +
+          fixed(a.c, 13, 3) + fixed(b.c, 11, 3) + fixed(a.i, 13, 3) + fixed(b.i, 12, 3),
+      );
+    }
+  }
+  console.log('');
+  console.log('  the same, on a city with no depots — where the freight lift is legible');
+  console.log('  districts   level   network      C before    C after     I before     I after');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    const none = city(d, 4, 0);
+    const full = wired(d, 4, 0, 0, d);
+    const a = demandTargets(none);
+    const b = demandTargets(full);
+    console.log(
+      `  ${pad(d, 9)}${pad(4, 8)}${fixed(networkService(full), 9, 2)}` +
+        fixed(a.c, 13, 3) + fixed(b.c, 11, 3) + fixed(a.i, 13, 3) + fixed(b.i, 12, 3),
+    );
+  }
+  console.log('');
+}
+
+console.log('the freight lift where it is legible: against demandScale, not clamped\n');
+{
+  console.log('  `demandTargets.i` divides by `demandScale`, which climbs the level ladder');
+  console.log('  faster than `exportMarket` does — so the whole export family is small at');
+  console.log('  the top and worth something in the middle, which is where a city plays.');
+  console.log('');
+  console.log('  districts   level   export/scale   network lift   one cargo berth');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [1, 2, 4]) {
+      const bare = city(d, level, 0);
+      const full = wired(d, level, 0, 0, d);
+      const berth = { ...bare, cargoTerminals: 1 };
+      const scale = demandScale(bare);
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${fixed(exportMarket(bare) / scale, 15, 4)}` +
+          fixed((exportMarket(full) - exportMarket(bare)) / scale, 15, 4) +
+          fixed((exportMarket(berth) - exportMarket(bare)) / scale, 18, 4),
+      );
+    }
+  }
+  console.log('');
+}
+
+console.log('the shoppers, and what the whole network is worth to the ledger\n');
+{
+  console.log('  Every city here is settled at its own happiness target rather than pinned');
+  console.log('  at 1, which is the whole point: most of what a network is worth arrives');
+  console.log('  through the mood, and a city held at 1 cannot show it.');
+  console.log('');
+  console.log('  districts   level   berths by rail   visitors by rail   mood   income');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const bare = settled(city(d, level, 1));
+      const full = settled(wired(d, level, 1, 0, d));
+      const from = visitorSources(full);
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${fixed(RAIL_VISITORS * networkService(full), 15, 2)}` +
+          `${fixed(from.rail, 19, 0)}` +
+          `${fixed(full.happiness - bare.happiness, 7, 3)}` +
+          `${pct((income(full) - income(bare)) / Math.max(1e-9, income(bare)), 9, 2)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  So the network is worth +0.034 of mood and +1.56% of income at the top of');
+  console.log('  the ladder, at every district count — and almost all of it arrives through');
+  console.log('  congestion rather than through the two demand channels. That is size-');
+  console.log('  invariant, which the trade lines are not: a whole waterfront is about half');
+  console.log("  a percent of a mature ledger and falls with the city's size, where this");
+  console.log('  holds because congestion holds. A played run agrees: 100% happiness at 6h');
+  console.log('  with the network against 98% without (tools/economy.calibrate.mjs,');
+  console.log('  "disciplined + network"), for a district\'s worth of capital.');
+  console.log('');
+}
+
+// ==================================================================== 3
+
+console.log('='.repeat(78));
+console.log("3   the emergency response, generalised past fire");
+console.log('='.repeat(78));
+console.log('');
+
+console.log('the two rows of the shared model\n');
+{
+  console.log('  key      service   slow   fast   deadline   threshold   open at once');
+  for (const row of RESPONSES) {
+    console.log(
+      `  ${pad(row.key, 7)}${pad(row.service, 10)}${pad(row.slow, 7)}${pad(row.fast, 7)}` +
+        `${pad(row.deadline, 11)}${pct(responseThreshold(row), 12, 1)}${pad(row.active, 15)}`,
+    );
+  }
+  console.log('');
+  console.log("  Fire's numbers are exactly where they were: EXTINGUISH_MAX, EXTINGUISH_MIN");
+  console.log('  and BURN_OUT_SECONDS are the row, and 21.4% is now *derived* from them by');
+  console.log('  `responseThreshold` rather than quoted in four places.');
+  console.log('');
+  console.log('  response time against coverage');
+  console.log('  coverage      fire   outcome        police   outcome');
+  for (const c of [0, 0.1, 0.214, 0.3, 0.4, 0.5, 1]) {
+    const cells = RESPONSES.map((row) => {
+      const t = row.slow + (row.fast - row.slow) * c;
+      return `${fixed(t, 8, 1)}s  ${pad(t > row.deadline ? 'missed' : 'in time', 8)}`;
+    });
+    console.log(`  ${pct(c, 8, 1)}${cells.join('  ')}`);
+  }
+  console.log('');
+}
+
+console.log('how often each is called, and how many are open at once\n');
+{
+  console.log(`  BASE_IGNITION_PER_BUILDING_HOUR ${BASE_IGNITION_PER_BUILDING_HOUR}` +
+    ` (x suppression), BASE_CALL_PER_BUILDING_HOUR ${BASE_CALL_PER_BUILDING_HOUR} (x pressure)`);
+  console.log('');
+  console.log('  districts   level   served   buildings   pressure   fires/h   calls/h   open calls');
+  for (const d of [1, 4, 12, MAX_DISTRICTS]) {
+    for (const serve of [0, 0.5, 1]) {
+      const s = city(d, 2, serve);
+      const open = Math.min(MAX_ACTIVE_CALLS, callRate(s) * responseResolvesAt(s, RESPONSES[1]));
+      console.log(
+        `  ${pad(d, 9)}${pad(2, 8)}${pct(serve, 9, 0)}${pad(burnableBuildings(s), 12)}` +
+          `${fixed(crimePressure(s), 11, 3)}${fixed(ignitionRate(s) * 3600, 10, 1)}` +
+          `${fixed(callRate(s) * 3600, 10, 1)}${fixed(open, 13, 2)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  "open calls" is the rate times how long each one sits, capped at');
+  console.log(`  MAX_ACTIVE_CALLS ${MAX_ACTIVE_CALLS} — Little's law, which is what the cap has to be`);
+  console.log('  read against: a cap the ordinary case sits on is a cap the player is looking');
+  console.log('  at rather than a guard against an absence.');
+  console.log('');
+}
+
+console.log('what an unanswered call is worth, and what it cannot do\n');
+{
+  console.log(`  UNANSWERED_CRIME ${UNANSWERED_CRIME} against CRIME_MOOD ${CRIME_MOOD}`);
+  console.log('');
+  console.log('  A 12-district city at level 2, at a police coverage set exactly rather than');
+  console.log("  by a station count, so the rows either side of the threshold are the rows");
+  console.log('  either side of the threshold. Two call loads: the one the rate and the');
+  console.log("  response time actually produce, and a full slate, which is the worst case.");
+  console.log('');
+  const police = SERVICES.find((x) => x.key === 'police');
+  const base = city(12, 2, 0);
+  console.log('  coverage   answered?   level   open   + calls   crime   mood      worst   mood');
+  for (const cov of [0, 0.2, 0.399, 0.401, 0.6, 1]) {
+    const at = (calls) => ({
+      ...base,
+      police: 1,
+      policeStaff: (cov * housingPlots(base)) / police.plots,
+      calls: Array.from({ length: calls }, () => ({ kind: 'home', index: 0, startedAt: 0 })),
+    });
+    const bare = at(0);
+    const open = Math.min(
+      MAX_ACTIVE_CALLS,
+      callRate(bare) * responseResolvesAt(bare, RESPONSES[1]),
+    );
+    const live = at(Math.round(open));
+    const worst = at(MAX_ACTIVE_CALLS);
+    console.log(
+      `  ${pct(cov, 8, 1)}${pad(missesDeadline(bare, RESPONSES[1]) ? 'no' : 'yes', 12)}` +
+        `${fixed(crime(bare), 8, 3)}${fixed(open, 7, 2)}${fixed(unansweredCrime(live), 10, 3)}` +
+        `${fixed(crime(live), 8, 3)}${fixed(-CRIME_MOOD * crime(live), 7, 3)}` +
+        `${fixed(crime(worst), 11, 3)}${fixed(-CRIME_MOOD * crime(worst), 7, 3)}`,
+    );
+  }
+  console.log('');
+  console.log('  The bottom row is the guard, and it holds by construction rather than by');
+  console.log('  measurement: a fully covered city answers every call inside ANSWER_MIN, so');
+  console.log('  `unansweredCrime` is 0 however many are open and `crime` reads exactly what');
+  console.log('  it read before this existed. The happiness ceiling cannot move.');
+  console.log('');
+  console.log('  The worst case does pin `crime` at its bound under the threshold, and that');
+  console.log('  is the clamp working rather than the term being too large: the crime *level*');
+  console.log('  alone is already 0.75 on an uncovered city of this size, so anything added');
+  console.log('  to it saturates. What the term actually moves is the middle — a city at 20%');
+  console.log('  coverage, which is over fire\'s threshold and under this one.');
+  console.log('');
+}
+
+// ==================================================================== 6
+
+console.log('='.repeat(78));
+console.log('6   road widening, costed rather than built');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('the version that fits: capacity as a city-wide term\n');
+{
+  console.log('  `congestion` is trips / roadCells / density / CONGESTION_SCALE. A local');
+  console.log('  exemption needs per-district congestion, which is per-district state. A');
+  console.log('  city-wide capacity term raises the *denominator* instead — same button,');
+  console.log('  same fiction, one scalar. What it would look like, as a multiplier `w` on');
+  console.log(`  ROAD_CELLS_PER_DISTRICT (${ROAD_CELLS_PER_DISTRICT} a district):`);
+  console.log('');
+  console.log('  12 districts, level 4     w=1.0    w=1.2    w=1.5    w=2.0    w=3.0');
+  const widen = (s, w) => {
+    const road = ROAD_CELLS_PER_DISTRICT * Math.max(1, s.districts) * w;
+    const density = cityScale(s) ** CONGESTION_DENSITY_EXPONENT;
+    const carried = Math.min(TRANSIT_MAX_SHARE, TRANSIT_ROAD_SHARE * transitCoverage(s));
+    return Math.max(0, Math.min(1, (trips(s) * (1 - carried)) / road / density / CONGESTION_SCALE));
+  };
+  for (const [label, serve, lines] of [
+    ['no transit at all  ', 0, 0],
+    ['every depot open   ', 1, 0],
+    ['depots + network   ', 1, 12],
+  ]) {
+    const s = wired(12, LEVELS - 1, serve, 0, lines);
+    const row = [1, 1.2, 1.5, 2, 3].map((w) =>
+      fixed(lines > 0 ? congestionWiden(s, w) : widen(s, w), 9, 3),
+    );
+    console.log(`    ${label}${row.join('')}`);
+  }
+  console.log('');
+  console.log('  and what each of those is worth in mood, against what transit already gives');
+  console.log('  12 districts, level 4            jam      mood      vs transit-free');
+  {
+    const bare = city(12, LEVELS - 1, 0);
+    const depots = city(12, LEVELS - 1, 1);
+    const both = wired(12, LEVELS - 1, 1, 0, 12);
+    const rows = [
+      ['nothing bought      ', congestion(bare)],
+      ['every depot         ', congestion(depots)],
+      ['depots + network    ', congestion(both)],
+      ['nothing, roads x2   ', widen(bare, 2)],
+      ['nothing, roads x3   ', widen(bare, 3)],
+      ['depots, roads x2    ', congestionWiden(depots, 2)],
+      ['depots + net, x2    ', congestionWiden(both, 2)],
+    ];
+    const base = congestion(bare);
+    for (const [label, jam] of rows) {
+      console.log(
+        `    ${label}${fixed(jam, 9, 3)}${fixed(-CONGESTION_MOOD * jam, 10, 4)}` +
+          `${fixed(CONGESTION_MOOD * (base - jam), 20, 4)}`,
+      );
+    }
+  }
+  console.log('');
+}
+
+/** `congestion` with the road supply multiplied by `w`, network included. */
+function congestionWiden(s, w) {
+  const road = ROAD_CELLS_PER_DISTRICT * Math.max(1, s.districts) * w;
+  const density = cityScale(s) ** CONGESTION_DENSITY_EXPONENT;
+  const carried = Math.min(
+    TRANSIT_MAX_SHARE,
+    TRANSIT_ROAD_SHARE * transitCoverage(s) + NETWORK_ROAD_SHARE * networkService(s),
+  );
+  return Math.max(0, Math.min(1, (trips(s) * (1 - carried)) / road / density / CONGESTION_SCALE));
+}
+
+// ==================================================================== 2
+
+console.log('='.repeat(78));
+console.log('2   the waste depot, and what it would do to the bus');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('leaving transit as a collector, against removing it\n');
+{
+  console.log('  GARBAGE_COLLECTORS is a readonly ServiceKey[] and the mechanism is already');
+  console.log('  there: a waste depot joins the sum and nothing else in the model moves. The');
+  console.log('  question the brief asks is what happens to the *bus* when it does.');
+  console.log('');
+  console.log('  A waste depot modelled as the sixth 2x2 type: 24 plots a district of sites');
+  console.log(`  and the 6-type anchor of ${derivedPlots(6).anchor} plots of reach, out of 0a's table.`);
+  console.log('');
+  // Collection is `covered / housingPlots`, clamped — so it can be computed
+  // from a count and a reach without the service having to exist.
+  const wastePlots = derivedPlots(6).anchor;
+  const share = (s, busCount, wasteCount) => {
+    const plots = housingPlots(s);
+    if (plots <= 0) return 1;
+    const transit = SERVICES.find((x) => x.key === 'transit');
+    const reached = busCount * transit.plots + wasteCount * wastePlots;
+    return Math.min(1, reached / plots);
+  };
+  const bins = (s, bus, waste) => Math.max(0, garbageLoad(s) * (1 - share(s, bus, waste)));
+  console.log('  A 12-district city at level 4, by how much of each is built:');
+  console.log('');
+  console.log('  built     bus only   waste only   both (bus kept)   waste only (bus dropped)');
+  const s12 = city(12, LEVELS - 1, 0);
+  const busAllowed = Math.min(
+    Math.floor(housingPlots(s12) / 24) + 1,
+    Math.ceil((12 * FRONTAGE_TARGET.civicSites - 4) / 6),
+  );
+  const wasteAllowed = Math.ceil((12 * FRONTAGE_TARGET.civicSites - 5) / 6);
+  for (const built of [0, 0.25, 0.5, 0.75, 1]) {
+    const bus = Math.round(busAllowed * built);
+    const waste = Math.round(wasteAllowed * built);
+    console.log(
+      `  ${pct(built, 5, 0)}${fixed(bins(s12, bus, 0), 13, 3)}${fixed(bins(s12, 0, waste), 13, 3)}` +
+        `${fixed(bins(s12, bus, waste), 18, 3)}${fixed(bins(s12, 0, waste), 27, 3)}`,
+    );
+  }
+  console.log('');
+  console.log('  The two right-hand columns are the decision, and at a full build they are');
+  console.log('  the same number — which is the reading rather than a flaw in the probe.');
+  console.log('  `garbageCollection` is a plot count over the housing land, clamped at 1, and');
+  console.log('  one finished collector already covers the city: TRANSIT.plots is 24 against');
+  console.log("  a district's 24 housing plots. A second collector at the same reach is worth");
+  console.log('  everything to a city halfway through its first and nothing to one that has');
+  console.log('  finished it.');
+  console.log('');
+  console.log('  So the choice is not a balance question, it is a question about what a');
+  console.log('  depot is:');
+  console.log('');
+  console.log('    - keep transit in the array, and the waste depot is a second way to buy a');
+  console.log('      number the bus already buys. The player builds whichever is cheaper and');
+  console.log('      the other is a 2x2 square doing nothing. The two rows the table above');
+  console.log('      calls "both" and "bus only" are the same line past 50% built;');
+  console.log('    - take transit out, and the depot loses the fourth job GARBAGE_MOOD gave');
+  console.log('      it last cycle — measured, and written into `garbageCollection` — and a');
+  console.log('      city mid-save wakes up with rubbish it did not have when it closed the');
+  console.log('      tab. The worst case is the city that did everything right: a full bus');
+  console.log('      network, no waste depot because there was none to build, reading 0.000');
+  console.log('      the night before and 0.974 the morning after, which is 9.7 points of');
+  console.log('      mood taken from the player who bought the building that was answering');
+  console.log('      it. A migration cannot soften that — there is no count to carry across,');
+  console.log('      because the buildings that would collect the rubbish were never bought.');
+  console.log('');
+  console.log('  Recommendation, for when the land question is answered: **keep transit in');
+  console.log('  the array and give the waste depot a different job**, which is what the');
+  console.log('  brief already says about the recycling centre and is true a rung earlier.');
+  console.log('  A collector that only ever raises `garbageCollection` is competing with the');
+  console.log('  bus for one number; one that lowers `garbageRate` at source stacks with it.');
+  console.log('  That makes the pair depot-and-recycling rather than depot-and-depot, and it');
+  console.log('  costs one 2x2 type instead of two — which is the difference between 0a\'s');
+  console.log('  six-type row (which works) and its seven-type row (which does not).');
+  console.log('');
+}
+
+// ==================================================================== 4
+
+console.log('='.repeat(78));
+console.log('4   culture, costed both ways');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('as a fourth weight: the re-normalisation, and what it re-opens\n');
+{
+  const weighted = SERVICES.filter((x) => x.weight > 0);
+  console.log('  today                      as a fourth weight, culture at w');
+  console.log('  term          weight       w=0.10   w=0.15   w=0.20   w=0.24');
+  const rows = [...weighted.map((x) => [x.key, x.weight]), ['recreation', RECREATION_WEIGHT]];
+  for (const [key, w] of rows) {
+    const cells = [0.1, 0.15, 0.2, 0.24].map((c) => fixed(w * (1 - c), 9, 3));
+    console.log(`  ${pad(key, 14)}${fixed(w, 6, 2)}${cells.join('')}`);
+  }
+  console.log(`  ${pad('culture', 14)}${pad('—', 6)}` +
+    [0.1, 0.15, 0.2, 0.24].map((c) => fixed(c, 9, 3)).join(''));
+  console.log('');
+  console.log('  Every one of those cells is a constant with its own measurement. The three');
+  console.log('  non-zero weights sum to exactly 1 and every `Service.plots` was solved');
+  console.log('  against their ordering — `plots_i = 20 x w_hospital / w_i` — so a fourth');
+  console.log('  weight moves the plots column as well as the weights, which re-opens');
+  console.log("  LEVEL_EDUCATION's window and the >= 0.95 ceiling together. See 0a, which is");
+  console.log('  the same table from the other side.');
+  console.log('');
+}
+
+console.log('as a modifier in the bracket: which sign, and what each does to the ceiling\n');
+{
+  console.log('  The bracket as it stands, and where a culture term would sit:');
+  console.log(`    crime      -0.26     congestion -${CONGESTION_MOOD}     garbage    -${GARBAGE_MOOD}`);
+  console.log(`    landmark   +${LANDMARK_MOOD}     transport  +${FREE_TRANSPORT_MOOD}     tax        -0.14 .. +0.08`);
+  console.log('');
+  console.log('  A maxed city, at every district count, with a culture term of each sign:');
+  console.log('');
+  console.log('  sign        term   ceiling at 1d   at 12d   at 49d   worst anywhere');
+  for (const [label, sign] of [['bonus  ', +1], ['penalty', -1]]) {
+    for (const size of [0.08, 0.12]) {
+      let worst = 1;
+      const at = {};
+      for (let d = 1; d <= MAX_DISTRICTS; d++) {
+        const s = maxedCity(d);
+        // A bonus is added to a city already at its ceiling; a penalty is what
+        // a city *without* culture carries, so it comes off the same ceiling.
+        const t = Math.max(0, Math.min(1, happinessTarget(s) + (sign > 0 ? size : -size)));
+        worst = Math.min(worst, t);
+        if (d === 1 || d === 12 || d === MAX_DISTRICTS) at[d] = t;
+      }
+      console.log(
+        `  ${label}${fixed(size, 8, 2)}${fixed(at[1], 16, 4)}${fixed(at[12], 9, 4)}` +
+          `${fixed(at[MAX_DISTRICTS], 9, 4)}${fixed(worst, 17, 4)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  The bonus row is the one worth reading: a maxed city sits at 0.9583, so a');
+  console.log('  +0.08 bonus takes it to 1.0000 and is clamped — most of what was bought');
+  console.log('  goes nowhere. A penalty of the same size takes the ceiling to 0.8783, which');
+  console.log('  is under the 0.95 test/services.test.ts asserts and predates all of this.');
+  console.log('');
+  console.log('  Which is LANDMARK_MOOD\'s argument arriving again from the other side: it is');
+  console.log('  +0.12, a city that has earned 1.00 gains nothing from it, and that is the');
+  console.log('  right shape *because* landmarks are for buying happiness early. A cheap');
+  console.log('  library and a cheap theatre are the same statement.');
+  console.log('');
+}
+
+/** A city built out to the top with every service and park the land allows. */
+function maxedCity(districts) {
+  const s = city(districts, LEVELS - 1, 0);
+  s.parks = parkCapacity(s);
+  for (const service of SERVICES) {
+    const n = serviceAllowed(s, service);
+    setCount(s, service.key, n);
+  }
+  s.hospitalStaff = 1;
+  s.policeStaff = 1;
+  s.fireStaff = 1;
+  s.schoolStaff = 1;
+  s.universityStaff = 1;
+  s.depotStaff = 1;
+  return s;
+}
+
+// ==================================================================== 0c
+
+console.log('='.repeat(78));
+console.log('0c  the eleventh square, and why it cannot be paid for');
+console.log('='.repeat(78));
+console.log('');
+console.log('  Asked for after 0a: give culture a 2x2 site of its own rather than sharing');
+console.log('  the small-landmark square, by enlarging the district. Built, measured, and');
+console.log('  reverted. What follows is the reading, so the next cycle does not spend the');
+console.log('  same afternoon on it.');
+console.log('');
+console.log('  1. Widening DISTRICT_SPAN to 16 is the literal reading and is the more');
+console.log('     expensive of the two. Measured over 60,000 raw plans at span 16:');
+console.log('');
+console.log('       buildable-plot modes   156 at 44.1%, 169 at 43.0%, 144 at 11.3%');
+console.log('       commercial frontage    48 plots, at 100% of seeds (45 at span 15)');
+console.log('       residential 24         not reachable at any square count');
+console.log('');
+console.log('     So TARGET_PLOTS 144 -> 156, ROAD_CELLS_PER_DISTRICT 81 -> 100, commerce');
+console.log('     45 -> 48, and residential off its anchor. Four load-bearing constants,');
+console.log("     and residential 24 is the one SERVICES calls the load-bearing part.");
+console.log('');
+console.log('  2. The district does not need widening. `onTarget` pins the square *count*,');
+console.log('     and an eighth of on-target plans already offer eleven squares and are');
+console.log('     thrown away for it. Measured over 200,000 plans at span 15, the tuples');
+console.log('     with residential pinned at 24 and commerce at its invariant 45:');
+console.log('');
+console.log('        9 squares   24/45/13/8   2.481%   <- what ships');
+console.log('       10 squares   24/45/11/6   0.192%   <- 25% of districts fail to generate');
+console.log('       11 squares   24/45/ 9/4   1.607%   <- reachable, at 1,024 attempts');
+console.log('');
+console.log('     Ten is a wall rather than a near miss. Eleven works, generates a full map');
+console.log('     in 336 ms, and costs four industrial plots — because residential is pinned');
+console.log('     and commerce is invariant per span, so industry is the only place the four');
+console.log('     plots can come from. There is no 24/45/13 tuple at eleven squares: the');
+console.log('     arithmetic forbids it (24+45+13+44+18 is 144 with nothing left for parks).');
+console.log('');
+console.log('  3. And four industrial plots is what the economy cannot pay. Industry is the');
+console.log("     densest employer in the game — ZONE_SHARE solves 14R = 8C + 20I — so the");
+console.log('     cut is 13% of a district\'s whole job supply and 31% of the dense third:');
+console.log('');
+console.log('       industrial 13   jobs 620 (shops 360, works 260) against 53 workers');
+console.log('       industrial  9   jobs 540 (shops 360, works 180) against 53 workers');
+console.log('');
+console.log('     `demandTargets.r` is (jobs - reachableWorkers) / scale, so residential');
+console.log('     demand falls with the jobs. Measured, `npm run economy:calibrate`:');
+console.log('');
+console.log('       policy                    12h        24h            48h');
+console.log('       discount-chasing, 13   R 0.0m     R 0.0m         R 0.0m');
+console.log('       discount-chasing,  9   R 0.0m     R 25.8m        R 1,244.4m');
+console.log('');
+console.log('     Residential pins at -1 for twenty of forty-eight hours, against a build');
+console.log('     that pins nothing under any policy at any horizon. Auto-develop also ends');
+console.log('     30% smaller: 65,909 residents against 93,683, and eight districts');
+console.log('     against nine.');
+console.log('');
+console.log('  So the eleventh square is available and unaffordable, and the price is not a');
+console.log('  tuning miss: ZONE_SHARE is frozen and is exactly the constant that would have');
+console.log('  to move. Sharing the small-landmark site remains the only way culture gets a');
+console.log('  site this cycle, and it costs no land at all — see section 13 of NOTES.md.');
+console.log('');
+
+// ==================================================================== 4b
+
+console.log('='.repeat(78));
+console.log('4b  the library and the theatre, as built');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('the sites, and what a complete tier reaches\n');
+{
+  console.log('  One culture square a district, two types on a fixed interleave — so each');
+  console.log('  gets half a district\'s worth, and `Culture.plots` is 48 because half a');
+  console.log('  site covering 24 housing plots is 48 plots of reach.');
+  console.log('');
+  console.log('  districts   libraries allowed   theatres allowed   library reach   theatre reach');
+  for (const d of [1, 2, 4, 12, 25, MAX_DISTRICTS]) {
+    const bare = city(d, 2, 0);
+    const nl = cultureAllowed(bare, CULTURE[0]);
+    const nt = cultureAllowed(bare, CULTURE[1]);
+    const full = { ...bare, libraries: nl, theatres: nt };
+    console.log(
+      `  ${pad(d, 9)}${pad(nl, 19)}${pad(nt, 19)}${pct(libraryCoverage(full), 16, 0)}` +
+        `${pct(theatreCoverage(full), 16, 0)}`,
+    );
+  }
+  console.log('');
+  console.log('  A complete tier covers the city exactly, at every size from two districts');
+  console.log('  up. One district gets a library and no theatre, which is the interleave');
+  console.log('  doing what `civicSiteFor` does at one district: somebody is first.');
+  console.log('');
+}
+
+console.log('what a library takes off the crime pressure\n');
+{
+  console.log(`  LIBRARY_CRIME_RELIEF ${LIBRARY_CRIME_RELIEF} on the idleness half,` +
+    ` which is CRIME_FROM_IDLENESS ${CRIME_FROM_IDLENESS} of the pressure.`);
+  console.log('');
+  console.log('  districts   level   idleness   pressure, none   every library   crime, no police');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const bare = city(d, level, 0);
+      const nl = cultureAllowed(bare, CULTURE[0]);
+      const full = { ...bare, libraries: nl };
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${fixed(unemployment(bare), 11, 3)}` +
+          `${fixed(crimePressure(bare), 17, 3)}${fixed(crimePressure(full), 16, 3)}` +
+          `${fixed(crime(full), 19, 3)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  On the *pressure* rather than on `crime`, so a library and a police station');
+  console.log('  are not charged for the same thing: police answer the crime that happens');
+  console.log('  and this is a reason for less of it to happen. A fully policed city still');
+  console.log('  reads exactly zero either way, so the happiness ceiling cannot move.');
+  console.log('');
+}
+
+console.log('what a theatre lands, against the four sources beside it\n');
+{
+  console.log(`  THEATRE_VISITORS ${THEATRE_VISITORS} berths at full coverage, against the coach's 2,`);
+  console.log("  the runway's 3, the terminus's 2 and a quay's 1 each.");
+  console.log('');
+  console.log('  districts   level   theatres   berths   visitors   of all arrivals   income');
+  for (const d of [4, 12, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const bare = settled(city(d, level, 1));
+      const nt = cultureAllowed(bare, CULTURE[1]);
+      const full = settled({ ...city(d, level, 1), theatres: nt });
+      const from = visitorSources(full);
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${pad(nt, 11)}` +
+          `${fixed(THEATRE_VISITORS * theatreCoverage(full), 9, 2)}${fixed(from.stage, 11, 0)}` +
+          `${pct(from.total > 0 ? from.stage / from.total : 0, 18, 0)}` +
+          `${pct((income(full) - income(bare)) / Math.max(1e-9, income(bare)), 9, 2)}`,
+      );
+    }
+  }
+  console.log('');
+}
+
+console.log('the price of the tier, against the museum it sits under\n');
+{
+  console.log('  building   1st       4th       8th      16th');
+  for (const culture of CULTURE) {
+    const at = (n) => cultureCost({ ...city(25, 2, 0), libraries: n, theatres: n }, culture);
+    console.log(
+      `  ${pad(culture.key, 9)}${fixed(at(0), 6, 0)}${fixed(at(3), 10, 0)}` +
+        `${fixed(at(7), 10, 0)}${fixed(at(15), 10, 0)}`,
+    );
+  }
+  const museum = LANDMARKS[0];
+  console.log(`  ${pad('museum', 9)}${fixed(museum.base, 6, 0)}` +
+    `${fixed(museum.base * museum.growth ** 3, 10, 0)}` +
+    `${fixed(museum.base * museum.growth ** 7, 10, 0)}` +
+    `${fixed(museum.base * museum.growth ** 15, 10, 0)}`);
+  console.log('');
+  console.log('  Under the museum at every rung, which is what "the cheap tier" has to mean,');
+  console.log('  and growing at 1.5 against its 1.6 because there are half as many sites to');
+  console.log('  fill — the curve has fewer rungs to climb.');
+  console.log('');
+}
+
+// ==================================================================== 2b
+
+console.log('='.repeat(78));
+console.log('2b  the waste depot, as built');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('the divisor, after the fact\n');
+{
+  console.log(`  CIVIC_SERVICES.length ${CIVIC_SERVICES.length}: ${CIVIC_SERVICES.map((x) => x.key).join(', ')}`);
+  console.log('');
+  console.log('  sites each type gets, which is 0a\'s six-type row now that it is the build');
+  console.log('  districts   ' + CIVIC_SERVICES.map((x) => pad(x.key.slice(0, 5), 8)).join(''));
+  for (const d of [1, 4, 12, MAX_DISTRICTS]) {
+    const s = { ...city(d, 2, 0), districts: d };
+    console.log(`  ${pad(d, 9)}   ` + CIVIC_SERVICES.map((x) => pad(siteCapacity(s, x.key), 8)).join(''));
+  }
+  console.log('');
+  console.log('  and the re-derived plots column, against 0a\'s prediction of 24/31/37/-/-');
+  console.log('  ' + SERVICES.map((x) => `${x.key} ${x.plots}`).join(', '));
+  console.log('');
+  console.log('  School and transit did *not* take the anchor, and that is the one place 0a');
+  console.log('  was too coarse. A school\'s plots is held by LEVEL_EDUCATION\'s window, not by');
+  console.log('  the weight ordering — it carries no weight — and the anchor would have put');
+  console.log("  it at 18, which is exactly the university's 18. A university reaching no");
+  console.log('  further than a school is a school at forty times the price. Transit is held');
+  console.log('  by what it means: one depot, one district, 24 plots.');
+  console.log('');
+}
+
+console.log('what the depot is worth, and that it stacks\n');
+{
+  console.log(`  WASTE_RECYCLING ${WASTE_RECYCLING} on garbageRate, and GARBAGE_COLLECTORS is still ['transit'].`);
+  console.log('');
+  console.log('  12 districts        nothing   every bus   every depot   both');
+  for (let level = 0; level < LEVELS; level++) {
+    const bare = city(12, level, 0);
+    const transit = SERVICES.find((x) => x.key === 'transit');
+    const waste = SERVICES.find((x) => x.key === 'waste');
+    const bussed = { ...bare, depots: serviceAllowed(bare, transit), depotStaff: 1 };
+    const wasted = { ...bare, wasteDepots: serviceAllowed(bare, waste), wasteStaff: 1 };
+    const both = { ...bussed, wasteDepots: wasted.wasteDepots, wasteStaff: 1 };
+    console.log(
+      `    level ${level}` + fixed(garbage(bare), 15, 3) + fixed(garbage(bussed), 12, 3) +
+        fixed(garbage(wasted), 14, 3) + fixed(garbage(both), 7, 3),
+    );
+  }
+  console.log('');
+  console.log('  The bus alone takes it to zero, and so does the depot alone — because');
+  console.log('  `garbageCollection` is a plot count clamped at 1 and one finished collector');
+  console.log('  covers the city. What the pair is for is everything *before* that:');
+  console.log('');
+  console.log('  12 districts, level 4, half of each built');
+  console.log('    nothing   half the buses   half the depots   half of both');
+  {
+    const bare = city(12, LEVELS - 1, 0);
+    const transit = SERVICES.find((x) => x.key === 'transit');
+    const waste = SERVICES.find((x) => x.key === 'waste');
+    const halfBus = { ...bare, depots: Math.floor(serviceAllowed(bare, transit) / 2), depotStaff: 1 };
+    const halfWaste = { ...bare, wasteDepots: Math.floor(serviceAllowed(bare, waste) / 2), wasteStaff: 1 };
+    const both = { ...halfBus, wasteDepots: halfWaste.wasteDepots, wasteStaff: 1 };
+    console.log(
+      `  ${fixed(garbage(bare), 9, 3)}${fixed(garbage(halfBus), 17, 3)}` +
+        `${fixed(garbage(halfWaste), 18, 3)}${fixed(garbage(both), 15, 3)}`,
+    );
+    console.log('');
+    console.log('  Which is the whole argument for a rate cut over a second collector:');
+    console.log('  `garbage` is load times uncollected share, so the two move different');
+    console.log('  factors and the pair is the product. Two collectors would have been two');
+    console.log('  buttons buying one number — see NOTES.md section 12.');
+  }
+  console.log('');
+}
+
+console.log('what the divisor change costs a save, and what it hands back\n');
+{
+  console.log('  A 12-district v14 city with every 2x2 type at its old five-type allowance:');
+  console.log('');
+  console.log('  type        had   keeps   refunded');
+  const districts = 12;
+  const s = { ...city(districts, 2, 0), districts };
+  let total = 0;
+  let moved = 0;
+  let had = 0;
+  let kept = 0;
+  for (const service of CIVIC_SERVICES) {
+    const offset = CIVIC_SERVICES.findIndex((x) => x.key === service.key);
+    // The waste depot is the type that did not exist, so a v14 save has none.
+    const old =
+      service.key === 'waste'
+        ? 0
+        : Math.max(0, Math.ceil((districts * FRONTAGE_TARGET.civicSites - offset) / 5));
+    const keeps = Math.min(old, serviceAllowed(s, service));
+    let cash = 0;
+    for (let k = keeps; k < old; k++) cash += service.base * service.growth ** k;
+    total += cash;
+    had += old;
+    kept += keeps;
+    // A building moves when its square changes, which is every ordinal past the
+    // first: the old site was `i * 5 + offset` and the new one is `i * 6 +
+    // offset`, and those agree only at i = 0.
+    for (let i = 1; i < keeps; i++) moved++;
+    console.log(
+      `  ${pad(service.key, 10)}${pad(old, 6)}${pad(keeps, 8)}${fixed(cash, 11, 0)}`,
+    );
+  }
+  console.log(`  ${pad('total', 10)}${pad(had, 6)}${pad(kept, 8)}${fixed(total, 11, 0)}`);
+  console.log('');
+  console.log(`  ${moved} of the ${kept} buildings it keeps stand on a different square, which is`);
+  console.log('  the part no migration can undo:');
+  console.log('  `siteCapacity` divides by the table length and a position falls out of the');
+  console.log('  ordinal, so a returning player watches the city rearrange itself. What a');
+  console.log('  migration *can* do is refuse to take a building away in silence, and that');
+  console.log('  is what the refund is for — see `abandonedR`, which settled what permanent');
+  console.log('  loss does to an idle game.');
+  console.log('');
+}

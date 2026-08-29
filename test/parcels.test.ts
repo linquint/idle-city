@@ -288,7 +288,20 @@ describe('merging', () => {
         // Some of level 1 may have been topped up from level 0 in the same
         // pass, so the drop is at most two per merge and never less than the
         // pair count once the bottom is empty.
-        expect((game.state.homeLevels[MERGE_LEVEL] ?? 0) - (before[MERGE_LEVEL] ?? 0)).toBe(gained);
+        //
+        // Counted over MERGE_LEVEL *and above* rather than at MERGE_LEVEL
+        // alone. A building that merges and then climbs again inside one
+        // catch-up step leaves the level-2 cohort where it was while `mergedR`
+        // moves, and the invariant being asserted is about parcels rather than
+        // about which rung the parcel's building is standing on. The city
+        // reaches that in this fixture now — the industrial re-solve made it
+        // richer — and it was always allowed to.
+        const above = (levels: readonly number[]): number => {
+          let n = 0;
+          for (let l = MERGE_LEVEL; l < LEVELS; l++) n += levels[l] ?? 0;
+          return n;
+        };
+        expect(above(game.state.homeLevels) - above(before)).toBe(gained);
         expect(left).toBeLessThanOrEqual(2 * gained);
       }
       before = [...game.state.homeLevels];

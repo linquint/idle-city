@@ -1,13 +1,16 @@
 import * as THREE from 'three';
 import { mixSeed, rng } from '../core/rng.ts';
-import { CELL, SEED } from '../sim/config.ts';
+import { CELL, MAX_DISTRICTS, SEED } from '../sim/config.ts';
 import { congestion, landmarkCoverage, residents } from '../sim/economy.ts';
 import {
   DISTRICT_WIDTH,
+  linePairAt,
+  linePairCapacity,
   worldX,
   worldZ,
   type CityLayout,
   type District,
+  type LineKind,
 } from '../sim/layout.ts';
 import type { GameState } from '../sim/state.ts';
 import { BUS_PARTS } from './civicModels.ts';
@@ -217,6 +220,69 @@ const COACHES_AT_FULL_LANDMARKS = 6;
 /** Lorries run slower than cars and do not stop. */
 const TRUCK_SPEED = 5;
 
+/**
+ * Trams and trains, out of the same pool a third and fourth time.
+ *
+ * Two body shapes and two routers, not two fleets. What they share with every
+ * vehicle above is the whole discipline: pooled, instanced, culled at
+ * VIEW_RADIUS, and not one word of them reaches `GameState` — a tram is a
+ * readout of `tramLines` in exactly the way a bus is a readout of `depots`.
+ *
+ * What separates them is where they run, and it is the same thing that
+ * separates the two rungs in the simulation. A tram runs *on a street*, at road
+ * height and in the right-hand lane, between two neighbouring districts. A
+ * train runs on *its own alignment*, which is drawn: an elevated viaduct at
+ * RAIL_Y over whatever is under it, between two districts that need not be
+ * neighbours. Putting a train on the ground between district centres would run
+ * it through the middle of four blocks, and putting it on the streets would
+ * make it a long tram.
+ *
+ * Both take the route straight from `linePairAt` rather than sampling the map
+ * the city router does: a line's two ends are a pure function of its ordinal
+ * and the seed, so the view can ask where the k-th line runs and get the same
+ * answer the simulation costed it against.
+ */
+const TRAM_LENGTH = 3.4;
+const TRAM_WIDTH = 0.95;
+const TRAM_HEIGHT = 0.8;
+const TRAIN_LENGTH = 9;
+const TRAIN_WIDTH = 1.15;
+const TRAIN_HEIGHT = 1.3;
+
+/** How high the viaduct runs, and how thick its deck is. */
+const RAIL_Y = 7.2;
+const DECK_H = 0.45;
+const DECK_W = 2.2;
+
+/**
+ * Vehicles per line, and the ceilings.
+ *
+ * More trams than trains per line, because a tram is the frequent thing and a
+ * train is the fast one — the same statement `TransitLine.carries` makes in the
+ * simulation, drawn. The ceilings are what keeps this inside the pool: at
+ * MAX_DISTRICTS a city can own 44 tram lines and 48 rail ones, and drawing a
+ * vehicle for each would be most of MAX_CARS spent on transport.
+ */
+const TRAMS_PER_LINE = 1.4;
+const TRAINS_PER_LINE = 0.8;
+const MAX_TRAMS = 14;
+const MAX_TRAINS = 10;
+
+/** A tram is slower than a car in traffic and a train is faster than anything. */
+const TRAM_SPEED = 5.6;
+const TRAIN_SPEED = 14;
+
+/**
+ * How much of the city's congestion a tram suffers.
+ *
+ * Less than a bus's, which is less than a car's: a tram has its own reserved
+ * strip down the middle of the street more often than a bus has a bus lane. A
+ * train suffers none at all, for the reason a lorry does not — `congestion` is
+ * trips against the road cells *inside* the districts, and a viaduct is not one.
+ */
+const TRAM_CONGESTION_SHARE = 0.3;
+const TRAM_CRAWL = TRAM_SPEED * 0.6;
+
 /** One vehicle's whole state. Pooled and mutated; never allocated in a frame. */
 interface Car {
   /** The lane's constant coordinate: z for a car driving along x, x for one along z. */
@@ -247,6 +313,16 @@ interface Car {
    * no mesh of its own.
    */
   coach: boolean;
+  /**
+   * True for a tram, and for a train.
+   *
+   * Two flags rather than one with a kind, because they are read in the hot
+   * loop and a branch on a boolean is what every other body type here costs.
+   * `line` is reused to hold which line of that kind the vehicle is working,
+   * and `at` to hold which leg of its L it is on — see `routeLine`.
+   */
+  tram: boolean;
+  train: boolean;
   /** Seconds left at the current stop, or at a junction in heavy traffic. */
   waiting: number;
   /** How far along the run the next stop is. */
@@ -289,6 +365,16 @@ export class Cars {
   private readonly blind = new Glow(PALETTE.sodium, BLIND_FLOOR);
   /** The one extra mesh lorries cost. Same pool, same lanes, a longer box. */
   private readonly lorries: GrowableInstancedMesh;
+  /** Two more: a tram on a street, a train on the viaduct above it. */
+  private readonly tramCars: GrowableInstancedMesh;
+  private readonly trainCars: GrowableInstancedMesh;
+  /**
+   * The viaduct itself, which is the one piece of *static* geometry this file
+   * draws: a deck per leg of every rail line, written in `sync` and left alone
+   * until the line count or the district count moves. A unit box scaled per
+   * instance, so a leg of any length is one matrix.
+   */
+  private readonly decks: GrowableInstancedMesh;
   private readonly lamps: GrowableInstancedMesh;
   private readonly headlights = new Glow(PALETTE.headlight, 0);
   private readonly dummy = new THREE.Object3D();
@@ -304,6 +390,15 @@ export class Cars {
   private trucks = 0;
   /** How many are tourist coaches. Directly behind the buses — see `sync`. */
   private coachCount = 0;
+  /** How many are trams, and how many trains. Behind the coaches, before the lorries. */
+  private tramCount = 0;
+  private trainCount = 0;
+  /** Lines the city owns, read in `sync` and held. A readout, like `jam`. */
+  private tramLines = 0;
+  private railLines = 0;
+  /** What the network looked like last sync, so the decks are rebuilt only when it moves. */
+  private deckRails = -1;
+  private deckDistricts = -1;
   /** Reused by the truck router. A route must not allocate, per frame or otherwise. */
   private readonly lane: Lane = { alongX: true, fixed: 0, from: 0, length: 0 };
   /** What the highway looked like last sync. Lorries re-route when it moves. */
@@ -374,6 +469,30 @@ export class Cars {
       MAX_CARS,
       { castShadow: true, name: 'traffic:truck' },
     );
+    this.tramCars = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(TRAM_LENGTH, TRAM_HEIGHT, TRAM_WIDTH),
+      new THREE.MeshLambertMaterial({ color: PALETTE.tram }),
+      MAX_TRAMS,
+      { castShadow: true, name: 'traffic:tram' },
+    );
+    this.trainCars = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(TRAIN_LENGTH, TRAIN_HEIGHT, TRAIN_WIDTH),
+      new THREE.MeshLambertMaterial({ color: PALETTE.train }),
+      MAX_TRAINS,
+      { castShadow: true, name: 'traffic:train' },
+    );
+    // A unit box, scaled per instance: a deck is a length and a place, and the
+    // matrix carries both. Capacity is two legs a line, which is the most an L
+    // can have, at MAX_DISTRICTS lines.
+    this.decks = new GrowableInstancedMesh(
+      scene,
+      new THREE.BoxGeometry(1, DECK_H, DECK_W),
+      new THREE.MeshLambertMaterial({ color: PALETTE.viaduct }),
+      2 * MAX_DISTRICTS,
+      { castShadow: true, receiveShadow: true, name: 'traffic:viaduct' },
+    );
     this.lamps.mesh.visible = false;
 
     for (let i = 0; i < MAX_CARS; i++) {
@@ -390,6 +509,8 @@ export class Cars {
         bus: false,
         truck: false,
         coach: false,
+        tram: false,
+        train: false,
         waiting: 0,
         nextStop: STOP_SPACING,
         legsLeft: 0,
@@ -475,14 +596,21 @@ export class Cars {
     // size above it: the streets are slow because `congestion` says so, and the
     // view has no opinion of its own about traffic.
     this.jam = congestion(state);
+    this.tramLines = Math.min(state.tramLines, linePairCapacity('tram', state.districts));
+    this.railLines = Math.min(state.railLines, linePairCapacity('rail', state.districts));
     const freight = Cars.freight(state);
+    const trams = Cars.tramFleet(state);
+    const trains = Cars.trainFleet(state);
     // The fleet has to make room for the services rather than crowd them out:
     // a city whose population would only justify eight cars still runs whatever
-    // buses and lorries it has paid for.
+    // buses, lorries, trams and trains it has paid for.
     this.active = Math.min(
       MAX_CARS,
       this.lines.length > 0
-        ? Math.max(Cars.fleet(state), Cars.coaches(state) + Cars.coachFleet(state) + freight)
+        ? Math.max(
+            Cars.fleet(state),
+            Cars.coaches(state) + Cars.coachFleet(state) + freight + trams + trains,
+          )
         : 0,
     );
     const buses = Math.min(Cars.coaches(state), this.active);
@@ -491,16 +619,48 @@ export class Cars {
     // keeping them adjacent keeps that mesh's instances contiguous in the pool
     // and costs the culling nothing.
     const coaches = Math.min(Cars.coachFleet(state), Math.max(0, this.active - buses - trucks));
-    if (buses !== this.buses || trucks !== this.trucks || coaches !== this.coachCount) {
+    // Then the network, in the band between the coaches and the lorries. Each
+    // has a mesh of its own, so contiguity buys nothing here — what the band
+    // does buy is that a fleet shrinking with the population loses *cars* from
+    // the middle and keeps every service the player paid for running.
+    const tramFrom = buses + coaches;
+    const tramCount = Math.min(trams, Math.max(0, this.active - tramFrom - trucks));
+    const trainFrom = tramFrom + tramCount;
+    const trainCount = Math.min(trains, Math.max(0, this.active - trainFrom - trucks));
+    if (
+      buses !== this.buses ||
+      trucks !== this.trucks ||
+      coaches !== this.coachCount ||
+      tramCount !== this.tramCount ||
+      trainCount !== this.trainCount
+    ) {
       for (let i = 0; i < MAX_CARS; i++) {
         const car = this.pool[i] as Car;
         const coach = i >= buses && i < buses + coaches;
         const bus = i < buses || coach;
-        const truck = i >= this.active - trucks && i < this.active && !bus;
-        if (car.bus === bus && car.truck === truck && car.coach === coach) continue;
+        const tram = i >= tramFrom && i < tramFrom + tramCount;
+        const train = i >= trainFrom && i < trainFrom + trainCount;
+        const truck = i >= this.active - trucks && i < this.active && !bus && !tram && !train;
+        if (
+          car.bus === bus &&
+          car.truck === truck &&
+          car.coach === coach &&
+          car.tram === tram &&
+          car.train === train
+        ) {
+          continue;
+        }
         car.bus = bus;
         car.truck = truck;
         car.coach = coach;
+        car.tram = tram;
+        car.train = train;
+        // Which line this one works, and which way round it runs it. Spread
+        // over the lines rather than drawn, so two trams on one line is what a
+        // city with one line looks like and never what a city with six does.
+        car.district = i;
+        car.at = 0;
+        car.to = i % 2 === 0 ? 1 : -1;
         // Re-routed rather than left mid-run: a car that became a bus would
         // otherwise finish its run at the wrong speed and stop nowhere, and one
         // that became a lorry would finish it on the wrong road entirely.
@@ -509,6 +669,18 @@ export class Cars {
       this.buses = buses;
       this.trucks = trucks;
       this.coachCount = coaches;
+      this.tramCount = tramCount;
+      this.trainCount = trainCount;
+    }
+    // A line the city just bought is a line the vehicles on the older ones
+    // should be able to move to, and a district annexed moves nothing already
+    // laid — but the *pairs* a later line takes only exist once the land does.
+    if (this.railLines !== this.deckRails || state.districts !== this.deckDistricts) {
+      for (let i = 0; i < MAX_CARS; i++) {
+        const car = this.pool[i] as Car;
+        if (car.tram || car.train) car.routed = false;
+      }
+      this.buildDecks();
     }
     // The highway's own geometry moves — the spur follows the city's inland
     // edge and the band road follows the estates — so a lorry routed against
@@ -521,6 +693,166 @@ export class Cars {
         if (car.truck || car.coach) car.routed = false;
       }
     }
+  }
+
+  /**
+   * Lays the viaduct: one deck per leg of every rail line the city owns.
+   *
+   * The one piece of static geometry in this file, and it is here rather than
+   * in `ground.ts` for the reason the highway's spur is where it is: the thing
+   * that decides where it runs is the same `linePairAt` the trains on it are
+   * routed by, and two files working that out separately would eventually be a
+   * train beside its own track.
+   *
+   * Written on a change to the rail count or the district count and left alone
+   * otherwise. A tram gets no deck: it runs on a street the city already has,
+   * which is exactly what makes it the cheap rung.
+   */
+  private buildDecks(): void {
+    this.deckRails = this.railLines;
+    this.deckDistricts = this.districts;
+    const dummy = this.dummy;
+    let n = 0;
+    for (let k = 0; k < this.railLines; k++) {
+      const pair = linePairAt('rail', k, this.districts);
+      if (pair === null) break;
+      if (pair.a >= this.layout.districts.length || pair.b >= this.layout.districts.length) break;
+      const a = this.layout.districts[pair.a] as District;
+      const b = this.layout.districts[pair.b] as District;
+      // The same L the trains run, so the deck is under them by construction.
+      // Legs of zero length are the tram's case and are skipped here too.
+      const legs: [number, number, number, number][] = [
+        [a.centreX, a.centreZ, b.centreX, a.centreZ],
+        [b.centreX, a.centreZ, b.centreX, b.centreZ],
+      ];
+      for (const [x0, z0, x1, z1] of legs) {
+        const dx = x1 - x0;
+        const dz = z1 - z0;
+        const length = Math.abs(dx) + Math.abs(dz);
+        if (length <= 0) continue;
+        dummy.position.set((x0 + x1) / 2, RAIL_Y - DECK_H, (z0 + z1) / 2);
+        dummy.rotation.set(0, dx !== 0 ? 0 : Math.PI / 2, 0);
+        dummy.scale.set(length, 1, 1);
+        dummy.updateMatrix();
+        this.decks.setMatrixAt(n++, dummy.matrix);
+      }
+    }
+    // The scale is per instance and every other write in this file is not, so
+    // it has to go back or the next vehicle drawn is a hundred metres long.
+    dummy.scale.set(1, 1, 1);
+    this.decks.count = n;
+    this.decks.flush();
+  }
+
+  /**
+   * How many trams and trains the network has earned.
+   *
+   * Lines, not districts: a vehicle on screen is a vehicle the player bought,
+   * which is the same rule `coaches` follows for the depots and `freight` for
+   * the estates. Clamped, because a full map holds far more lines than the pool
+   * holds slots — see MAX_TRAMS.
+   */
+  private static tramFleet(state: Readonly<GameState>): number {
+    const lines = Math.min(state.tramLines, linePairCapacity('tram', state.districts));
+    return Math.min(MAX_TRAMS, Math.round(lines * TRAMS_PER_LINE));
+  }
+
+  private static trainFleet(state: Readonly<GameState>): number {
+    const lines = Math.min(state.railLines, linePairCapacity('rail', state.districts));
+    return Math.min(MAX_TRAINS, Math.round(lines * TRAINS_PER_LINE));
+  }
+
+  /**
+   * Puts a tram or a train on one leg of one line.
+   *
+   * The route is an L between the two district centres `linePairAt` names —
+   * along x, then along z — and both legs are axis-aligned, which is what lets
+   * a line reuse the same `Car` a street does. A diagonal run would have meant
+   * a direction vector on every vehicle in the pool and a second form of the
+   * hot loop, for two body types out of six.
+   *
+   * A tram's two districts are neighbours, so one of its legs is always zero
+   * long and it runs straight; a train's need not be, so it turns once. Zero
+   * legs are skipped rather than drawn, which is the whole of the difference.
+   *
+   * Nothing is sampled. `linePairAt` is the same pure function of the ordinal,
+   * the district count and the seed that the simulation costed the line
+   * against, so the view and the ledger cannot disagree about where a line is.
+   */
+  private routeLine(car: Car): void {
+    const kind: LineKind = car.train ? 'rail' : 'tram';
+    const owned =
+      kind === 'rail' ? this.railLines : this.tramLines;
+    if (owned <= 0) {
+      // Nothing to run on. Park it off the pool's working set rather than
+      // leaving it unrouted, which would re-enter this every frame.
+      car.routed = true;
+      car.length = 0;
+      car.travelled = 0;
+      car.from = 0;
+      car.fixed = 0;
+      return;
+    }
+    const which = car.district % owned;
+    const pair = linePairAt(kind, which, this.districts);
+    if (pair === null || pair.a >= this.layout.districts.length || pair.b >= this.layout.districts.length) {
+      car.routed = true;
+      car.length = 0;
+      return;
+    }
+    const a = this.layout.districts[pair.a] as District;
+    const b = this.layout.districts[pair.b] as District;
+    // Which end it started from, so two vehicles on one line pass each other.
+    const back = car.to < 0;
+    const fromX = back ? b.centreX : a.centreX;
+    const fromZ = back ? b.centreZ : a.centreZ;
+    const toX = back ? a.centreX : b.centreX;
+    const toZ = back ? a.centreZ : b.centreZ;
+    // Leg 0 runs along x at the starting z; leg 1 along z at the ending x.
+    const alongX = car.at === 0;
+    const start = alongX ? fromX : fromZ;
+    const end = alongX ? toX : toZ;
+    if (start === end) {
+      // A zero leg. Take the other one rather than drawing a vehicle standing
+      // on a junction — a tram's route is one leg by construction.
+      if (car.at === 0) {
+        car.at = 1;
+        this.routeLine(car);
+        return;
+      }
+      this.retireLine(car);
+      return;
+    }
+    const dir = end > start ? 1 : -1;
+    car.alongX = alongX;
+    car.dir = dir;
+    car.from = start;
+    car.length = Math.abs(end - start);
+    // A tram is on a street and takes the right-hand lane with everything else;
+    // a train is on its own deck and runs down the middle of it.
+    const line = alongX ? fromZ : toX;
+    car.fixed = car.train ? line : alongX ? line + dir * LANE : line - dir * LANE;
+    car.heading =
+      alongX ? (dir > 0 ? 0 : Math.PI) : dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+    car.speed = this.speedFor(car);
+    car.waiting = 0;
+    // A tram calls at stops like a bus; a train runs between two districts and
+    // does not stop in between, which is most of what makes it read as a train.
+    car.nextStop = car.tram ? STOP_SPACING * (0.4 + this.random() * 0.6) : Infinity;
+    car.legsLeft = 1;
+    car.travelled = this.moving ? 0 : this.random() * car.length;
+    car.routed = true;
+  }
+
+  /** End of a leg: take the other one, or turn round and run the line back. */
+  private retireLine(car: Car): void {
+    if (car.at === 0) {
+      car.at = 1;
+    } else {
+      car.at = 0;
+      car.to = -car.to;
+    }
+    car.routed = false;
   }
 
   /**
@@ -584,9 +916,16 @@ export class Cars {
     // claiming something the simulation does not say.
     if (car.truck) return TRUCK_SPEED;
     if (car.coach) return BUS_SPEED;
-    const jam = Math.max(0, Math.min(1, car.bus ? this.jam * BUS_CONGESTION_SHARE : this.jam));
-    const free = car.bus ? BUS_SPEED : SPEED_MAX;
-    const crawl = car.bus ? BUS_CRAWL : CAR_CRAWL;
+    // A train is the third: it runs on a viaduct, which is not a road cell in
+    // any district, so nothing `congestion` measures reaches it.
+    if (car.train) return TRAIN_SPEED * (1 - SPEED_JITTER * this.random() * 0.5);
+    const share =
+      car.tram ? TRAM_CONGESTION_SHARE
+      : car.bus ? BUS_CONGESTION_SHARE
+      : 1;
+    const jam = Math.max(0, Math.min(1, this.jam * share));
+    const free = car.tram ? TRAM_SPEED : car.bus ? BUS_SPEED : SPEED_MAX;
+    const crawl = car.tram ? TRAM_CRAWL : car.bus ? BUS_CRAWL : CAR_CRAWL;
     return (free + (crawl - free) * jam) * (1 - SPEED_JITTER * this.random());
   }
 
@@ -703,6 +1042,10 @@ export class Cars {
       this.routeHighway(car);
       return;
     }
+    if (car.tram || car.train) {
+      this.routeLine(car);
+      return;
+    }
     let chosen = 0;
     for (let i = 0; i < ROUTE_TRIES; i++) {
       chosen = Math.floor(this.random() * this.lines.length);
@@ -762,6 +1105,8 @@ export class Cars {
       this.blinds.count = 0;
       this.busLamps.count = 0;
       this.lorries.count = 0;
+      this.tramCars.count = 0;
+      this.trainCars.count = 0;
       this.lamps.count = 0;
       return;
     }
@@ -778,6 +1123,8 @@ export class Cars {
     let drawn = 0;
     let coaches = 0;
     let trucks = 0;
+    let trams = 0;
+    let trains = 0;
     let lights = 0;
 
     for (let i = 0; i < this.active; i++) {
@@ -791,12 +1138,21 @@ export class Cars {
           car.waiting -= dt;
         } else {
           car.travelled += car.speed * dt;
-          if (car.bus && car.travelled >= car.nextStop) {
+          if ((car.bus || car.tram) && car.travelled >= car.nextStop) {
             car.waiting = STOP_SECONDS;
             car.nextStop += STOP_SPACING;
           }
         }
         if (car.travelled >= car.length) {
+          // The end of a line's leg is the other leg, or the same line run back
+          // the other way. It never turns onto a street: a tram is on its own
+          // route and a train is on its own deck, and neither has a junction to
+          // take. See `retireLine`.
+          if (car.tram || car.train) {
+            this.retireLine(car);
+            this.route(car, fx, fz);
+            continue;
+          }
           // Arrived at a junction. The overshoot is carried onto the next leg
           // rather than dropped, so a short leg at speed does not cost the car
           // a frame's worth of travel every time it turns.
@@ -828,14 +1184,26 @@ export class Cars {
       const dz = z - fz;
       if (dx * dx + dz * dz > VIEW_RADIUS * VIEW_RADIUS) continue;
 
-      const length = car.truck ? TRUCK_LENGTH : CAR_LENGTH;
-      const height = car.truck ? TRUCK_HEIGHT : CAR_HEIGHT;
+      const length =
+        car.truck ? TRUCK_LENGTH
+        : car.train ? TRAIN_LENGTH
+        : car.tram ? TRAM_LENGTH
+        : CAR_LENGTH;
+      const height =
+        car.truck ? TRUCK_HEIGHT
+        : car.train ? TRAIN_HEIGHT
+        : car.tram ? TRAM_HEIGHT
+        : CAR_HEIGHT;
       // A box is centred on its own middle and the model stands on the road, so
       // the two sit at different heights for the same vehicle on the same road.
-      dummy.position.set(x, car.bus ? ROAD_H : ROAD_H + height / 2, z);
+      // A train sits on the deck rather than on the ground.
+      const base = car.train ? RAIL_Y : ROAD_H;
+      dummy.position.set(x, car.bus ? ROAD_H : base + height / 2, z);
       dummy.rotation.set(0, car.heading, 0);
       dummy.updateMatrix();
-      if (car.bus) {
+      if (car.train) this.trainCars.setMatrixAt(trains++, dummy.matrix);
+      else if (car.tram) this.tramCars.setMatrixAt(trams++, dummy.matrix);
+      else if (car.bus) {
         // One transform, three meshes, and the same index in each: the blind
         // and the lamps are parts of this bus and never move relative to it.
         this.coaches.setMatrixAt(coaches, dummy.matrix);
@@ -846,8 +1214,10 @@ export class Cars {
       else this.bodies.setMatrixAt(drawn++, dummy.matrix);
 
       // A bus brings its own headlights, so it is the one vehicle that does not
-      // take a quad off the shared lamp mesh.
-      if (lit && !car.bus) {
+      // take a quad off the shared lamp mesh. Nor does a train: a headlamp at
+      // RAIL_Y would be a light with nothing under it, and the deck already
+      // reads at night because it catches the key.
+      if (lit && !car.bus && !car.train) {
         // The nose, in the direction of travel. Same rotation, so the quad
         // faces the way the vehicle is going without a second trig call. All
         // three body types share the lamp mesh — an instance index there
@@ -873,6 +1243,10 @@ export class Cars {
     if (lit) this.busLamps.flush();
     this.lorries.count = trucks;
     this.lorries.flush();
+    this.tramCars.count = trams;
+    this.tramCars.flush();
+    this.trainCars.count = trains;
+    this.trainCars.flush();
     if (lit) {
       this.lamps.count = lights;
       this.lamps.flush();

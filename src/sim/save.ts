@@ -2,6 +2,7 @@ import { ACHIEVEMENTS } from './achievements';
 import { emptyHistory, migrateHistory } from './history';
 import {
   LEVELS,
+  MAX_ACTIVE_CALLS,
   MAX_ACTIVE_FIRES,
   MAX_DISTRICTS,
   MERGE_LEVEL,
@@ -11,6 +12,8 @@ import {
   POWER_TRADE_NEUTRAL,
   TAX_NEUTRAL,
   TAX_STEPS,
+  TRANSIT_LINES,
+  CULTURE,
 } from './config';
 import {
   burnableOf,
@@ -26,7 +29,11 @@ import {
   plantCapacity,
   landmarkSiteCapacity,
   estateCapacity,
+  lineAllowed,
+  cultureAllowed,
   serviceAllowed,
+  civicSiteCapacity,
+  universitySiteCapacity,
   shopCapacity,
   terminalCapacity,
 } from './economy';
@@ -35,6 +42,7 @@ import {
   cohortOf,
   createState,
   SAVE_VERSION,
+  type Call,
   type Fire,
   type FireKind,
   type GameState,
@@ -175,6 +183,35 @@ function migrateFires(raw: unknown, state: GameState): Fire[] {
     fires.push({ kind, index, startedAt: Math.min(state.elapsed, Math.max(0, num(e['startedAt'], 0))) });
   }
   return fires;
+}
+
+/**
+ * The same, for the calls the police have open.
+ *
+ * A near-copy of `migrateFires` rather than a shared generic, and the reason is
+ * the two things that differ: the cap is MAX_ACTIVE_CALLS and two calls to the
+ * same building are legal — a street where something happens twice is a street
+ * with a problem, where two fires in one house is a bug in the ignition draw.
+ * A generic with two flags would have been longer than both.
+ */
+function migrateCalls(raw: unknown, state: GameState): Call[] {
+  if (!Array.isArray(raw)) return [];
+  const calls: Call[] = [];
+  for (const entry of raw) {
+    if (calls.length >= MAX_ACTIVE_CALLS) break;
+    if (typeof entry !== 'object' || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    const kind = FIRE_KINDS.find((k) => k === e['kind']);
+    if (kind === undefined) continue;
+    const index = Math.floor(num(e['index'], -1));
+    if (index < 0 || index >= burnableOf(state, kind)) continue;
+    calls.push({
+      kind,
+      index,
+      startedAt: Math.min(state.elapsed, Math.max(0, num(e['startedAt'], 0))),
+    });
+  }
+  return calls;
 }
 
 /**
@@ -349,8 +386,31 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // parks and civic buildings are.
     museums: count(r['museums']),
     stadiums: count(r['stadiums']),
+    /**
+     * Culture, and what a save written before v15 is entitled to.
+     *
+     * None, which is the state a city that never opened one is in. Clamped
+     * against `cultureAllowed` below with everything else, because the site is
+     * one a district shared by two types and a save trimmed to fewer districts
+     * has fewer of them.
+     */
+    libraries: count(r['libraries']),
+    theatres: count(r['theatres']),
     cruiseTerminals: count(r['cruiseTerminals']),
     cargoTerminals: count(r['cargoTerminals']),
+    /**
+     * The network, and what a save written before v15 is entitled to.
+     *
+     * None, which is exactly the state a city that never laid a line is in —
+     * the same default every count in this file takes and the opposite of the
+     * city hall's, because a line gates nothing a returning player already had.
+     * Clamped against `lineAllowed` below with the rest of them, which is what
+     * a save that annexed and then ascended needs: the pair list is bounded by
+     * the district count, so a doctored `railLines: 900` buys the network of a
+     * city ninety times the size.
+     */
+    tramLines: count(r['tramLines']),
+    railLines: count(r['railLines']),
     /**
      * Granted to every save written before there was one to build.
      *
@@ -398,12 +458,21 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // A save older than v6 has no transport at all, which is the state a city
     // that has never opened a depot is in.
     depots: count(r['depots']),
+    /**
+     * The waste depot, and what a save written before v15 is entitled to.
+     *
+     * None, which is the state a city that never opened one is in — and the
+     * *refund* below is the other half of what such a save is owed, because the
+     * sixth civic type moved the interleave under every building it already had.
+     */
+    wasteDepots: count(r['wasteDepots']),
     hospitalStaff: share(r['hospitalStaff'], 0),
     policeStaff: share(r['policeStaff'], 0),
     fireStaff: share(r['fireStaff'], 0),
     schoolStaff: share(r['schoolStaff'], 0),
     universityStaff: share(r['universityStaff'], 0),
     depotStaff: share(r['depotStaff'], 0),
+    wasteStaff: share(r['wasteStaff'], 0),
     // Filled in below, once the counts it is computed from are legal.
     happiness: 0,
     demandR: demand(r['demandR']),
@@ -416,6 +485,13 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // owe the city a fire it never has to pay.
     fireCursor: Math.max(0, Math.floor(num(r['fireCursor'], 0))),
     fireHazard: Math.max(0, num(r['fireHazard'], 0)),
+    // A save older than v15 has no calls, which is the state a city nobody has
+    // rung the police about is in. Same defaults and the same reasons as the
+    // three above it: a negative cursor would index the hash stream backwards
+    // and a negative hazard would owe the city a call it never has to pay.
+    calls: [],
+    callCursor: Math.max(0, Math.floor(num(r['callCursor'], 0))),
+    callHazard: Math.max(0, num(r['callHazard'], 0)),
     districts,
     // Filled in below, once the district count is legal — the arrays are one
     // entry per district and there is no reading them before that is settled.
@@ -541,6 +617,13 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // sheds the landmarks whose squares no longer exist.
   state.museums = Math.min(state.museums, landmarkSiteCapacity(state, 'museum'));
   state.stadiums = Math.min(state.stadiums, landmarkSiteCapacity(state, 'stadium'));
+  // Culture shares one site a district between two types, so its clamp is the
+  // interleave's rather than a flat per-district count.
+  for (const culture of CULTURE) {
+    const allowed = cultureAllowed(state, culture);
+    if (culture.key === 'library') state.libraries = Math.min(state.libraries, allowed);
+    else state.theatres = Math.min(state.theatres, allowed);
+  }
   // One berth of each kind per *coastal* district, which is the clamp v8's
   // water actually needs: a v7 save has no terminals to lose, but a v8 one
   // whose district count was trimmed above may have had berths on land it no
@@ -549,6 +632,17 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   const berths = terminalCapacity(state);
   state.cruiseTerminals = Math.min(state.cruiseTerminals, berths);
   state.cargoTerminals = Math.min(state.cargoTerminals, berths);
+  // Lines are bounded by the pairs of districts there are to join, which is the
+  // same shape as the berths above and needs the clamp for the same reason: the
+  // pair list grows with the district count, so a save trimmed above may claim
+  // more lines than its land can route. Nothing relocates — the enumeration is
+  // append-only in the district count, so the lines a shrunk city keeps are
+  // exactly the ones it had.
+  for (const line of TRANSIT_LINES) {
+    const allowed = lineAllowed(state, line);
+    if (line.key === 'tram') state.tramLines = Math.min(state.tramLines, allowed);
+    else state.railLines = Math.min(state.railLines, allowed);
+  }
   // Estates are bounded by the band, by the district count and by the road
   // being there at all — and a save that claims the works without the highway
   // gets neither, because a shed with no road to it is not an estate. The band
@@ -585,14 +679,62 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // A doctored save with 400 hospitals gets the one its population is allowed,
   // and a save carried over from a smaller district count never keeps a
   // building whose site no longer exists. `serviceAllowed` folds both in.
+  /**
+   * The civic clamp, and — new in v15 — the refund that goes with it.
+   *
+   * The sixth 2x2 type moved `siteCapacity`'s divisor from five to six, so a
+   * city that had filled its old allowance is over the new one: measured, a
+   * 12-district city with 64 civic buildings keeps 58 and is six over. Those
+   * six have nowhere to stand.
+   *
+   * Deleting them silently is the one thing this cannot do. `abandonedR`'s
+   * comment settled what taking a building away without saying so does to an
+   * idle game, and a *purchase* is worse than a ruin because the player paid
+   * for it. So the shed buildings are refunded at what they cost — the cost
+   * curve compounds over the type's own count, so the price of the k-th is the
+   * price of the k-th whichever direction it is read in, and the refund is
+   * exact rather than an estimate.
+   *
+   * `AwayReport` does not carry it, and should not: this is not something that
+   * happened while the player was away, it is something that happened to the
+   * game between one version and the next. The cash is in the treasury when
+   * they open the tab, which is the honest place for it.
+   */
   for (const service of SERVICES) {
     const allowed = serviceAllowed(state, service);
-    if (service.key === 'hospital') state.hospitals = Math.min(state.hospitals, allowed);
-    else if (service.key === 'police') state.police = Math.min(state.police, allowed);
-    else if (service.key === 'fire') state.fire = Math.min(state.fire, allowed);
-    else if (service.key === 'school') state.schools = Math.min(state.schools, allowed);
-    else if (service.key === 'transit') state.depots = Math.min(state.depots, allowed);
-    else state.universities = Math.min(state.universities, allowed);
+    const had =
+      service.key === 'hospital' ? state.hospitals
+      : service.key === 'police' ? state.police
+      : service.key === 'fire' ? state.fire
+      : service.key === 'school' ? state.schools
+      : service.key === 'transit' ? state.depots
+      : service.key === 'waste' ? state.wasteDepots
+      : state.universities;
+    const kept = Math.min(had, allowed);
+    // Bounded before anything is paid out, and that bound is not decoration:
+    // `had` is whatever the file said, and a doctored save claiming a billion
+    // hospitals would otherwise run a billion-iteration refund on the load path.
+    //
+    // The bound is every square of the right *shape*, not `siteCapacity`. A v14
+    // city could hold 15 hospitals at 12 districts — five types over 72 squares
+    // — where six types allow 12, and those three were bought and paid for.
+    // Bounding at today's `siteCapacity` would have refused to refund exactly
+    // the buildings this migration exists to refund. Every civic square there
+    // is, is the most any divisor this game has ever had could have handed one
+    // type, so it is generous to every past save and still at most six a
+    // district.
+    const owned = Math.min(
+      had,
+      service.span === 3 ? universitySiteCapacity(state) : civicSiteCapacity(state),
+    );
+    for (let k = kept; k < owned; k++) state.cash += service.base * service.growth ** k;
+    if (service.key === 'hospital') state.hospitals = kept;
+    else if (service.key === 'police') state.police = kept;
+    else if (service.key === 'fire') state.fire = kept;
+    else if (service.key === 'school') state.schools = kept;
+    else if (service.key === 'transit') state.depots = kept;
+    else if (service.key === 'waste') state.wasteDepots = kept;
+    else state.universities = kept;
   }
 
   // A legacy is what earlier foundings gave up, and a founding can give up at
@@ -603,6 +745,7 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // After the building counts are legal, because a fire is only legal if the
   // building it is burning still exists.
   state.fires = migrateFires(r['fires'], state);
+  state.calls = migrateCalls(r['calls'], state);
 
   // Happiness defaults to the coverage the city actually has rather than to a
   // fixed number: handing a returning player the fresh-city 1 would be ninety

@@ -1,5 +1,16 @@
 import type { GameEvent } from '../core/events.ts';
-import { LANDMARKS, SERVICES, TERMINALS, type Landmark, type Service, type Terminal } from './config.ts';
+import {
+  CULTURE,
+  LANDMARKS,
+  SERVICES,
+  TERMINALS,
+  TRANSIT_LINES,
+  type Landmark,
+  type Service,
+  type Terminal,
+  type TransitLine,
+  type Culture,
+} from './config.ts';
 import type { AwayReport, Game } from './game.ts';
 import type { GameState } from './state.ts';
 
@@ -33,10 +44,12 @@ export type Command =
   | { readonly kind: 'annex' }
   | { readonly kind: 'ascend' }
   | { readonly kind: 'reset' }
-  /** The three that name a row of a config table. See the note above. */
+  /** The five that name a row of a config table. See the note above. */
   | { readonly kind: 'landmark'; readonly key: Landmark['key'] }
   | { readonly kind: 'terminal'; readonly key: Terminal['key'] }
   | { readonly kind: 'service'; readonly key: Service['key'] }
+  | { readonly kind: 'line'; readonly key: TransitLine['key'] }
+  | { readonly kind: 'culture'; readonly key: Culture['key'] }
   /** The five policy switches. */
   | { readonly kind: 'autoDevelop'; readonly on: boolean }
   | { readonly kind: 'freeTransport'; readonly on: boolean }
@@ -98,6 +111,14 @@ export function applyCommand(game: Game, command: Command): boolean {
     case 'service': {
       const row = SERVICES.find((entry) => entry.key === command.key);
       return row !== undefined && game.buildService(row);
+    }
+    case 'line': {
+      const row = TRANSIT_LINES.find((entry) => entry.key === command.key);
+      return row !== undefined && game.buildLine(row);
+    }
+    case 'culture': {
+      const row = CULTURE.find((entry) => entry.key === command.key);
+      return row !== undefined && game.buildCulture(row);
     }
     case 'autoDevelop':
       game.setAutoDevelop(command.on);

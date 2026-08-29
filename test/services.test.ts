@@ -747,12 +747,21 @@ describe('happiness as a gate on housing', () => {
     run(game, 1);
     // The residents have not noticed yet. That is the whole point of the lag.
     expect(game.state.happiness).toBeGreaterThan(0.9);
-    // Converged, and measured before the city starts boarding plots up: at this
-    // happiness occupancy is heading for its floor, and 300 seconds under
-    // OCCUPANCY_EMPTY starts writing housing off — which moves the population,
-    // which moves coverage, which moves the very target being converged to.
+    // Converged — stated as the *share of the gap it has closed* rather than as
+    // an equality, because by the time it gets there the target is no longer
+    // standing still. At this happiness occupancy is heading for its floor, and
+    // 300 seconds under OCCUPANCY_EMPTY starts writing housing off, which moves
+    // the population, which moves coverage, which moves the very target being
+    // converged to. The sixth civic type stretched the same three buildings one
+    // way further and took the target to the clamp, so what used to be a gap
+    // that closed inside 250 seconds is now one that chases a rising number.
+    //
+    // The lag is the mechanic and the lag is what this asserts: 97% of the way
+    // there, from a gap of about 0.9.
+    const gap = Math.abs(game.state.happiness - happinessTarget(game.state));
     run(game, 250);
-    expect(game.state.happiness).toBeCloseTo(happinessTarget(game.state), 2);
+    const closed = Math.abs(game.state.happiness - happinessTarget(game.state));
+    expect(closed).toBeLessThan(gap * 0.03);
   });
 });
 

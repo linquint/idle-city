@@ -146,7 +146,7 @@ export const ROAD_CELLS_PER_DISTRICT = DISTRICT_SPAN * DISTRICT_SPAN - TARGET_PL
 export const FRONTAGE_TARGET = {
   residential: 24,
   commercial: 45,
-  industrial: 13,
+  industrial: 9,
   /**
    * 2x2 quads a district claims, all of them reserved before the build lists
    * are drawn. Six go to civic, one to a small landmark, one to the city hall
@@ -154,11 +154,28 @@ export const FRONTAGE_TARGET = {
    * squares something stands on is what keeps `homeCapacity` independent of
    * build order. There is nothing spare in it any more.
    */
-  squares: 9,
+  squares: 11,
   /** 2x2 civic sites per district. 6 x 4 = 24 plots, mostly dead interior. */
   civicSites: 6,
   /** 2x2 landmark sites per district, taken from the same claim. */
   landmarkSmallSites: 1,
+  /**
+   * 2x2 culture sites per district: the library and the theatre.
+   *
+   * A class of its own rather than a second small-*landmark* site, and that is
+   * the whole of what keeps LANDMARKS' calibration standing. Two small-landmark
+   * sites a district would have doubled the museum's allowance, and a museum is
+   * an area-of-effect: measured, museums alone would have covered 83% of a
+   * one-district city and 64% of a full map against the 46% and 47% the reach
+   * was set to. LANDMARK_MOOD is deliberately worth less than the cheapest
+   * service weight so that a landmark cannot be a way to skip the hospital, and
+   * a museum that covered two thirds of the map would have been exactly that.
+   *
+   * One site a district, and the library and the theatre interleave on it the
+   * way the civic types interleave on theirs — so culture is scarcer than a
+   * museum by construction, which is the right shape for the cheap tier.
+   */
+  cultureSites: 1,
   /**
    * 2x2 city hall sites per district, sliced after the civic six.
    *
@@ -811,8 +828,22 @@ export const SHOP_GROWTH = DISTRICT_FILL_MULTIPLE ** (1 / FRONTAGE_TARGET.commer
  * auto-develop, 65 greedy — so the demand loop is still what gates the zone
  * rather than the price.
  */
-export const INDUSTRY_BASE = 120;
-export const INDUSTRY_GROWTH = 1.14;
+/**
+ * 120 and 1.14 until the eleventh square, and both scaled with the land.
+ *
+ * A works on the re-cut district does 13/9 of what a works did, so it costs
+ * 13/9 of what a works cost: 120 x 13/9 is 173. And the *curve* has to scale
+ * too, or a district's industry would get cheaper for having less of it —
+ * `ZONE_FILL_MULTIPLE.industry` is `INDUSTRY_GROWTH ** FRONTAGE_TARGET.industrial`,
+ * so the growth is re-solved to keep that product where it was: 1.14^13 is
+ * 5.49 and 1.208^9 is 5.48.
+ *
+ * Measured end to end: filling one district of industry costs 3,724 against
+ * 3,852, which is 3% and inside the noise of a cost curve that compounds over
+ * plots taken.
+ */
+export const INDUSTRY_BASE = 173;
+export const INDUSTRY_GROWTH = 1.208;
 
 /**
  * Each industrial building adds this share of base income.
@@ -1020,9 +1051,30 @@ export const DEMAND_SCALE = 300;
  */
 export const WORKING_SHARE = 0.55;
 
-/** Jobs per built plot. The two numbers ZONE_SHARE was derived from. */
+/**
+ * Jobs per built plot. The two numbers ZONE_SHARE was derived from.
+ *
+ * Industry was 20 and is 29, and that is the eleventh square being paid for
+ * rather than a balance change wanted for its own sake. `FRONTAGE_TARGET`
+ * dropped industrial frontage from 13 plots to 9 to buy culture its site, and
+ * industry is the densest employer in the game — so at 20 a district's whole
+ * job supply fell from 620 to 540 against 53 workers, `demandTargets.r` is
+ * `(jobs - reachableWorkers) / scale`, and residential demand pinned at -1 for
+ * 25 minutes of a 24-hour run and 1,244 of a 48-hour one.
+ *
+ * 29 is 20 x 13/9, which is the whole of the derivation: the same jobs on less
+ * land. Measured, a district supplies 621 against the 620 it supplied before,
+ * and `npm run economy:calibrate` pins nothing under any policy at 12, 24 or 48
+ * hours — see tools/phase7.calibrate.mjs section 0c, which carries the reading
+ * that forced it.
+ *
+ * ZONE_SHARE itself does not move, and could not: it is the *sampler's* input
+ * and the frontage tuple is its output, so a change there changes the tuple it
+ * was supposed to fix. Once the land is fixed, density is the only free
+ * variable — which is what re-solving the equilibrium at 24/45/9 means.
+ */
 export const JOBS_PER_COMMERCIAL = 8;
-export const JOBS_PER_INDUSTRIAL = 20;
+export const JOBS_PER_INDUSTRIAL = 29;
 
 /**
  * What one commercial or industrial *building* is worth to the labour market at
@@ -1203,7 +1255,13 @@ export const SHOP_TRIPS = LEVEL_FOOTPRINT.map(
  * tools/economy.calibrate.mjs, where industrial demand pins under no policy.
  */
 export const SUPPLY_DRAW = 4;
-export const INDUSTRIAL_OUTPUT = 9;
+/**
+ * 9 until the eleventh square, and 13 for exactly the reason
+ * JOBS_PER_INDUSTRIAL is 29: `9 x 13/9` is 13, so nine plots make what thirteen
+ * made. Measured, a district draws 240 and supplies 117 — the same 117 it
+ * supplied at 13 plots x 9, so the goods cycle's ratio did not move at all.
+ */
+export const INDUSTRIAL_OUTPUT = 13;
 
 /**
  * Goods one shop draws and one works makes, per level.
@@ -1446,7 +1504,7 @@ export const ZONE_FLOOR = {
  * pool from the back and a pool whose size moved with the industrial count would
  * move every commercial plot in the district each time industry surveyed.
  */
-export const INDUSTRY_RESERVE = 9;
+export const INDUSTRY_RESERVE = FRONTAGE_TARGET.industrial - ZONE_FLOOR.industry;
 
 /**
  * The demand a zone needs before the surveyor will zone it more land.
@@ -1566,7 +1624,7 @@ export const PRICE_SURCHARGE_MAX = 0.6;
 
 export interface Service {
   /** Matches the GameState counter, the staffing scalar and the coverage key. */
-  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university' | 'transit';
+  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university' | 'transit' | 'waste';
   readonly name: string;
   readonly buildLabel: string;
   /** How the HUD names this service's coverage when it is the binding one. */
@@ -1613,10 +1671,10 @@ export interface Service {
  * outright below HAPPINESS_MIN_BUILD — or, for the two education types, it
  * decides how tall the city is allowed to build.
  *
- * Five of the six stand on a 2x2 site, of which a district has six, so those
- * types share 1.2 buildings a district. The university is the exception: its own
- * 3x3 site, exactly one to a district, which is what makes it a landmark rather
- * than another row in the panel.
+ * Six of the seven stand on a 2x2 site, of which a district has six, so those
+ * types get one building a district each. The university is the exception: its
+ * own 3x3 site, exactly one to a district, which is what makes it a landmark
+ * rather than another row in the panel.
  *
  * A city that never builds one still works, it just runs at the floor and never
  * gets past detached housing — neglect reads as a ceiling on what the city can
@@ -1624,21 +1682,38 @@ export interface Service {
  *
  * ---
  *
- * The `plots` column is what Part 0 of this cycle re-derived, and it is derived
- * rather than picked. Two numbers set it: 1.2 sites of each 2x2 type per
- * district, against 24 housing plots per district. A type whose every allowed
- * building is standing therefore covers `1.2 x plots / 24` of the city, so
- * `plots = 20` is exactly full coverage and exactly half coverage at half the
- * buildings. That is the hospital, and it is the anchor.
+ * The `plots` column is derived rather than picked, and it re-derives whenever
+ * the divisor moves. Two numbers set it: the sites of each 2x2 type a district
+ * gets, against 24 housing plots per district. A type whose every allowed
+ * building is standing covers `sites x plots / 24` of the city, so the anchor
+ * is `24 / sites` — and `sites` is `FRONTAGE_TARGET.civicSites / n`, six over
+ * the length of this table.
+ *
+ * At five types that was 1.2 sites and an anchor of 20. **It is six types now**
+ * — the waste depot — so it is 1.0 sites and an anchor of 24, and every 2x2 row
+ * moved with it: 20 -> 24, 26 -> 31, 31 -> 37, 15 -> 18, 24 -> 29. The
+ * university did not move and could not: it stands on its own 3x3 list, one to
+ * a district, and the interleave never reaches it.
+ *
+ * That divisor change is the expensive half of this cycle and it was costed
+ * before it was made. `siteCapacity` divides by this table's length, so a sixth
+ * entry moves every hospital, police station, fire station, school and depot in
+ * every existing save onto a different square: measured, 53 of a 12-district
+ * city's 64 civic buildings, with six left over that the new interleave has no
+ * site for. `migrate` refunds those rather than deleting them silently. See
+ * NOTES.md section 11 for the table, and tools/phase7.calibrate.mjs 0a for the
+ * two guards it had to clear — no integer keeps schools inside
+ * LEVEL_EDUCATION's window past six types, and the transit row starts losing
+ * sites at small district counts and takes the happiness ceiling under 0.95.
  *
  * The other two happiness services come off the weight ordering rather than
- * being chosen: `plots_i = 20 x w_hospital / w_i`, so a service worth less to
- * happiness needs less of the city's civic land to satisfy. That reproduces the
- * ordering the old `capacity` column had — 900 / 1200 / 1500 is within 8% of
- * inverse-proportional to 0.34 / 0.26 / 0.22 — and the slack it leaves police
- * and fire is what the one-district city needs: the six sites interleave
- * 2/1/1/1/1, so at one district police and fire have a single building each
- * against 24 plots and would read 83% and 87% at the hospital's 20.
+ * being chosen: `plots_i = anchor x w_hospital / w_i`, so a service worth less
+ * to happiness needs less of the city's civic land to satisfy. That reproduces
+ * the ordering the old `capacity` column had — 900 / 1200 / 1500 is within 8%
+ * of inverse-proportional to 0.34 / 0.26 / 0.22 — and the slack it leaves
+ * police and fire is what the one-district city needs. At six types the six
+ * sites interleave 1/1/1/1/1/1, so every type has exactly one building at one
+ * district rather than the hospital having two.
  *
  * `serviceAllowed` then does the rest of the work, and it is why the three do
  * not have to be equal to read alike: the allowance is `need + 1` clamped by the
@@ -1650,7 +1725,7 @@ export interface Service {
  * site interleave cannot quietly reopen the ceiling.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 20, base: 130,    growth: 1.35, weight: 0.46, span: 2 },
+  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 24, base: 130,    growth: 1.35, weight: 0.46, span: 2 },
   /**
    * Police carry no happiness weight any more, and that is the whole of the
    * crime re-calibration rather than a side effect of it.
@@ -1671,19 +1746,29 @@ export const SERVICES: readonly Service[] = [
    * is 0.26: what a maximally pressured city with no police loses is exactly
    * what this weight used to take off it.
    */
-  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 26, base: 210,    growth: 1.35, weight: 0,    span: 2 },
-  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 31, base: 320,    growth: 1.35, weight: 0.30, span: 2 },
+  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 31, base: 210,    growth: 1.35, weight: 0,    span: 2 },
+  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 37, base: 320,    growth: 1.35, weight: 0.30, span: 2 },
   /**
-   * Schools take the fourth slot in the 2x2 interleave, and 15 is the only
-   * integer that keeps LEVEL_EDUCATION's design intact at both ends of the map.
-   * Schools alone have to clear the 0.60 rung and miss the 0.85 one, at one
-   * district (a single school against 24 plots, so plots/24) and at scale (1.2
-   * schools against 24, so 1.2 x plots/24). That is plots in [14.4, 20.4) and
-   * [12, 17): 15 or 16, and 15 leaves the wider margin under 0.85.
+   * Schools take the fourth slot in the 2x2 interleave, and this is the one 2x2
+   * row that does *not* come off the anchor: what sets it is LEVEL_EDUCATION's
+   * window, not the weight ordering, because a school carries no weight.
    *
-   * Measured: schools alone read 62.5% at 1 district, 62.5% at 2 and 3, 78% at
-   * 4 and 75% from 10 up — through the middle of LEVEL_EDUCATION everywhere,
-   * and never at its top.
+   * Schools alone have to clear the 0.60 rung and miss the 0.85 one at every
+   * city size. At six types that is one school a district against 24 housing
+   * plots, so `plots / 24`, and the window is `plots` in [14.4, 20.4) — every
+   * integer from 15 to 20, swept over all 49 district counts in
+   * tools/phase7.calibrate.mjs.
+   *
+   * **15 did not have to move, and that is the point of stating the window
+   * rather than the number.** The anchor would have put it at 18, which is
+   * exactly the university's 18 — and a university that reached no further than
+   * a school would be a school at forty times the price on a 3x3 site. Staying
+   * at 15 keeps the two education types a rung apart.
+   *
+   * Measured: schools alone read 62.5% at every district count from 1 to 49 —
+   * flat now rather than the 62.5-78% band the five-type interleave gave,
+   * because every type gets exactly one site a district instead of a shared
+   * 1.2. Through the middle of LEVEL_EDUCATION everywhere, and never at its top.
    */
   { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    plots: 15, base: 180,    growth: 1.35, weight: 0,    span: 2 },
   /**
@@ -1699,13 +1784,46 @@ export const SERVICES: readonly Service[] = [
    * exactly 1 two cycles ago, and a fifth would re-open that calibration to buy
    * something transport already has two better routes to.
    *
-   * 24 against a hospital's 20: a network reaches further than a building, and
-   * "a district that has bought one depot should feel covered by it" is now
-   * exactly what the number says — one depot, 24 plots, the 24 plots of a
-   * district. The 2,200 residents this used to read stated the same intent
-   * against a denominator that moved 75x under it.
+   * 24, and like the school's 15 it did not move when the divisor did — but for
+   * the opposite reason. The school's is held by a window; this one is held by
+   * what it means. "A district that has bought one depot should feel covered by
+   * it" is exactly 24 plots, the 24 plots of a district, and at six types a
+   * depot gets exactly one site a district — so the number that used to
+   * over-cover by 1.2x now says precisely what it always meant. The 2,200
+   * residents this read two cycles ago stated the same intent against a
+   * denominator that moved 75x under it.
+   *
+   * It equals the hospital's anchor now, and that is arithmetic rather than
+   * coincidence: at one site a district, "cover the district's housing" is 24
+   * plots for anything that should be exactly covered.
    */
   { key: 'transit',    name: 'Transit',     buildLabel: 'Open depot',          coverLabel: 'Transit coverage',   plots: 24, base: 260,    growth: 1.35, weight: 0,    span: 2 },
+  /**
+   * The waste depot: the sixth 2x2 type, and the one this cycle spent the
+   * divisor on.
+   *
+   * It does not collect. `GARBAGE_COLLECTORS` was shaped to take a second
+   * entry and the measurement said not to use it: `garbageCollection` is a plot
+   * count over the housing land clamped at 1, and one finished collector
+   * already covers the city — so a second at the same reach is worth everything
+   * to a city halfway through its first and *nothing* to one that has finished
+   * it. Two collectors would be two buttons buying one number, and the player
+   * would press whichever was cheaper. See NOTES.md section 12, which carries
+   * the table.
+   *
+   * So it lowers `garbageRate` at source instead, which stacks with the depot
+   * rather than competing with it: `garbage` is load times uncollected share,
+   * and the two move different factors. That is the recycling centre's job
+   * under the waste depot's name, and it is why this cycle bought *one* new
+   * civic type rather than two — the difference between six types, which works
+   * on every guard, and seven, which fails on both.
+   *
+   * `weight: 0`, like the depot and the two education types: the three
+   * happiness weights sum to exactly 1 and a fourth would re-open a calibration
+   * that has held for four cycles to buy something `garbageMood` already
+   * reaches. See WASTE_RECYCLING.
+   */
+  { key: 'waste',      name: 'Recycling',   buildLabel: 'Open waste depot',    coverLabel: 'Recycling coverage', plots: 24, base: 240,    growth: 1.35, weight: 0,    span: 2 },
   /**
    * Three quarters of a district's housing taught by one building, on nine
    * plots, one to a district, at forty times a school's opening price and
@@ -2288,7 +2406,7 @@ export interface Landmark {
  */
 export const LANDMARKS: readonly Landmark[] = [
   { key: 'museum',  name: 'Museums',  buildLabel: 'Open museum',   base: 4_000,  growth: 1.6, span: 2, reach: 24 },
-  { key: 'stadium', name: 'Stadiums', buildLabel: 'Build stadium', base: 12_000, growth: 1.7, span: 3, reach: 38 },
+  { key: 'stadium', name: 'Stadiums', buildLabel: 'Build stadium', base: 12_000, growth: 1.7, span: 3, reach: 34 },
 ];
 
 /**
@@ -2315,6 +2433,114 @@ export const LANDMARKS: readonly Landmark[] = [
  * city is properly served.
  */
 export const LANDMARK_MOOD = 0.12;
+
+// -------------------------------------------------------------------- culture
+
+/**
+ * The cheap tier: a library and a theatre, on the square the eleventh
+ * FRONTAGE_TARGET square bought.
+ *
+ * Culture is what NOTES.md section 13 costed both of the brief's ways and found
+ * no room for either. As a *fourth happiness weight* it takes its share from
+ * three terms that sum to exactly 1 — and worse, `plots_i = 20 x w_hospital /
+ * w_i`, so a fourth weight moves the `Service.plots` column with it and
+ * re-opens LEVEL_EDUCATION's window and the >= 0.95 ceiling together. As a
+ * *modifier in the bracket* it fails on the ceiling from the other side: a
+ * maxed city sits at 0.9583, so a +0.08 bonus is mostly thrown past the clamp,
+ * and a -0.08 penalty for going without takes the ceiling to 0.8783 against a
+ * test that asserts 0.95 and predates all of this.
+ *
+ * So neither building carries mood at all. Each lands on a quantity that
+ * already exists, which is the route the brief prefers and the one every term
+ * since the police re-calibration has taken:
+ *
+ *   - a **library** is somewhere to go, so it answers the *idleness* half of
+ *     `crimePressure`. See LIBRARY_CRIME_RELIEF;
+ *   - a **theatre** is a reason to come, so it lands an audience on
+ *     `berthsLanding` beside the quay, the runway, the coach and the terminus.
+ *     See THEATRE_VISITORS.
+ *
+ * That is also what stops them being one building with two names, which is the
+ * failure section 13 names. They share a site, a price ladder and a reach; what
+ * they do with it has nothing in common.
+ *
+ * **Education was the split the memo proposed and the measurement refused.** A
+ * library feeding `educationCoverage` has to clear no LEVEL_EDUCATION rung on
+ * its own *and* leave schools-plus-library under the 0.85 top rung, because the
+ * university is what that rung is for. Schools alone already reach 78%, so the
+ * library's whole budget is 0.07 of coverage — three plots of reach, which is a
+ * building that does nothing. The pool was too full to take a third contributor.
+ */
+export interface Culture {
+  /** Matches the GameState counter and the site interleave offset. */
+  readonly key: 'library' | 'theatre';
+  readonly name: string;
+  readonly buildLabel: string;
+  readonly base: number;
+  readonly growth: number;
+  /**
+   * Housing plots one building reaches.
+   *
+   * Derived rather than picked, on the rule SERVICES states for its own column:
+   * a type covers the city exactly when every building the land allows is
+   * standing. Culture has one site a district shared by two types, so half a
+   * site each — and half a site covering 24 housing plots is 48 plots of reach.
+   *
+   * Plots rather than a `Landmark`-style world-space `reach`, and that is the
+   * one place culture is not a landmark. A reach needs `landmarkPlotsCovered`'s
+   * geometry and its memo, which is keyed on the counts it walks; a plots-
+   * covered share is the convention every *service* uses — a plot count over
+   * the housing land, with nothing anywhere deciding which plots. What decides
+   * it is what the number feeds: a museum's mood is an area-of-effect the
+   * overlay draws, and neither of these is.
+   */
+  readonly plots: number;
+}
+
+export const CULTURE: readonly Culture[] = [
+  { key: 'library', name: 'Libraries', buildLabel: 'Open library', base:   900, growth: 1.5, plots: 48 },
+  { key: 'theatre', name: 'Theatres',  buildLabel: 'Open theatre', base: 2_200, growth: 1.5, plots: 48 },
+];
+
+/**
+ * How much of the idleness half of `crimePressure` a fully-libraried city
+ * answers.
+ *
+ * Idleness rather than crowding, and it is the half the config already says is
+ * the player's to act on: CRIME_FROM_IDLENESS is 0.6 against crowding's 0.4
+ * *because* "a term the player can act on should be the larger half of one they
+ * cannot". A library is one more way to act on it, and it cannot touch crowding
+ * — that is the level ladder, and no reading room makes a tower less full.
+ *
+ * On the *pressure* rather than on `crime` itself, which is what keeps it from
+ * double-counting against the police: police answer the crime that happens and
+ * a library is a reason for less of it to happen. A city with full police
+ * coverage reads exactly zero either way, so the happiness ceiling cannot move
+ * — the same construction UNANSWERED_CRIME relies on.
+ *
+ * 0.35, so a complete library network takes a wholly idle city's pressure from
+ * 0.6 to 0.39 and a typical mid-game city's from 0.75 to 0.59. Under half,
+ * deliberately: the answer to idleness is work, and a building that made
+ * unemployment stop mattering would be a building that replaced the demand
+ * loop rather than softening it.
+ */
+export const LIBRARY_CRIME_RELIEF = 0.35;
+
+/**
+ * What a fully-theatred city is worth in arrivals, in cruise berths.
+ *
+ * The fifth source on `berthsLanding`, stated in berths for the reason
+ * ROAD_VISITORS, AIRPORT_VISITORS and RAIL_VISITORS all are: `visitors` is one
+ * expression — residents x VISITORS_PER_RESIDENT x happiness, per berth — and a
+ * second path beside it would be a second place for the happiness scaling to be
+ * got wrong. Nobody's night out is somewhere grim either.
+ *
+ * 1.5 against the coach's 2, the runway's 3 and the terminus's 2, so a theatre
+ * is the smallest of the four landlocked sources — which is right for the cheap
+ * tier. A city with every one of them lands 8.5 berths against the six a full
+ * waterfront holds, and every one of the five has to be bought.
+ */
+export const THEATRE_VISITORS = 1.5;
 
 // ------------------------------------------------------------------ parks
 
@@ -2585,6 +2811,176 @@ export const FREE_TRANSPORT_RIDERSHIP = 0.35;
  * weights sum to 1 and go on doing so.
  */
 export const CONGESTION_MOOD = 0.14;
+
+// ------------------------------------------------------------- the network
+
+/**
+ * The network above the depot: two rungs, one table.
+ *
+ * A depot covers plots *inside* a district — `Service.plots` is 24, which is a
+ * district's whole housing frontage — and there has never been anything in this
+ * game that joins one district to the next. That is what a line is. Where its
+ * two ends are is geometry and lives in `linePairAt`; what it costs and what it
+ * carries is balance and lives here.
+ *
+ * Two rows rather than two systems, in the shape LANDMARKS and TERMINALS
+ * already use, and the brief's own framing is the reason: there is no metro in
+ * this game, so "cheaper and slower than a metro" has no referent. What the two
+ * rungs are against each other is the whole of what they are — a tram is
+ * cheaper, joins neighbouring districts because it runs along a street, and
+ * carries less; a train is dearer, joins districts across the map because it
+ * runs on its own alignment, and carries more.
+ *
+ * `carries` is in *districts*, which is the unit that makes the pair a decision
+ * rather than a ladder. A network serves the lesser of what it reaches and what
+ * it can carry — see `networkService` — so a city of trams saturates on
+ * capacity long before it runs out of places to go, and a city of trains
+ * saturates on reach. Buying the wrong rung is visible in the panel as one of
+ * the two numbers standing still.
+ *
+ * The prices are set against LANDMARKS rather than against TERMINALS, and the
+ * choice is about the *bound* rather than about the fiction. A terminal's count
+ * stops at a handful of berths, so it can afford a growth of 1.8; a line's
+ * stops at the district count less one, which is 48, and a museum's stops at 49
+ * sites. A curve you buy fifty of is a museum's curve — so the tram sits
+ * between a museum and a cruise berth at 1.5, and rail past a cargo terminal at
+ * 1.6. Measured in tools/phase7.calibrate.mjs: what the 1st, 4th, 8th and 16th
+ * of each cost, against what a played run is holding.
+ */
+export interface TransitLine {
+  readonly key: 'tram' | 'rail';
+  readonly name: string;
+  readonly buildLabel: string;
+  readonly base: number;
+  readonly growth: number;
+  /** Districts of traffic one line of this kind can carry. */
+  readonly carries: number;
+}
+
+export const TRANSIT_LINES: readonly TransitLine[] = [
+  { key: 'tram', name: 'Tram', buildLabel: 'Lay tram line', base:  9_000, growth: 1.5, carries: 0.6 },
+  { key: 'rail', name: 'Rail', buildLabel: 'Lay rail line', base: 30_000, growth: 1.6, carries: 2.4 },
+];
+
+/**
+ * The most any transport the city runs can take off its roads.
+ *
+ * Derived rather than typed, and the derivation is the design statement:
+ * TRANSIT_ROAD_SHARE x (1 + FREE_TRANSPORT_RIDERSHIP) is 94.5%, which is
+ * exactly what a fully covered, fare-free city already reaches — and
+ * FREE_TRANSPORT_RIDERSHIP's own comment says why the last twentieth is left
+ * alone: it is the freight and the people who will drive whatever is running.
+ *
+ * So **a network cannot take a single trip off the road that free transport
+ * could not already take.** What it buys is reaching that figure while still
+ * charging fares, which is a real choice — the fare line is most of a depot's
+ * direct return — rather than a second helping of the same relief. A typed
+ * constant here would have been a second number to keep in step with the two it
+ * is made of; this way a change to either moves the ceiling with it.
+ */
+export const TRANSIT_MAX_SHARE = TRANSIT_ROAD_SHARE * (1 + FREE_TRANSPORT_RIDERSHIP);
+
+/**
+ * Share of the city's trips a complete network takes off the road.
+ *
+ * Under TRANSIT_ROAD_SHARE's 0.70 on purpose. A depot is the network the whole
+ * city can reach — one to a district, `plots` 24, so a covered city has one
+ * everywhere — and a line joins two districts, so a fully-served network is
+ * doing less of the daily work than a fully-covered bus service is. Set so a
+ * fare-charging city with a complete network lands at 0.60 of its trips carried
+ * against the 0.70 a fare-charging covered bus city reaches, and the two
+ * together clamp at TRANSIT_MAX_SHARE rather than adding past it.
+ *
+ * Measured in tools/phase7.calibrate.mjs: the congestion figure with and
+ * without, at every district count and every rung.
+ */
+export const NETWORK_ROAD_SHARE = 0.6;
+
+/**
+ * How much further a complete network lets the workforce reach for a job.
+ *
+ * TRANSIT_WORKFORCE's 0.25 is what a bus does inside a district; this is what a
+ * line would do between them, and it lands on the same expression
+ * (`reachableWorkers`) for the same reason TRANSIT_LABOUR_DRAW was cut from
+ * 0.35 to 0.30: two channels through one set of vehicles is one thing counted
+ * twice unless somebody measures the combined figure.
+ *
+ * **So it was measured, and it is 0, and the reason is not the one expected.**
+ * The pin was: on a built-out city the depots alone already take
+ * `demandTargets.c` to its +1 bound at 12 districts and up, so anything added
+ * on the same channel is a number nobody can see moving. But a played run does
+ * not pin at all — `tools/economy.calibrate.mjs` at 12, 24 and 48 hours reports
+ * R 0.0m C 0.0m I 0.0m under every policy including one that buys the whole
+ * network — so the pin was never the thing that decided it.
+ *
+ * What decided it is that at 0.25 the network makes the city *worse*. The same
+ * policy, 24 hours, the only difference this constant:
+ *
+ *          residents   homes   civic   treasury   demand R      C
+ *   0.00      83,585      54      30    1.25e12     -0.46   -0.03
+ *   0.25      76,598      49      27    1.19e12     -0.53   -0.05
+ *
+ * `reachableWorkers` is subtracted in `demandTargets.r` and added, through
+ * `labourReach`, to the other two — and in the half of the game a city actually
+ * plays, the subtraction is the larger of the two. A player who laid the whole
+ * network would have been paying for eight per cent fewer people. That is a
+ * worse failure than double-counting and it is invisible on a bar.
+ *
+ * Kept at 0 rather than deleted: the question is live — a later cycle that
+ * makes housing demand less sensitive to the labour pool can size it here — and
+ * zero with the measurement beside it is a decision where no constant at all is
+ * an omission.
+ *
+ * What the network does instead is freight, shoppers and quieter roads, which
+ * are three channels no depot touches. See NETWORK_EXPORT_LIFT, RAIL_VISITORS
+ * and NETWORK_ROAD_SHARE.
+ */
+export const NETWORK_WORKFORCE = 0;
+
+/**
+ * What a complete network lifts the export tap by.
+ *
+ * The freight half, and the one thing on this table that no depot has ever
+ * done: `RAIL_SIDE` has said since the first cycle that industry clusters
+ * toward the freight line, and until now there was no freight line. It *adds*
+ * inside `exportMarket`'s existing bracket rather than multiplying it, exactly
+ * as CARGO_EXPORT_LIFT, AIRPORT_EXPORT_LIFT and GOODS_TRADE_LIFT do, so the
+ * city still has one tap raised several ways rather than several taps.
+ *
+ * Sized against AIRPORT_EXPORT_LIFT rather than against a berth, because the
+ * airport is the thing it is actually like: both are an inland city's only
+ * route to an export lift, where CARGO_EXPORT_LIFT's 0.4 needs a coastal
+ * district the seed may never have offered. A complete network is worth a
+ * little more than a runway and a good deal less than the 0.55 the goods treaty
+ * buys, which is the ordering the three should have — a treaty is the whole
+ * outside world agreeing to trade, and this is the city being able to shift
+ * what it makes.
+ */
+export const NETWORK_EXPORT_LIFT = 0.6;
+
+/**
+ * What a complete network is worth in arrivals, in cruise berths.
+ *
+ * The shoppers half, and the one channel a line has to commercial demand that
+ * is not the depot's. `visitors` is one expression — residents x
+ * VISITORS_PER_RESIDENT x happiness, per berth — and a terminus is a berth that
+ * arrives by rail, exactly as ROAD_VISITORS' coach is one that arrives by road
+ * and AIRPORT_VISITORS' flight is one that arrives by air. Stating it in berths
+ * is what keeps the happiness scaling in one place rather than in four.
+ *
+ * Riding on `networkService` rather than on the line count, so it ramps in over
+ * the same purchases that were already buying freight and quieter streets, and
+ * so a network of trams that cannot carry the city lands proportionally fewer
+ * people than one of trains that can.
+ *
+ * Two berths at a complete network, which is the coach's figure rather than the
+ * runway's three. Both are the landlocked city's tourism, and a network is the
+ * dearer of the two to finish — but a runway is one purchase and a network is
+ * every district, so a city that has bought one has bought a great deal else
+ * besides. Against the six a full waterfront holds, a finished network is about
+ * a third of a coast.
+ */
+export const RAIL_VISITORS = 2;
 
 // ---------------------------------------------------------------------- port
 
@@ -3026,6 +3422,41 @@ export const GARBAGE_PER_WORKS = 12;
 export const GARBAGE_SATURATION = 220;
 export const GARBAGE_CURVE = 0.5;
 
+/**
+ * How much of the city's rubbish a complete recycling network stops it making.
+ *
+ * At *source*, on `garbageRate`, rather than as a second entry in
+ * GARBAGE_COLLECTORS — and that is the whole of why the waste depot was worth a
+ * civic type. `garbageCollection` is a plot count over the housing land clamped
+ * at 1, and one finished collector already covers the city: TRANSIT.plots is 29
+ * against a district's 24 housing plots. Measured on a 12-district city at the
+ * top of the ladder, by how much of each is built:
+ *
+ *   built    bus only   waste only   both, as collectors
+ *     25%       0.731        0.731                 0.487
+ *     50%       0.487        0.487                 0.000
+ *    100%       0.000        0.000                 0.000
+ *
+ * So two collectors are two buttons buying one number, and past half-built the
+ * second is worth nothing at all. A rate cut stacks instead, because `garbage`
+ * is load times uncollected share and the two move different factors — a city
+ * with both makes less rubbish *and* collects more of what it makes.
+ *
+ * The bus keeps the bins. Taking `transit` out of GARBAGE_COLLECTORS was the
+ * other half of the question and the worst case decides it: a city with a full
+ * bus network and no waste depot, because there was none to build, reads 0.000
+ * the night before and 0.974 the morning after — 9.7 points of mood taken from
+ * the player who bought the building that was answering it, and no migration
+ * softens it because there is no count to carry across.
+ *
+ * 0.45, so a complete network takes just under half the rubbish out of the
+ * stream. Under half deliberately: the rate has three sources — residents,
+ * trading premises and working industry — and a building that took most of it
+ * away would make GARBAGE_SATURATION's whole measured ladder, 0.17 at detached
+ * houses to 0.97 at arcologies, stop being a curve the city climbs.
+ */
+export const WASTE_RECYCLING = 0.45;
+
 // ---------------------------------------------------------- the rival city
 
 /**
@@ -3328,6 +3759,20 @@ export const RANK_GATES = {
   /** Replaces HIGHWAY_MIN_DISTRICTS as the gate. See `highwayAllowed`. */
   highway: 3,
   /**
+   * The two rungs of the network, gated on rank rather than on a district
+   * count — the same move the highway made, and for the same reason: a raw
+   * count is a second progression ladder beside the one that exists.
+   *
+   * A tram at Town and a train at City, which is one rung apart and is the
+   * whole of the pacing. Both are also gated by their own land — `linePairAt`
+   * has no pair to offer a one-district city and no *rail* pair to offer a
+   * two-district one — so the rank is what stops a city buying the network
+   * before it has anything to move, and the land is what stops it buying one
+   * it could not run.
+   */
+  tram: 1,
+  rail: 2,
+  /**
    * Founding the city again. Not a building — a rank gate on the one button
    * that takes the city away — but the same ladder answers it, and a second
    * mechanism for "are you big enough yet" would be a second thing to tune.
@@ -3550,3 +3995,167 @@ export const CATCHUP_MAX_LOSSES = 1;
  * play.
  */
 export const IGNITION_HAZARD_CAP = 64;
+
+// ------------------------------------------------------- emergency response
+
+/**
+ * One thing the city answers, and how long it has to answer it.
+ *
+ * The shape fire has had since it was built, lifted out so a second emergency
+ * can have it rather than a copy of it. Three numbers and a service: coverage
+ * sets a response time between `slow` and `fast`, the response time races
+ * `deadline`, and the crossing point is a threshold the player can feel.
+ *
+ * The whole of what makes it a mechanic rather than a curve is that `deadline`
+ * sits *between* the two response times. Outside them it is decoration: a
+ * deadline under `fast` means nothing is ever answered in time however much the
+ * city spends, and one over `slow` means everything is, and in both cases the
+ * service is buying a number nobody can see.
+ *
+ * Read fresh every tick rather than stamped when the thing started, which is
+ * the property fire's own comment defends: a station that opens while something
+ * is burning genuinely shortens the fire it was too late to prevent.
+ */
+export interface EmergencyResponse {
+  readonly key: 'fire' | 'police';
+  /** Whose coverage decides how fast the answer comes. */
+  readonly service: Service['key'];
+  /** Seconds to answer at zero coverage, and at full coverage. */
+  readonly slow: number;
+  readonly fast: number;
+  /** Seconds before it is too late. Always strictly between `fast` and `slow`. */
+  readonly deadline: number;
+  /** The most that may be open at once, so every loop over them is bounded. */
+  readonly active: number;
+}
+
+/**
+ * Seconds to answer a call, at zero coverage and at full coverage.
+ *
+ * Quicker than a fire at both ends, and that is the one thing about these
+ * numbers that is not free: a car arrives faster than a fire goes out, so a
+ * police response that took EXTINGUISH_MAX to arrive would be saying something
+ * about distance that the fire numbers already say better.
+ *
+ * 100 and 25 against fire's 90 and 20 look like the opposite of that, and are
+ * not: what these measure is arrival *and* resolution — the call closes when
+ * the police are done with it — where a fire's clock is the truck's arrival plus
+ * however long the hose runs. What matters is the spread, and it is chosen with
+ * UNANSWERED_SECONDS below to put the threshold somewhere fire's is not.
+ */
+export const ANSWER_MAX = 100;
+export const ANSWER_MIN = 25;
+
+/**
+ * How long a call stays worth answering.
+ *
+ * The threshold, and it is the number this whole feature is: response is
+ * ANSWER_MAX + (ANSWER_MIN - ANSWER_MAX) x coverage, so it drops under 70
+ * seconds at exactly 40% police coverage. Below that every call goes
+ * unanswered and the crime it carries is real; above it, none do.
+ *
+ * 40% rather than fire's 21.4%, and deliberately a *different* number rather
+ * than a rounder version of the same one. Two thresholds a player has to learn
+ * separately are two mechanics; two thresholds at the same coverage are one
+ * mechanic with two names. It is also the harder of the two on purpose — a
+ * police station carries no happiness weight at all (see SERVICES), so the
+ * only thing that ever makes one worth buying is `crime`, and a threshold this
+ * one cleared at a fifth of its allowance would have been cleared by accident.
+ *
+ * Measured in tools/phase7.calibrate.mjs: what coverage a city sits at through
+ * a played run, and how many calls a neglected one carries at once.
+ */
+export const UNANSWERED_SECONDS = 70;
+
+/**
+ * Calls open at once, at most.
+ *
+ * A cap on the *simulation* in the way MAX_ACTIVE_FIRES is, and for the same
+ * two reasons: it bounds every loop that walks the list, and it stops a
+ * twelve-hour absence returning a city buried in them. Eight rather than fire's
+ * six, because a call is the smaller event and a city should be able to have
+ * several going without the cap being what it is looking at.
+ */
+export const MAX_ACTIVE_CALLS = 8;
+
+/**
+ * Chance a single building reports something, per building per hour, at
+ * maximum crime pressure.
+ *
+ * Fire's BASE_IGNITION_PER_BUILDING_HOUR with the suppression the other way
+ * round, and the difference is the whole design of the pair. A fire station
+ * stops fires *starting* — FIRE_SUPPRESSION takes 94% of the rate away — where
+ * a police station does not stop crime happening. What police coverage buys is
+ * the answer, which is why this is multiplied by `crimePressure` and not by
+ * anything the police do.
+ *
+ * 0.1 against fire's 0.05, so a call is twice a fire at equal pressure — and
+ * pressure is rarely 1. Measured in tools/phase7.calibrate.mjs: a played city
+ * runs 0.40 pressure at one district and 0.97 at forty-nine, so a neglected
+ * four-district town of 164 buildings reports eight calls an hour against its
+ * three fires, and a full uncovered map reports 194 against 100.
+ *
+ * 0.4 was tried first and is wrong for a reason worth writing down: it put 777
+ * calls an hour on a full map, which parks the open list on MAX_ACTIVE_CALLS
+ * and leaves it there *even at full coverage*. A cap the ordinary case sits on
+ * is a cap the player is looking at rather than a guard against an absence, and
+ * `unansweredCalls` divides by it — so the term would have read 1 at every city
+ * size and stopped being a quantity.
+ */
+export const BASE_CALL_PER_BUILDING_HOUR = 0.1;
+
+/**
+ * What a full slate of unanswered calls adds to `crime`.
+ *
+ * It lands on `crime` rather than in the happiness bracket, and that is the one
+ * structural decision here. The bracket already carries six modifiers against
+ * three weights that sum to exactly 1, and a seventh for police would be the
+ * thing the police re-calibration refused in writing: police coverage would be
+ * charged twice, once as the level `crime` reads and once as the rate this one
+ * does. Landing on `crime` makes the two halves of one quantity, which is what
+ * they are.
+ *
+ * The ceiling survives it by construction rather than by measurement, which is
+ * why this shape was chosen over a modifier: an unanswered call is one the
+ * response missed the deadline on, a fully covered city answers every call in
+ * ANSWER_MIN, and `crime` is already exactly zero at full coverage. So a city
+ * that has bought everything reads the same number it read before this existed.
+ * See test/services.test.ts, and `unansweredCrime`.
+ *
+ * 0.4, and it is sized against the bracket it eventually reaches rather than
+ * against `crime`: a full slate of eight unanswered calls adds 0.4 to the crime
+ * slate, which is 0.104 of mood through CRIME_MOOD — about what a completely
+ * uncollected city loses to GARBAGE_MOOD's 0.10, under the 0.14 a jammed one
+ * loses, and well under the 0.26 the crime *level* can take on its own. So one
+ * call is 0.013 of mood against the 0.05 a fire costs while it burns, which is
+ * the right order: a fire is on screen and may take a building with it.
+ *
+ * The obvious alternative was to make one call worth exactly one fire, and it
+ * does not fit: 0.05 of mood a call over eight slots needs 1.54 here, and
+ * anything over 1 lets the calls alone pin `crime` at its bound with no crime
+ * level under them at all.
+ */
+export const UNANSWERED_CRIME = 0.4;
+
+export const RESPONSES: readonly EmergencyResponse[] = [
+  {
+    key: 'fire',
+    service: 'fire',
+    slow: EXTINGUISH_MAX,
+    fast: EXTINGUISH_MIN,
+    deadline: BURN_OUT_SECONDS,
+    active: MAX_ACTIVE_FIRES,
+  },
+  {
+    key: 'police',
+    service: 'police',
+    slow: ANSWER_MAX,
+    fast: ANSWER_MIN,
+    deadline: UNANSWERED_SECONDS,
+    active: MAX_ACTIVE_CALLS,
+  },
+];
+
+/** The two rows, by name, so a reader of `resolvesAt` has one thing to look up. */
+export const FIRE_RESPONSE = RESPONSES[0] as EmergencyResponse;
+export const POLICE_RESPONSE = RESPONSES[1] as EmergencyResponse;

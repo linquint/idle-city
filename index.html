@@ -212,6 +212,17 @@
       </button>
     </div>
 
+    <!-- The sixth 2x2 type, on a row of its own because the two above it are
+         already four buttons wide. "Waste" rather than "Recycling": the button
+         is a quarter of the panel and every other one here is a short form of
+         its service's name, so the title carries the rest. -->
+    <div class="civic-row">
+      <button class="civic transit" id="build-waste" type="button" title="Open waste depot">
+        <span>Waste</span><span class="built" id="build-waste-built">0/1</span>
+        <span class="cost" id="build-waste-cost">240</span>
+      </button>
+    </div>
+
     <button id="annex" class="annex" type="button">
       <span id="annex-label">Annex district</span><span class="cost" id="annex-cost">60.0K</span>
     </button>
@@ -299,9 +310,19 @@
       <div class="svc"><span class="k">Crime</span>
         <span class="built" id="crime-rate">0%</span>
         <span class="covers" id="crime-mood">no effect on mood</span></div>
+      <!-- The second half of what a station buys, and the half that is a rate
+           rather than a level: how long the answer takes, and whether it beats
+           the deadline. See RESPONSES, and the Fire row below, which is the
+           same reading against the same shared model. -->
+      <div class="svc"><span class="k">Calls</span>
+        <span class="built" id="call-response">—</span>
+        <span class="covers" id="call-outcome">nobody has called</span></div>
       <div class="svc"><span class="k">Fire</span>
         <span class="built" id="svc-fire-built">0/0</span>
         <span class="covers" id="svc-fire-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Response</span>
+        <span class="built" id="fire-response">—</span>
+        <span class="covers" id="fire-outcome">nothing is burning</span></div>
       <div class="svc"><span class="k">Parks</span>
         <span class="built" id="svc-parks-built">0/0</span>
         <span class="covers" id="svc-parks-covers">0 of 0 plots</span></div>
@@ -335,6 +356,44 @@
       <div class="svc"><span class="k">Rubbish</span>
         <span class="built" id="garbage-rate">0%</span>
         <span class="covers" id="garbage-mood">no effect on mood</span></div>
+      <!-- The waste depot does not collect: one finished collector already
+           covers the city, so a second at the same reach buys nothing. It cuts
+           what the city puts out instead, which stacks with the bus rather than
+           competing with it. See WASTE_RECYCLING. -->
+      <div class="svc"><span class="k">Recycling</span>
+        <span class="built" id="svc-waste-built">0/0</span>
+        <span class="covers" id="svc-waste-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Kept out</span>
+        <span class="built" id="waste-cut">0%</span>
+        <span class="covers" id="waste-effect">nothing kept out of the stream</span></div>
+    </div>
+
+    <!-- The network above the depot. A depot covers plots inside a district;
+         a line joins one district to another, and where it runs is derived
+         from the count and the seed rather than stored — see `linePairAt`. -->
+    <p class="cap">Network</p>
+    <div class="civic-row sheet-key">
+      <button class="civic" id="build-tram" type="button">
+        <span>Tram</span><span class="built" id="build-tram-built">0/0</span>
+        <span class="cost" id="build-tram-cost">9000</span>
+      </button>
+      <button class="civic" id="build-rail" type="button">
+        <span>Rail</span><span class="built" id="build-rail-built">0/0</span>
+        <span class="cost" id="build-rail-cost">30000</span>
+      </button>
+    </div>
+    <!-- Reach and capacity both, because `networkService` is the lesser of the
+         two and a single number would hide which one the next line should buy. -->
+    <div class="services" id="network" role="img">
+      <div class="svc"><span class="k">Reach</span>
+        <span class="built" id="network-reach">0%</span>
+        <span class="covers" id="network-where">no line laid</span></div>
+      <div class="svc"><span class="k">Capacity</span>
+        <span class="built" id="network-capacity">0%</span>
+        <span class="covers" id="network-service">carries nothing yet</span></div>
+      <div class="svc"><span class="k">Freight</span>
+        <span class="built" id="network-freight">—</span>
+        <span class="covers" id="network-arrivals">no arrivals by rail</span></div>
     </div>
 
     <p class="cap">Education</p>
@@ -385,6 +444,30 @@
         <span>Stadium</span><span class="built" id="build-stadium-built">0/1</span>
         <span class="cost" id="build-stadium-cost">12000</span>
       </button>
+    </div>
+
+    <!-- The cheap tier, on the square the eleventh FRONTAGE_TARGET square
+         bought. One site a district shared by the two, so they are scarcer than
+         a museum by construction — and neither carries mood: a library answers
+         the idleness half of crime and a theatre lands an audience. -->
+    <p class="cap">Culture</p>
+    <div class="civic-row sheet-key">
+      <button class="civic" id="build-library" type="button">
+        <span>Library</span><span class="built" id="build-library-built">0/0</span>
+        <span class="cost" id="build-library-cost">900</span>
+      </button>
+      <button class="civic" id="build-theatre" type="button">
+        <span>Theatre</span><span class="built" id="build-theatre-built">0/0</span>
+        <span class="cost" id="build-theatre-cost">2200</span>
+      </button>
+    </div>
+    <div class="services" id="culture" role="img">
+      <div class="svc"><span class="k">Libraries</span>
+        <span class="built" id="culture-library">0%</span>
+        <span class="covers" id="culture-idleness">no effect on crime</span></div>
+      <div class="svc"><span class="k">Theatres</span>
+        <span class="built" id="culture-theatre">0%</span>
+        <span class="covers" id="culture-audience">no audience yet</span></div>
     </div>
 
     <p class="cap">Reach</p>
