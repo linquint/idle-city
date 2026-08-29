@@ -28,7 +28,8 @@
     "garbage:calibrate": "node tools/garbage.calibrate.mjs",
     "rival:calibrate": "node tools/rival.calibrate.mjs",
     "pedestrians:calibrate": "node --experimental-transform-types tools/pedestrians.calibrate.mjs",
-    "lod:calibrate": "node --experimental-transform-types tools/lod.calibrate.mjs"
+    "lod:calibrate": "node --experimental-transform-types tools/lod.calibrate.mjs",
+    "scaffold:calibrate": "node --experimental-transform-types tools/scaffold.calibrate.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

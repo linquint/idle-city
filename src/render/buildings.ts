@@ -38,6 +38,7 @@ import { Glow } from './glow.ts';
 import { GrowableInstancedMesh, SlotRanges } from './growable.ts';
 import { GrowthSchedule } from './growth.ts';
 import { PALETTE } from './palette.ts';
+import { Scaffold } from './scaffold.ts';
 import type { OverlaySource } from './zones.ts';
 
 const GROW_SECONDS = 0.55;
@@ -45,6 +46,18 @@ const GROW_SECONDS_REDUCED = 0.12;
 
 /** Most buildings that arrive at once are animated; a huge backlog is capped. */
 const WAVE_BUDGET = 320;
+
+/**
+ * How many construction cages can stand at once.
+ *
+ * Three waves, because there are three zone ladders and each caps a single
+ * `stage` at WAVE_BUDGET — so the worst frame the game can produce is a
+ * twelve-hour catch-up landing a full wave in all three at once. It is bounded
+ * by the *budget*, never by the city: a 49-district map with 4,000 buildings
+ * standing draws no more cages than the first district does, because a settled
+ * building is not in `GrowthSchedule`'s active set and has nothing to draw.
+ */
+const SCAFFOLD_CAPACITY = WAVE_BUDGET * 3;
 
 const prefersReducedMotion = (): boolean =>
   typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -735,7 +748,7 @@ class ZoneLayer {
         // Slots past the standing stock are the ruins. They live in the level-0
         // set because they hold a plot and have to be drawn on it, and -1 is
         // what tells the write they hold no level.
-        this.writeOne(body, i, slot, slot < standing ? l : -1, bank, dummy, tint, now, true);
+        this.writeOne(body, i, slot, slot < standing ? l : -1, bank, dummy, tint, now, true, null);
       }
       body.setCount(count);
       body.flush();
@@ -756,7 +769,7 @@ class ZoneLayer {
     const start = this.starts[0] ?? 0;
     body.ensure(to - start);
     for (let slot = from; slot < to; slot++) {
-      this.writeOne(body, slot - start, slot, 0, bank, dummy, tint, now, true);
+      this.writeOne(body, slot - start, slot, 0, bank, dummy, tint, now, true, null);
     }
     body.setCount(to - start);
     body.flush();
@@ -773,6 +786,8 @@ class ZoneLayer {
     tint: THREE.Color,
     now: number,
     place: boolean,
+    /** Where a cage goes if this building is still on its way up. Null on a rebuild. */
+    scaffold: Scaffold | null,
   ): void {
     const at = this.layout.place(this.zone, slot, this.shownMerged, this.shownZoning, SCRATCH_AT);
     const scale = this.growth.scaleAt(slot, now);
@@ -796,6 +811,18 @@ class ZoneLayer {
       index,
       bodyColor(this.kind, slot, level, this.overlay?.(this.kind, slot) ?? null, tint),
     );
+
+    // The cage, around the *finished* building rather than around the shell it
+    // has reached. The test is `scale !== 1` rather than `scale < 1` and it has
+    // to be: `easeOutBack` overshoots, so a building spends most of its
+    // animation *above* 1 and `< 1` would take its cage down halfway up. This
+    // is the exact condition `GrowthSchedule.update` retires an index on, which
+    // is what makes the two happen on the same frame — the last write a
+    // building gets is the one that leaves it out of the list, and a cage that
+    // outlived its growth would be a cage nothing ever came back to take down.
+    if (scaffold && scale !== 1) {
+      scaffold.add(at.x, at.z, shape.width * sx, shape.width * shape.depth * sz, height);
+    }
 
     writeParts(
       this.kind,
@@ -844,8 +871,14 @@ class ZoneLayer {
     }
   }
 
-  /** Advances this zone's in-flight growth animations. */
-  update(bank: PartBank, dummy: THREE.Object3D, tint: THREE.Color, now: number): boolean {
+  /** Advances this zone's in-flight growth animations, and cages what is moving. */
+  update(
+    bank: PartBank,
+    dummy: THREE.Object3D,
+    tint: THREE.Color,
+    now: number,
+    scaffold: Scaffold | null,
+  ): boolean {
     // Keyed by *slot*, not by instance, so an animation in flight survives a
     // promotion moving the building between two mesh sets. The level and
     // instance are recovered from the cohort the scene is drawing.
@@ -865,6 +898,7 @@ class ZoneLayer {
         tint,
         now,
         false,
+        scaffold,
       );
     });
     if (moving) for (const body of this.bodies) body.flush();
@@ -1614,11 +1648,18 @@ class Outline {
 /**
  * The instanced meshes the three zone ladders are allowed to cost, all told.
  *
- * Fifteen bodies — one per (zone, level) — and nine shared detail parts. The
- * alternative the styles were designed against is 45 meshes: five levels by
- * three styles by three zones, each a draw call for what is fundamentally the
- * same box. Asserted in test/skyline.test.ts, so a later change cannot quietly
- * double the draw calls.
+ * Fifteen bodies — one per (zone, level) — nine shared detail parts, and the
+ * construction cage. The alternative the styles were designed against is 45
+ * meshes: five levels by three styles by three zones, each a draw call for what
+ * is fundamentally the same box. Asserted in test/skyline.test.ts, so a later
+ * change cannot quietly double the draw calls.
+ *
+ * The cage is the twenty-fifth and it is worth saying what it costs, because a
+ * budget nobody argues with is a budget that drifts: it is one mesh, it is
+ * `visible = false` on every frame nothing is growing — which is nearly all of
+ * them — and its instance count is bounded by SCAFFOLD_CAPACITY rather than by
+ * the city. A settled city of any size submits the same 24 draw calls it did
+ * before it existed. See `Scaffold`.
  *
  * Civic buildings, the city hall, power plants and landmarks are counted
  * separately and are not part of this: they stand on 2x2 and 3x3 sites, have no
@@ -1627,7 +1668,7 @@ class Outline {
  * landmark sizes — and the count grows with the *table* rather than with the
  * city. See `civicSet`, `cityHallSet`, `powerPlantSet` and `landmarkSet`.
  */
-export const BUILDING_MESH_BUDGET = 24;
+export const BUILDING_MESH_BUDGET = 25;
 
 /**
  * The building layer. It owns no game state: given counts, it reconciles the
@@ -1638,6 +1679,20 @@ export class Buildings {
   private readonly zones: readonly ZoneLayer[];
   /** Nine unit shapes, shared by every zone and every level. See `PartBank`. */
   private readonly parts: PartBank;
+  /**
+   * Cages around whatever is mid-growth. Null under reduced motion.
+   *
+   * Skipped rather than shortened, and that is the honest answer to the
+   * preference: reduced motion runs the whole animation in
+   * GROW_SECONDS_REDUCED, which is 0.12s — about seven frames. A cage that
+   * appears and vanishes inside seven frames is not an animation the player
+   * reads, it is a flash, which is the exact thing the preference is set to
+   * stop. Shortening it further would make it a one-frame flicker and leaving
+   * it at full length would mean scaffolding standing after the building it
+   * wrapped had finished. Nothing at all is the only version that respects
+   * what was asked for.
+   */
+  private readonly scaffold: Scaffold | null;
   /**
    * One entry per service, in SERVICES order, each owning its own mesh set,
    * growth schedule and shown count. Civic sites are reserved up front and
@@ -1684,8 +1739,10 @@ export class Buildings {
     scene: THREE.Scene,
     private readonly layout: CityLayout,
   ) {
-    const duration = prefersReducedMotion() ? GROW_SECONDS_REDUCED : GROW_SECONDS;
+    const reduced = prefersReducedMotion();
+    const duration = reduced ? GROW_SECONDS_REDUCED : GROW_SECONDS;
     this.parts = new PartBank(scene, 128);
+    this.scaffold = reduced ? null : new Scaffold(scene, SCAFFOLD_CAPACITY);
     this.zones = [
       new ZoneLayer(scene, 'home', ZONE.residential, layout, duration, 64, this.detail),
       new ZoneLayer(scene, 'shop', ZONE.commercial, layout, duration, 32, this.detail),
@@ -1840,6 +1897,7 @@ export class Buildings {
       zone.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
     }
     this.parts.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
+    this.scaffold?.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
     for (const set of this.civic) set.meshes.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
   }
 
@@ -1857,6 +1915,11 @@ export class Buildings {
   /** Whether the city is currently fully dressed. For the tests and the tools. */
   get dressingAll(): boolean {
     return this.detail.dressingAll;
+  }
+
+  /** Construction cages standing. For the tests and the calibrators. */
+  get scaffolds(): number {
+    return this.scaffold?.standing ?? 0;
   }
 
   /**
@@ -1983,9 +2046,16 @@ export class Buildings {
   /** Advances in-flight growth animations. Returns true while any are running. */
   update(now: number): boolean {
     let moving = false;
+    // Rebuilt from scratch rather than reconciled, every frame, because that is
+    // what makes a cage come down on the same frame its growth retires: the
+    // list is exactly what was written this pass, so a building that finished
+    // is simply not in it. Free when nothing is moving — `begin` is an integer
+    // and `end` early-returns on a list that was empty last frame too.
+    this.scaffold?.begin();
     for (const zone of this.zones) {
-      moving = zone.update(this.parts, this.dummy, this.tint, now) || moving;
+      moving = zone.update(this.parts, this.dummy, this.tint, now, this.scaffold) || moving;
     }
+    this.scaffold?.end();
     if (moving) this.parts.flush();
 
     for (const set of this.civic) {
