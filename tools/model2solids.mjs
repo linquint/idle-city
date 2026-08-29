@@ -6,7 +6,7 @@
  * corner arrive as one lump it cannot recognise, and it refuses rather than
  * approximating. The README calls that a modelling instruction, and the fix has
  * been the same every time: give each box its own `o` group, which leaves the
- * geometry untouched. Twelve refusals over three remodels have all been that.
+ * geometry untouched. Thirteen refusals over four remodels have all been that.
  *
  * Doing it by hand means editing an exported file, and then the copy in
  * `models/` quietly differs from whatever the modeller exports next — with no

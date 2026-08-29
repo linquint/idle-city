@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 11, +8 shared parts, +20 models = 39 (asserted, plus the cage) | 15, +8, +25 = **48**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 10, +8 shared parts, +25 models = 43 (asserted, plus the cage) | 14, +8, +30 = **52**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -87,6 +87,15 @@ clothes.
 > had seen it. The floor for it is 48 against a budget of 40 — and raising the
 > budget to cover a zone nobody has asked for is the drift this file exists to
 > refuse.
+>
+> And a fifth time, after housing's *third*: ten bodies and twenty-five models,
+> `BUILDING_MESH_BUDGET` 40 -> 44, floor for a fourth zone now 52. The gap is
+> widening rather than closing with every cycle, which is the whole point of
+> keeping this row. It is worth being explicit that the three moves that landed
+> all bought the *same* thing — a rung an existing player already looks at —
+> and Option A buys a zone nobody has seen. Those are not comparable spends
+> against one budget, and this row is not a running case for the budget being
+> soft.
 
 ### Option B — a second building type on the commercial frontage
 

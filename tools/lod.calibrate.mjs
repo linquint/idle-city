@@ -325,6 +325,66 @@ console.log("what modelling housing's second rung costs\n");
 }
 console.log('');
 
+// ------------------------------------------------------- part 1d
+
+/**
+ * What the towers cost, which is the one that had to be looked at before it was
+ * spent rather than after.
+ *
+ * They are the largest models in the city by a wide margin — 67 to 241 boxes
+ * against a house's 17 to 23 — and the arithmetic that makes them affordable is
+ * the merge rather than the models: a tower stands on *two* plots, so a district
+ * that has climbed to them holds about half as many buildings as one of walk-
+ * ups. Whether the halving covers a model five times the size is the question,
+ * and it is a measurement rather than an opinion.
+ *
+ * Housing alone moves again, for the reason part 1c gives. `city` is asked for a
+ * level-2 city directly here rather than patched, because this rung *does*
+ * change the building count — the footprint is 2 — and `city` is what knows how
+ * to fit a cohort to the land.
+ */
+console.log('what the towers cost, and what the merge pays back\n');
+{
+  const walkups = stand(MAX_DISTRICTS, 0, 1);
+  const towers = stand(MAX_DISTRICTS, 2);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:home:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(walkups.root, 1);
+  const after = rows(towers.root, 2);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+
+  console.log(`  districts ${MAX_DISTRICTS}, housing alone climbing`);
+  console.log('');
+  console.log('    housing            buildings     triangles      each');
+  console.log(
+    `    ${'level 2, walk-ups'.padEnd(19)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 3, towers'.padEnd(19)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log('    tower                     instances     triangles');
+  for (const r of after) {
+    console.log(`    ${r.name.padEnd(25)}${thou(r.count, 10)}${thou(r.tris, 14)}`);
+  }
+  console.log('');
+  const ratio = tA / Math.max(1, tB);
+  console.log(`  A tower is ${fixed(tA / Math.max(1, nA) / (tB / Math.max(1, nB)), 1, 2)}x the model a walk-up is, and the merge`);
+  console.log(`  halves the count: ${nB.toLocaleString('en-GB')} walk-ups become ${nA.toLocaleString('en-GB')} towers. Net, the rung`);
+  console.log(`  costs ${fixed(ratio, 1, 2)}x what the one below it does — ${thou(tA - tB, 1)} triangles.`);
+  console.log('');
+  console.log('  The balcony slab is the outlier and worth naming: 241 boxes, 120 of them');
+  console.log('  balcony rails that are a tenth of a unit across. From the orbit camera');
+  console.log('  they are sub-pixel, which is the silhouette-geometry case `ModelMeshes`');
+  console.log('  sets out and does not build. This is the number to re-read when it is.');
+}
+console.log('');
+
 // ------------------------------------------------------------------- part 2
 
 /**

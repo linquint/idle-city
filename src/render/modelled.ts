@@ -29,7 +29,14 @@ import {
   WALKUP_MAISONETTE_PARTS,
   WALKUP_MANSARD_PARTS,
 } from './walkupModels.ts';
-import { CELL } from '../sim/config.ts';
+import {
+  TOWER_BALCONY_PARTS,
+  TOWER_CROSSWALL_PARTS,
+  TOWER_GALLERY_PARTS,
+  TOWER_TERRACE_PARTS,
+  TOWER_TWIN_PARTS,
+} from './towerModels.ts';
+import { CELL, LEVEL_FOOTPRINT } from '../sim/config.ts';
 import { cellX, cellZ, isRoad } from '../sim/layout.ts';
 import type { ZoneKind } from '../sim/state.ts';
 
@@ -49,14 +56,23 @@ import type { ZoneKind } from '../sim/state.ts';
  * along a kerb in the order the seed put them in. What it costs is five meshes
  * a rung, and most of this file is about keeping it to five.
  *
- * **Housing is modelled twice, and it is the only zone that is.** That is not a
- * step toward modelling everything: it is where the cliff was. A player's first
- * promotion turns a street of five house silhouettes into twenty-four copies of
- * one 2.6 x 4.6 box, and it is the first thing they do after the hour the
- * houses were built for. Commerce and industry climb too, but a district climbs
- * *housing* first and climbs it most — see `LEVEL_HOUSING` — so the second rung
- * of housing is the next most-looked-at surface in the game and the second and
- * third rungs of the other two are not close.
+ * **Housing is modelled three rungs up, and it is the only zone modelled above
+ * its first.** That is not a step toward modelling everything: it is where the
+ * cliffs were. A player's first promotion turned a street of five house
+ * silhouettes into twenty-four copies of one 2.6 x 4.6 box, and the second
+ * turned *that* into the same box twice as wide and twice as tall — the merge,
+ * which is the most consequential thing a player does to a district and read as
+ * the least. Commerce and industry climb too, but a district climbs *housing*
+ * first and climbs it most — see `LEVEL_HOUSING` — so housing's second and
+ * third rungs are the next most-looked-at surfaces in the game and the rungs
+ * above them are seen from far enough out that a silhouette is all that lands.
+ *
+ * The third rung is also the first modelled anything that stands on a **merged
+ * parcel**, which is a genuinely different footprint rather than a bigger one:
+ * oblong, 6.8 by 2.8, and fixed in the world by which way the parcel runs. Two
+ * rules follow from it and both live in this file — `jitterCap`, which bounds
+ * the two axes against different amounts of land, and `modelFacing`, which
+ * narrows an oblong model to the two quarter turns that lie along its parcel.
  *
  * Everything above is still massed, and that is the shape the ladder should
  * have: the rungs the game is played on get the geometry, and the rungs a
@@ -98,6 +114,13 @@ const MODELS: Readonly<Record<ModelledKind, readonly (readonly (readonly ModelPa
       WALKUP_COURT_PARTS,
       WALKUP_MANSARD_PARTS,
     ],
+    [
+      TOWER_BALCONY_PARTS,
+      TOWER_CROSSWALL_PARTS,
+      TOWER_GALLERY_PARTS,
+      TOWER_TERRACE_PARTS,
+      TOWER_TWIN_PARTS,
+    ],
   ],
   shop: [
     [
@@ -124,8 +147,8 @@ export const MODELLED_KINDS = Object.keys(MODELS) as readonly ModelledKind[];
 /**
  * How many rungs from the bottom each zone draws from models.
  *
- * Two for housing and one for the other two. Read by `modelledAt`, which is the
- * only thing that should ever ask.
+ * Three for housing and one for the other two. Read by `modelledAt`, which is
+ * the only thing that should ever ask.
  */
 export const MODEL_LEVELS: Readonly<Record<ModelledKind, number>> = {
   home: MODELS.home.length,
@@ -288,7 +311,7 @@ function extentOf(parts: readonly ModelPart[]): ModelExtent {
 }
 
 /**
- * The widest a modelled building may come out, once its jitter is applied.
+ * The widest a modelled building may come out on one plot, once jittered.
  *
  * The plot less the same kerb gutter a massed body leaves. `ZONE_SHAPES` sets
  * the massed widths against exactly this bound — industry holds 3.5 against a
@@ -298,28 +321,48 @@ function extentOf(parts: readonly ModelPart[]): ModelExtent {
  */
 const MODEL_SPAN_MAX = CELL - 0.2;
 
+/** The same, along a merged parcel: two plots, and the one gutter still. */
+const MERGED_SPAN_MAX = 2 * CELL - 0.2;
+
 /**
- * The most a model's footprint may be jittered, per zone and style.
+ * The most a model's footprint may be jittered, per zone, level and style.
  *
  * Bounded by the plot rather than by taste, which is the only thing that makes
  * the jitter safe to apply to a *model*: a house is 3.06 across at its widest
  * and could take twice the jitter it is given, but a works is 3.56 and 12% of
  * that is 3.99 on a 4-unit plot — a building touching both its kerbs. So the
- * cap is whatever fits, and it bites on exactly the zone where it has to.
+ * cap is whatever fits, and it bites on exactly the rungs where it has to.
  *
- * Applied to both axes against the same limit, because a modelled building
- * turns to face its street: whichever of its width and depth the quarter turn
- * puts across the frontage is the one that has to clear the kerb, and which one
- * that is depends on the plot.
+ * **Which axis answers to which bound depends on the footprint**, and that is
+ * the whole of what a merged rung changed here:
+ *
+ *   - **on one plot**, both axes answer to the same bound, because the model
+ *     turns freely to face its street and whichever of its width and depth the
+ *     quarter turn puts across the frontage is the one that has to clear the
+ *     kerb — and which one that is depends on the plot;
+ *   - **on a merged parcel**, neither axis is free. The parcel is oblong and
+ *     the model is built to it, so its long span lies along the parcel and its
+ *     short span across, at every turn the building can take. They answer to
+ *     two plots and to one respectively, and taking the smaller of the two
+ *     ratios is what keeps both true at once.
+ *
+ * It binds on the towers, which is the first time this has bound anywhere but
+ * industry: the crosswall block is 7.08 along its parcel against a bound of
+ * 7.8, so its jitter caps at 1.10 rather than the 1.12 it would otherwise take.
  */
 export const MODEL_JITTER_MAX: Readonly<Record<ModelledKind, readonly (readonly number[])[]>> = {
-  home: MODEL_EXTENT.home.map((rung) => rung.map(jitterCap)),
-  shop: MODEL_EXTENT.shop.map((rung) => rung.map(jitterCap)),
-  industry: MODEL_EXTENT.industry.map((rung) => rung.map(jitterCap)),
+  home: MODEL_EXTENT.home.map(capsFor),
+  shop: MODEL_EXTENT.shop.map(capsFor),
+  industry: MODEL_EXTENT.industry.map(capsFor),
 };
 
-function jitterCap(extent: ModelExtent): number {
-  return MODEL_SPAN_MAX / Math.max(extent.width, extent.depth);
+function capsFor(rung: readonly ModelExtent[], level: number): readonly number[] {
+  return rung.map((extent) => jitterCap(extent, (LEVEL_FOOTPRINT[level] ?? 1) > 1));
+}
+
+function jitterCap(extent: ModelExtent, merged: boolean): number {
+  if (!merged) return MODEL_SPAN_MAX / Math.max(extent.width, extent.depth);
+  return Math.min(MERGED_SPAN_MAX / extent.width, MODEL_SPAN_MAX / extent.depth);
 }
 
 /**
@@ -348,22 +391,48 @@ const FACING: readonly { readonly dx: number; readonly dz: number }[] = [
 export const QUARTER: readonly number[] = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
 
 /**
+ * The turns that keep a model's long axis along its parcel.
+ *
+ * A model is built facing +z with its long axis on x, so turns 0 and 2 leave
+ * that axis on the world's x and turns 1 and 3 put it on z. A building on one
+ * plot may take any of the four; one on a merged parcel may take only the two
+ * that lie the right way, and picks its front from within them.
+ */
+const ALONG_X: readonly number[] = [0, 2];
+const ALONG_Z: readonly number[] = [1, 3];
+const ALL_TURNS: readonly number[] = [0, 1, 2, 3];
+
+/**
  * Which way the building standing at a world position faces, in quarter turns.
  *
  * A corner plot has two streets and both are correct, so the seed picks: it is
  * the one place in the layout where a building has a genuine choice, and taking
  * the first every time would line every corner in the city up the same way.
  *
+ * `alongX` narrows that choice to two for a building on a merged parcel: the
+ * parcel is oblong, the model is built to it, and only the turns that lay its
+ * long axis along the parcel put it inside its own land. A tower still faces a
+ * street where one of those two fronts one — which is most of them, since a
+ * parcel is two plots that each front a street — and where neither does, the
+ * seed picks between them rather than always taking the first. Pass null for a
+ * building on a single plot, which turns freely.
+ *
  * Every sellable plot fronts a street by construction — `plotsFor` is defined
- * as exactly that — so the no-street miss is unreachable, and facing the
- * model's own way is the formality that covers it.
+ * as exactly that — so the no-street miss is unreachable for a single plot, and
+ * facing the model's own way is the formality that covers it.
  */
-export function modelFacing(x: number, z: number, pick: number): number {
+export function modelFacing(
+  x: number,
+  z: number,
+  pick: number,
+  alongX: boolean | null = null,
+): number {
   const gx = cellX(x);
   const gz = cellZ(z);
+  const turns = alongX === null ? ALL_TURNS : alongX ? ALONG_X : ALONG_Z;
   let found = 0;
-  let turn = 0;
-  for (let q = 0; q < FACING.length; q++) {
+  let turn = turns[0] as number;
+  for (const q of turns) {
     const side = FACING[q] as { dx: number; dz: number };
     if (!isRoad(gx + side.dx, gz + side.dz)) continue;
     found++;
@@ -371,6 +440,12 @@ export function modelFacing(x: number, z: number, pick: number): number {
     // and a uniform draw among however many a plot turns out to have.
     if (found === 1 || pick * found < 1) turn = q;
   }
+  // A merged parcel's centre sits between two cells, so the road test either
+  // side of it is a weaker question than it is for a plot — and a parcel in the
+  // interior of a block can genuinely front no street on the axis it lies
+  // along. Either way the building still has to point one of its two ways, and
+  // the seed is what stops every such parcel pointing the same one.
+  if (found === 0 && alongX !== null) turn = turns[pick < 0.5 ? 0 : 1] as number;
   return turn;
 }
 
@@ -424,21 +499,26 @@ export function modelFacing(x: number, z: number, pick: number): number {
  * next optimisation the renderer needs is almost certainly here rather than
  * anywhere else.
  *
- * Modelling housing's *second* rung buys no new buildings, which is the one
- * thing worth knowing about its cost: a plot holds one building, so a district
- * that promotes its housing trades 24 houses for 24 walk-ups rather than adding
- * any. What it trades up is the model — 22 to 33 drawn boxes against a house's
- * 17 to 23 — and part 1c of the calibration measures exactly that swap on the
- * city above:
+ * Modelling housing's rungs above the first buys no new buildings, which is the
+ * one thing worth knowing about their cost. A plot holds one building and a
+ * parcel holds one building, so a district that climbs *trades* what it has:
  *
- *     1,176 houses     266,904 triangles     (227 each)
- *     1,176 walk-ups   407,184 triangles     (346 each)
+ *     1,176 houses     266,904 triangles     (  227 each)   part 1b
+ *     1,176 walk-ups   407,184 triangles     (  346 each)   part 1c
+ *       588 towers     840,120 triangles     (1,429 each)   part 1d
  *
- * so +140,280, which is 52.6% on the housing and 11.3% on the whole scene:
- * 1,416,216 to 1,575,768. That is the new ceiling and it is the right shape for
- * one — the city that pays it has climbed housing everywhere and left commerce
- * and industry on their first rung, and climbing is what a player does
- * *instead* of annexing.
+ * The walk-ups are a straight swap on the same plots — +140,280, which is 52.6%
+ * on the housing and 11.3% on the whole scene, 1,416,216 to 1,575,768.
+ *
+ * The towers are the interesting one, and they are the reason this note exists
+ * rather than a rule of thumb. A tower is **4.13x** the model a walk-up is —
+ * they are the largest models in the city, 67 to 241 boxes against a house's 17
+ * to 23 — but promotion to that rung is the *merge*, so 1,176 walk-ups become
+ * 588 towers. Halving the count against quadrupling the model leaves the rung
+ * costing 2.06x the one below it: +432,936, rather than the +2.4M a naive
+ * reading of the model size would predict. The merge is what makes a model that
+ * size affordable at all, and it is why the rungs above — which merge too, but
+ * are seen from further out — are the wrong place to spend the same again.
  *
  * Two moves are available and neither is made, so the reasoning survives:
  *

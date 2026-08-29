@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { CELL, LEVELS, MAX_DISTRICTS, SEED } from '../src/sim/config';
+import { CELL, LEVEL_FOOTPRINT, LEVELS, MAX_DISTRICTS, SEED } from '../src/sim/config';
 import { CityLayout } from '../src/sim/layout';
 import {
   bodyExtent,
+  bodyFootprint,
   BUILDING_MESH_BUDGET,
   Buildings,
   buildingStyle,
@@ -19,7 +20,10 @@ import {
   type ModelledKind,
 } from '../src/render/modelled';
 import { createState, type GameState, type ZoneKind } from '../src/sim/state';
-import { cohort, housed, making, mix, trading } from './levels';
+import { cohort, housed, making, mix, trading, zonedAt, zoning } from './levels';
+import { ZONE } from '../src/sim/citygen';
+import { cellX, cellZ, createPlacement, isRoad } from '../src/sim/layout';
+import { modelFacing } from '../src/render/modelled';
 
 /**
  * The building layer, checked as a black box.
@@ -151,8 +155,8 @@ describe('the skyline the renderer draws', () => {
       expect(seen.get('home:1') ?? 0).toBe(0);
       expect(roofTotal(seen)).toBe(0);
     }
-    // And the promotion off the modelled rungs, which is the one that hands a
-    // building to a body mesh and its roof to the bank.
+    // The second promotion is modelled to modelled as well, and it is the one
+    // that merges: a walk-up on one plot becomes a tower on two.
     for (let promoted = 0; promoted <= 24; promoted++) {
       buildings.sync(
         state({ homes: 24, homeLevels: mix(0, 24 - promoted, promoted) }),
@@ -160,31 +164,47 @@ describe('the skyline the renderer draws', () => {
       );
       const seen = counts();
       expect(modelTotal(seen, 'home', 1)).toBe(24 - promoted);
-      expect(seen.get('home:2') ?? 0).toBe(promoted);
+      expect(modelTotal(seen, 'home', 2)).toBe(promoted);
+      expect(seen.get('home:2') ?? 0).toBe(0);
+      expect(roofTotal(seen)).toBe(0);
+    }
+    // And the promotion off the modelled rungs, which is the one that hands a
+    // building to a body mesh and its roof to the bank.
+    for (let promoted = 0; promoted <= 24; promoted++) {
+      buildings.sync(
+        state({ homes: 24, homeLevels: mix(0, 0, 24 - promoted, promoted) }),
+        6 + promoted * 0.1,
+      );
+      const seen = counts();
+      expect(modelTotal(seen, 'home', 2)).toBe(24 - promoted);
+      expect(seen.get('home:3') ?? 0).toBe(promoted);
       expect(roofTotal(seen)).toBe(promoted);
     }
   });
 
   it('draws a ruin on its plot, in the modelled set, and unlit', () => {
     const { buildings, counts } = scene();
-    // Twenty standing homes at level 2, four boarded up. The ruins hold their
-    // plots, so the city still draws 24 buildings.
-    buildings.sync(state({ homes: 24, homeLevels: mix(0, 0, 20), abandonedR: 4 }), 0);
+    // Twenty standing homes at level 4, four boarded up. The ruins hold their
+    // plots, so the city still draws 24 buildings. Level 4 rather than level 3
+    // because what this is about is a ruin dropping *off* the modelled rungs,
+    // and level 3 is one of them now.
+    buildings.sync(state({ homes: 24, homeLevels: mix(0, 0, 0, 20), abandonedR: 4 }), 0);
     const seen = counts();
-    expect(seen.get('home:2')).toBe(20);
+    expect(seen.get('home:3')).toBe(20);
     // A ruin is drawn in the *first* rung's set, whatever the plot had climbed
     // to — so a boarded-up plot is a darkened house rather than a darkened box,
-    // and never a darkened walk-up.
+    // and never a darkened walk-up or tower.
     expect(seen.get('home:0') ?? 0).toBe(0);
     expect(modelTotal(seen, 'home', 0)).toBe(4);
     expect(modelTotal(seen, 'home', 1)).toBe(0);
-    // Twenty roofs out of the bank: the standing level-2 blocks. The four ruins
+    expect(modelTotal(seen, 'home', 2)).toBe(0);
+    // Twenty roofs out of the bank: the standing level-4 blocks. The four ruins
     // wear their model's own roof and take nothing from it.
     expect(roofTotal(seen)).toBe(20);
     // And a ruin keeps its plot and loses everything else, its lit band
     // included: twenty standing buildings can light bands, four ruins cannot.
     const lit = seen.get('part:band') ?? 0;
-    buildings.sync(state({ homes: 24, homeLevels: mix(0, 0, 24) }), 1);
+    buildings.sync(state({ homes: 24, homeLevels: mix(0, 0, 0, 24) }), 1);
     expect(counts().get('part:band') ?? 0).toBeGreaterThan(lit);
   });
 
@@ -258,6 +278,90 @@ describe('the skyline the renderer draws', () => {
     for (const name of modelMeshes('home', 1)) expect(climbed.get(name) ?? 0).toBeGreaterThan(0);
   });
 
+  it('lays a merged model along its parcel, and still faces it at a street', () => {
+    // The rule a merged rung needed and the rungs below did not. A tower is
+    // oblong and built to its parcel, so of the four quarter turns a house can
+    // take it may take only the two that lie the right way — otherwise it
+    // renders across two neighbours' kerbs and out into the street.
+    //
+    // Driven through `sync` rather than by poking the layout, because that is
+    // what puts the layout in the state the renderer actually sees; the same
+    // layout is then asked where each parcel is.
+    const districts = 2;
+    const merged = 10;
+    const z = zonedAt(districts);
+    const layout = new CityLayout();
+    const buildings = new Buildings(new THREE.Scene(), layout);
+    buildings.sync(state({ ...zoning(districts), ...housed(merged, 2) }), 0);
+
+    const at = createPlacement();
+    const foot = { width: 0, depth: 0 };
+    const sides = [
+      { dx: 0, dz: 1 },
+      { dx: 1, dz: 0 },
+      { dx: 0, dz: -1 },
+      { dx: -1, dz: 0 },
+    ];
+    let seen = 0;
+    let fronting = 0;
+    for (let slot = 0; slot < merged; slot++) {
+      const place = layout.place(ZONE.residential, slot, merged, z, at);
+      if (place.plots < 2) continue;
+      seen++;
+      bodyFootprint('home', slot, 2, place, foot);
+      const along = place.alongX ? foot.width : foot.depth;
+      const across = place.alongX ? foot.depth : foot.width;
+      // The long span lies along the parcel, every time. A tower is oblong by
+      // at least 1.5:1, so this cannot pass by accident.
+      expect(along).toBeGreaterThan(across * 1.5);
+      // And it stays inside its own land on both axes: two plots along, one
+      // across, each less the kerb gutter every building leaves.
+      expect(along).toBeLessThan(2 * CELL);
+      expect(across).toBeLessThan(CELL);
+
+      // The turn is legal by construction above; this is the other half — that
+      // constraining it to two did not cost the model its front. The seed is
+      // passed twice, so a parcel with a genuine choice is exercised either
+      // way rather than only at whatever one draw happens to pick.
+      for (const pick of [0.13, 0.87]) {
+        const turn = modelFacing(place.x, place.z, pick, place.alongX);
+        expect(turn % 2 === 0).toBe(place.alongX);
+        const side = sides[turn] as { dx: number; dz: number };
+        if (isRoad(cellX(place.x) + side.dx, cellZ(place.z) + side.dz)) fronting++;
+      }
+    }
+    // The fixture has to actually contain merged parcels, or the whole test is
+    // ten skipped iterations reporting success.
+    expect(seen).toBe(merged);
+    // Every one of them fronts a street on the side it turned to, at both
+    // draws. That is the claim worth pinning: a parcel is two plots that each
+    // front a street, so narrowing the choice from four turns to two leaves a
+    // correct one available rather than forcing a compromise.
+    expect(fronting).toBe(seen * 2);
+  });
+
+  it('lights a modelled tower on top, and only from the rung that asks for it', () => {
+    const { buildings, counts } = scene();
+    // The warning light is a property of the *row*, not of the models: housing
+    // carries one from level 3 up. The two modelled rungs below it must not
+    // have one, and the modelled rung that does must not have lost it by being
+    // modelled — which is exactly what would have happened silently.
+    buildings.sync(state(housed(24, 0)), 0);
+    expect(counts().get('part:beacon') ?? 0).toBe(0);
+    buildings.sync(state(housed(24, 1)), 1);
+    expect(counts().get('part:beacon') ?? 0).toBe(0);
+
+    buildings.sync(state(housed(10, 2)), 2);
+    expect(modelTotal(counts(), 'home', 2)).toBe(10);
+    expect(counts().get('part:beacon') ?? 0).toBe(10);
+
+    // And a ruined tower is dark on top like everything else about it: a ruin
+    // reverts to the first rung's models, which carry no beacon anyway, but the
+    // assertion is about the light rather than the model.
+    buildings.sync(state({ homes: 10, homeLevels: mix(0, 0, 6), abandonedR: 4 }), 3);
+    expect(counts().get('part:beacon') ?? 0).toBe(6);
+  });
+
   it('gives every modelled rung five silhouettes, all inside the plot', () => {
     for (const kind of MODELLED_KINDS) {
       for (const level of modelRungs(kind)) {
@@ -267,11 +371,28 @@ describe('the skyline the renderer draws', () => {
         // for the case that would matter: a model pasted twice.
         const shapes = rung.map((m) => `${m.width}x${m.depth}x${m.height}`);
         expect(new Set(shapes).size).toBe(MODEL_STYLES[kind]);
-        // A modelled building turns to face its street, so either span can end
-        // up across the frontage and both have to clear the kerb. `bodyExtent`
-        // reports only the widest of the five; this is each of them.
+        // Every model has to fit the land its rung stands on, and which land
+        // that is depends on the footprint. `bodyExtent` reports only the
+        // widest of the five and only across the frontage; this is each of
+        // them, on both axes.
+        //
+        //   - on one plot a model turns freely, so either span can end up
+        //     across the frontage and both have to clear the same kerb;
+        //   - on a merged parcel it cannot turn freely — its long span lies
+        //     along the parcel at every turn it can take — so the two spans
+        //     answer to two plots and to one.
+        const merged = (LEVEL_FOOTPRINT[level] ?? 1) > 1;
         for (const model of rung) {
-          expect(Math.max(model.width, model.depth)).toBeLessThan(CELL);
+          if (merged) {
+            expect(model.width).toBeLessThan(2 * CELL);
+            expect(model.depth).toBeLessThan(CELL);
+            // And it is genuinely oblong, which is what makes the turn rule
+            // load-bearing rather than decorative: a square model on a merged
+            // parcel would fit either way round and none of this would matter.
+            expect(model.width).toBeGreaterThan(model.depth * 1.5);
+          } else {
+            expect(Math.max(model.width, model.depth)).toBeLessThan(CELL);
+          }
         }
         // And every model is lit, or the rung goes dark at dusk one style at a
         // time — the failure `MODEL_LIT` throws on, asserted from the outside.
