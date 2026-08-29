@@ -1,0 +1,294 @@
+import * as THREE from 'three';
+import { describe, expect, it } from 'vitest';
+import { Buildings } from '../src/render/buildings';
+import { FIRE_STATION_PARTS, HOSPITAL_PARTS } from '../src/render/civicModels';
+import type { ModelPart } from '../src/render/model';
+import { CELL } from '../src/sim/config';
+import { CityLayout, worldX, worldZ } from '../src/sim/layout';
+import { createState, type GameState } from '../src/sim/state';
+
+/**
+ * The two civic buildings that come out of a model, checked as a black box.
+ *
+ * The other eight are a slab with one thing standing on them, and bounds checks
+ * on those would only restate `civicTrio`. These two are assembled from part
+ * tables generated out of `models/`, and three things can go wrong with that
+ * which cannot go wrong with a slab:
+ *
+ *  - A part landing somewhere other than where the model puts it. Placement is
+ *    baked into geometry rather than carried on a transform, so a mistake is a
+ *    wing halfway through a wall rather than an exception.
+ *  - Parts merging into the wrong mesh. Materials are merged by *name* because
+ *    two of them can share a colour — the fire station's `roof-red` and
+ *    `beacon-red` do — and a merge keyed on colour would weld its beacon onto
+ *    three roof caps and quietly stop it glowing.
+ *  - The assembly scaling about something other than the site's ground centre
+ *    while it grows. The parts stay in register only because they share one
+ *    transform and a zero offset; give any one of them an offset and the
+ *    building comes apart for the half second it is growing and then looks
+ *    right forever, which is the hardest kind of bug to be shown.
+ *
+ * Expectations are computed from the part tables rather than copied out of
+ * them, so a remodel does not need this file edited — it needs it to still
+ * pass. The arithmetic here is deliberately not the renderer's: the tables go
+ * to boxes by hand, and the renderer's answer comes back off the scene graph.
+ */
+const state = (patch: Partial<GameState> = {}): GameState => ({ ...createState(0), ...patch });
+
+/** What a single primitive covers, from the table alone. */
+function extent(part: ModelPart): { min: number[]; max: number[] } {
+  const [x, y, z] = part.at;
+  const half =
+    part.shape === 'box'
+      ? [part.size[0] / 2, part.size[1] / 2, part.size[2] / 2]
+      : part.shape === 'disc'
+        ? [part.radius, part.height / 2, part.radius]
+        : [part.outer, part.height / 2, part.outer];
+  return {
+    min: [x - (half[0] as number), y - (half[1] as number), z - (half[2] as number)],
+    max: [x + (half[0] as number), y + (half[1] as number), z + (half[2] as number)],
+  };
+}
+
+/** What each material covers, from the table alone. */
+function expected(parts: readonly ModelPart[]): Map<string, { min: number[]; max: number[] }> {
+  const found = new Map<string, { min: number[]; max: number[] }>();
+  for (const part of parts) {
+    const box = extent(part);
+    const seen = found.get(part.mtl);
+    if (!seen) found.set(part.mtl, box);
+    else {
+      for (let a = 0; a < 3; a++) {
+        seen.min[a] = Math.min(seen.min[a] as number, box.min[a] as number);
+        seen.max[a] = Math.max(seen.max[a] as number, box.max[a] as number);
+      }
+    }
+  }
+  return found;
+}
+
+interface Modelled {
+  readonly label: string;
+  readonly parts: readonly ModelPart[];
+  /** Position in the civic interleave — hospitals 0, police 1, fire 2. */
+  readonly slot: number;
+  readonly count: (n: number) => Partial<GameState>;
+  /** Which mesh each of the model's materials is drawn into. */
+  readonly meshes: ReadonlyMap<string, string>;
+}
+
+const MODELLED: readonly Modelled[] = [
+  {
+    label: 'hospital',
+    parts: HOSPITAL_PARTS,
+    slot: 0,
+    count: (n) => ({ hospitals: n }),
+    meshes: new Map([
+      ['clinic-white', 'hospital:walls'],
+      ['glazing', 'hospital:glazing'],
+      ['mint-roof', 'hospital:caps'],
+      ['plant-grey', 'hospital:plant'],
+      ['sodium-glow', 'hospital:doors'],
+      ['deck-asphalt', 'hospital:helipad'],
+      ['marking-white', 'hospital:mark'],
+      ['emergency-red', 'hospital:cross'],
+    ]),
+  },
+  {
+    label: 'fire station',
+    parts: FIRE_STATION_PARTS,
+    slot: 2,
+    count: (n) => ({ fire: n }),
+    meshes: new Map([
+      ['engine-brick', 'fire:walls'],
+      ['trim-concrete', 'fire:trim'],
+      ['bay-door-light', 'fire:doors'],
+      // Same red as the beacon, and a mesh of its own for exactly that reason.
+      ['roof-red', 'fire:caps'],
+      ['glazing', 'fire:glazing'],
+      ['beacon-red', 'fire:beacon'],
+      ['apron-asphalt', 'fire:apron'],
+      ['marking-white', 'fire:markings'],
+      ['plant-grey', 'fire:plant'],
+    ]),
+  },
+];
+
+/** The world-space box each of a building's meshes covers, for instance `i`. */
+function boxes(root: THREE.Object3D, prefix: string, i: number): Map<string, THREE.Box3> {
+  const matrix = new THREE.Matrix4();
+  const found = new Map<string, THREE.Box3>();
+  root.traverse((object) => {
+    if (!(object instanceof THREE.InstancedMesh)) return;
+    if (!object.name.startsWith(`${prefix}:`) || i >= object.count) return;
+    object.getMatrixAt(i, matrix);
+    object.geometry.computeBoundingBox();
+    const box = object.geometry.boundingBox;
+    if (box) found.set(object.name, box.clone().applyMatrix4(matrix));
+  });
+  return found;
+}
+
+/** The centre of the site the `i`-th building of a type stands on. */
+function siteCentre(layout: CityLayout, slot: number, i: number): THREE.Vector3 {
+  const cell = layout.civicSiteFor(slot, i);
+  return new THREE.Vector3(worldX(cell.x) + CELL / 2, 0, worldZ(cell.z) + CELL / 2);
+}
+
+/**
+ * Rounded to the millimetre, which is finer than any model is drawn.
+ *
+ * Position buffers are float32 and a model's numbers are not all representable
+ * in it — the fire station's dorm sits at 1.525 and comes back a ten-millionth
+ * below where it was put — so the comparison is to the millimetre and the
+ * signed zero that rounding can produce is folded back onto zero.
+ */
+const round = (n: number): number => (Math.round(n * 1000) / 1000) + 0;
+
+/** How far off exact a float32 round-trip is allowed to leave a coordinate. */
+const EPSILON = 1e-5;
+
+describe.each(MODELLED)('the $label', (building) => {
+  const prefix = [...building.meshes.values()][0]?.split(':')[0] as string;
+  const settled = (): {
+    root: THREE.Scene;
+    layout: CityLayout;
+    buildings: Buildings;
+    centre: THREE.Vector3;
+  } => {
+    const root = new THREE.Scene();
+    const layout = new CityLayout();
+    const buildings = new Buildings(root, layout);
+    buildings.sync(state({ districts: 1, ...building.count(1) }), 0);
+    // Past the end of the growth animation: the model is what it settles at.
+    buildings.update(1e6);
+    return { root, layout, buildings, centre: siteCentre(layout, building.slot, 0) };
+  };
+
+  it('stands where the model puts it, material for material', () => {
+    const { root, centre } = settled();
+    const drawn = boxes(root, prefix, 0);
+    const want = expected(building.parts);
+
+    // One mesh per material in the model, and nothing else in the scene.
+    expect([...drawn.keys()].sort()).toEqual([...building.meshes.values()].sort());
+    expect(want.size).toBe(building.meshes.size);
+
+    for (const [mtl, box] of want) {
+      const name = building.meshes.get(mtl);
+      expect(name, `${mtl} is drawn somewhere`).toBeDefined();
+      const got = drawn.get(name as string);
+      expect(got, name).toBeDefined();
+      if (!got) continue;
+      expect(
+        [got.min.x - centre.x, got.min.y, got.min.z - centre.z].map(round),
+        `${name} min`,
+      ).toEqual(box.min.map(round));
+      expect(
+        [got.max.x - centre.x, got.max.y, got.max.z - centre.z].map(round),
+        `${name} max`,
+      ).toEqual(box.max.map(round));
+    }
+  });
+
+  it('keeps inside its own site and out of the ground', () => {
+    const { root, centre } = settled();
+    // A civic site is two plots a side. Anything past that is over a kerb or
+    // into a neighbour, and anything under zero is through the pavement.
+    for (const [name, box] of boxes(root, prefix, 0)) {
+      expect(box.min.y, `${name} sits on the ground`).toBeGreaterThanOrEqual(-EPSILON);
+      for (const corner of [box.min, box.max]) {
+        expect(Math.abs(corner.x - centre.x), `${name} within its site in x`).toBeLessThanOrEqual(
+          CELL + EPSILON,
+        );
+        expect(Math.abs(corner.z - centre.z), `${name} within its site in z`).toBeLessThanOrEqual(
+          CELL + EPSILON,
+        );
+      }
+    }
+  });
+
+  it('keeps every part in register with the others while it grows', () => {
+    const { root, buildings, centre } = settled();
+    const done = boxes(root, prefix, 0);
+    const tallest = [...building.meshes.values()].reduce((best, name) =>
+      (done.get(name)?.max.y ?? 0) > (done.get(best)?.max.y ?? 0) ? name : best,
+    );
+    const full = done.get(tallest);
+    expect(full).toBeDefined();
+
+    // Growth is staged in seconds and settles in well under one, so the frame
+    // to check is scanned for rather than guessed at.
+    buildings.sync(state({ districts: 1, ...building.count(0) }), 0);
+    buildings.sync(state({ districts: 1, ...building.count(1) }), 10);
+    let scale = 0;
+    let mid: Map<string, THREE.Box3> | null = null;
+    for (let t = 10; t < 11 && !mid && full; t += 0.005) {
+      buildings.update(t);
+      const growing = boxes(root, prefix, 0).get(tallest);
+      if (!growing) continue;
+      const seen = growing.max.y / full.max.y;
+      if (seen > 0.05 && seen < 0.9) {
+        scale = seen;
+        mid = boxes(root, prefix, 0);
+      }
+    }
+    expect(mid, 'a frame mid-growth').not.toBeNull();
+
+    // Every part the same fraction of its settled self on all three axes,
+    // measured from the site's ground centre. That is what one shared transform
+    // and a zero offset buy, and the only way a building of nine meshes grows
+    // without coming apart.
+    for (const name of building.meshes.values()) {
+      const now = mid?.get(name);
+      const settledBox = done.get(name);
+      expect(now, name).toBeDefined();
+      expect(settledBox, name).toBeDefined();
+      if (!now || !settledBox) continue;
+      const ratio = (a: number, b: number): number => (Math.abs(b) < 1e-6 ? scale : a / b);
+      expect(ratio(now.max.y, settledBox.max.y), `${name} height`).toBeCloseTo(scale, 6);
+      expect(
+        ratio(now.max.x - centre.x, settledBox.max.x - centre.x),
+        `${name} width`,
+      ).toBeCloseTo(scale, 6);
+      expect(
+        ratio(now.max.z - centre.z, settledBox.max.z - centre.z),
+        `${name} depth`,
+      ).toBeCloseTo(scale, 6);
+    }
+  });
+
+  it('costs one mesh a material however many the city opens', () => {
+    const root = new THREE.Scene();
+    const layout = new CityLayout();
+    const buildings = new Buildings(root, layout);
+    const names = (): string[] => {
+      const found: string[] = [];
+      root.traverse((object) => {
+        if (object instanceof THREE.InstancedMesh && object.name.startsWith(`${prefix}:`)) {
+          found.push(object.name);
+        }
+      });
+      return found.sort();
+    };
+    // Every mesh exists before the city has one of these at all.
+    expect(names()).toEqual([...building.meshes.values()].sort());
+
+    buildings.sync(state({ districts: 12, ...building.count(12) }), 0);
+    buildings.update(1e6);
+    expect(names()).toEqual([...building.meshes.values()].sort());
+
+    // And the twelfth is the model too, on its own district's site.
+    const centre = siteCentre(layout, building.slot, 11);
+    const drawn = boxes(root, prefix, 11);
+    for (const [mtl, box] of expected(building.parts)) {
+      const got = drawn.get(building.meshes.get(mtl) as string);
+      expect(got, mtl).toBeDefined();
+      if (got) {
+        expect([got.max.x - centre.x, got.max.y, got.max.z - centre.z].map(round)).toEqual(
+          box.max.map(round),
+        );
+      }
+    }
+  });
+});

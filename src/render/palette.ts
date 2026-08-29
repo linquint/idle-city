@@ -59,6 +59,12 @@ export const PALETTE = {
   // afford a silhouette each. Roof colour is the second signal, not the only one.
   hospital: 0xd8dee8,
   hospitalRoof: 0x63c6a8,
+  // The cross on the hospital's wing roof, and the only place this red is used.
+  // Deliberately not the fire station's: those two are the civic pair most
+  // easily confused from overhead, and a shared red would be the one cue that
+  // undid the silhouette work. Warmer and lighter than `fire`, cooler than
+  // `flame`, so a burning roof still wins the eye over a painted marking.
+  emergency: 0xd8453c,
   police: 0x1c2740,
   policeRoof: 0x7fa8ff,
   fire: 0x6d2f2c,

@@ -89,12 +89,19 @@ function bars(): Bar[] {
 /**
  * The bars, merged into one buffer.
  *
- * Hand-rolled rather than `BufferGeometryUtils.mergeGeometries`, which lives in
- * three's addons and would be a second entry point into the biggest dependency
- * in the bundle for twenty lines of arithmetic. Every bar is an axis-aligned
- * box scaled by positive factors, so a vertex is an affine map and a *normal*
- * is unchanged — box normals are the six axis directions and a positive axis
- * scale leaves each one pointing where it did.
+ * Hand-rolled rather than `BufferGeometryUtils.mergeGeometries`. The reason
+ * given here when this was written — that the addon would be a second entry
+ * point into the biggest dependency in the bundle for twenty lines of
+ * arithmetic — stopped being true on the merge that brought the composed civic
+ * models: `model.ts` imports it, so it is in the bundle either way and this
+ * could now use it. It has not been changed, because a merge is the wrong
+ * commit to simplify working code in, and the note is left rather than the
+ * stale reason.
+ *
+ * What still holds is why it is *correct*: every bar is an axis-aligned box
+ * scaled by positive factors, so a vertex is an affine map and a *normal* is
+ * unchanged — box normals are the six axis directions and a positive axis scale
+ * leaves each one pointing where it did.
  */
 function cageGeometry(): THREE.BufferGeometry {
   const unit = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();

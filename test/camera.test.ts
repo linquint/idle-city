@@ -95,6 +95,58 @@ describe('the orbit camera is the play camera', () => {
   });
 });
 
+describe('the walk keys', () => {
+  /**
+   * WASD and the arrows move the camera the way they point, on the screen the
+   * player is looking at. They shared their expression with the drag pan for a
+   * while, and a drag moves the world rather than the camera — so every one of
+   * the eight came out backwards. Checked against the camera's own axes rather
+   * than against world x and z, because which way is forward depends on where
+   * the rig has been turned to.
+   */
+  function axes(camera: THREE.PerspectiveCamera): {
+    forward: THREE.Vector3;
+    right: THREE.Vector3;
+  } {
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+    // Screen right, for a y-up camera: forward crossed with up.
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+    return { forward, right };
+  }
+
+  it.each([
+    ['w', 'forward'],
+    ['ArrowUp', 'forward'],
+    ['s', 'back'],
+    ['ArrowDown', 'back'],
+    ['d', 'right'],
+    ['ArrowRight', 'right'],
+    ['a', 'left'],
+    ['ArrowLeft', 'left'],
+  ] as const)('walks %s towards %s', (key, way) => {
+    const { rig, camera, settle } = rigged();
+    settle();
+    const inner = rig as unknown as { keys: Set<string>; wantTarget: THREE.Vector3 };
+    const { forward, right } = axes(camera);
+    const want = { forward, back: forward.clone().negate(), right, left: right.clone().negate() }[
+      way
+    ];
+
+    const from = inner.wantTarget.clone();
+    inner.keys.add(key);
+    for (let frame = 0; frame < 6; frame++) rig.update(1 / 60);
+    inner.keys.delete(key);
+    const step = inner.wantTarget.clone().sub(from).setY(0);
+
+    expect(step.length()).toBeGreaterThan(0.1);
+    // Along the axis it names, and along nothing else.
+    expect(step.dot(want)).toBeCloseTo(step.length(), 6);
+  });
+});
+
 describe('street mode', () => {
   it('drops the eye to street level and keeps it there', () => {
     const { rig, camera, settle } = rigged();

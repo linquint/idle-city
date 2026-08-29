@@ -173,6 +173,10 @@ const STREET_PAN_SPEED = 14;
 const NEAR_SHARE = 0.05;
 const NEAR_MIN = 0.12;
 const NEAR_MAX = 0.5;
+/**
+ * Which way each key walks, as the screen sees it: x across, y up and down the
+ * screen. `applyKeys` turns that into a move along the ground.
+ */
 const PAN_KEYS: Record<string, [number, number]> = {
   ArrowUp: [0, -1],
   ArrowDown: [0, 1],
@@ -636,7 +640,10 @@ export class CameraRig {
       const dir = PAN_KEYS[key];
       if (!dir) continue;
       const [kx, kz] = dir;
-      this.moveTarget((-kx * sin - kz * cos) * speed, (kx * cos - kz * sin) * speed);
+      // A key moves the camera the way it points; a drag moves the world under
+      // the pointer, which is the same basis with the sign flipped. Borrowing
+      // `pan`'s expression as it stands is what had W walking backwards.
+      this.moveTarget((kx * sin + kz * cos) * speed, (kz * sin - kx * cos) * speed);
     }
   }
 
