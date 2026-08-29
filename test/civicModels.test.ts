@@ -1,27 +1,33 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { Buildings } from '../src/render/buildings';
-import { BUS_DEPOT_PARTS, FIRE_STATION_PARTS, HOSPITAL_PARTS } from '../src/render/civicModels';
+import {
+  BUS_DEPOT_PARTS,
+  FIRE_STATION_PARTS,
+  HOSPITAL_PARTS,
+  POLICE_STATION_PARTS,
+} from '../src/render/civicModels';
 import type { ModelPart } from '../src/render/model';
 import { CELL } from '../src/sim/config';
 import { CityLayout, worldX, worldZ } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
 
 /**
- * The three civic buildings that come out of a model, checked as a black box.
+ * The four civic buildings that come out of a model, checked as a black box.
  *
- * The other seven are a slab with one thing standing on them, and bounds checks
- * on those would only restate `civicTrio`. These three are assembled from part
+ * The other six are a slab with one thing standing on them, and bounds checks
+ * on those would only restate `civicTrio`. These four are assembled from part
  * tables generated out of `models/`, and three things can go wrong with that
  * which cannot go wrong with a slab:
  *
  *  - A part landing somewhere other than where the model puts it. Placement is
  *    baked into geometry rather than carried on a transform, so a mistake is a
  *    wing halfway through a wall rather than an exception.
- *  - Parts merging into the wrong mesh. Materials are merged by *name* because
+  *  - Parts merging into the wrong mesh. Materials are merged by *name* because
  *    two of them can share a colour — the fire station's `roof-red` and
- *    `beacon-red` do — and a merge keyed on colour would weld its beacon onto
- *    three roof caps and quietly stop it glowing.
+ *    `beacon-red` do, and so do the police station's `police-blue` and
+ *    `signal-blue` — and a merge keyed on colour would weld each building's
+ *    lights onto its roof caps and quietly stop them glowing.
  *  - The assembly scaling about something other than the site's ground centre
  *    while it grows. The parts stay in register only because they share one
  *    transform and a zero offset; give any one of them an offset and the
@@ -110,6 +116,24 @@ const MODELLED: readonly Modelled[] = [
       ['apron-asphalt', 'fire:apron'],
       ['marking-white', 'fire:markings'],
       ['plant-grey', 'fire:plant'],
+    ]),
+  },
+  {
+    label: 'police station',
+    parts: POLICE_STATION_PARTS,
+    slot: 1,
+    count: (n) => ({ police: n }),
+    meshes: new Map([
+      ['station-navy', 'police:walls'],
+      ['band-stone', 'police:bands'],
+      // Same blue as the lights, and a mesh of its own for exactly that reason.
+      ['police-blue', 'police:caps'],
+      ['mast-grey', 'police:mast'],
+      ['trim-concrete', 'police:trim'],
+      ['glazing', 'police:glazing'],
+      ['yard-asphalt', 'police:yard'],
+      ['patrol-white', 'police:cars'],
+      ['signal-blue', 'police:lights'],
     ]),
   },
   {

@@ -107,3 +107,36 @@ export const BUS_DEPOT_PARTS: readonly ModelPart[] = [
   { shape: 'box', at: [-2.1, 2.9, -3], size: [1.2, 0.56, 0.8], mtl: 'plant-grey', colour: PALETTE.stack }, // roof-plant
   { shape: 'box', at: [-0.5, 2.9, -2.9], size: [0.7, 0.56, 0.6], mtl: 'plant-grey', colour: PALETTE.stack }, // roof-plant
 ];
+
+/** The police station: a banded block, a cell wing, and the yard behind them. */
+export const POLICE_STATION_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [-0.95, 1.3, 1.5], size: [5.1, 2.6, 4], mtl: 'station-navy', colour: PALETTE.police }, // station
+  { shape: 'box', at: [-0.95, 1, 1.5], size: [5.16, 0.16, 4.06], mtl: 'band-stone', colour: PALETTE.kerb }, // station-banding
+  { shape: 'box', at: [-0.95, 2, 1.5], size: [5.16, 0.16, 4.06], mtl: 'band-stone', colour: PALETTE.kerb }, // station-banding
+  { shape: 'box', at: [-0.95, 2.42, 1.5], size: [5.14, 0.36, 4.04], mtl: 'police-blue', colour: PALETTE.policeRoof }, // head-band
+  { shape: 'box', at: [-0.95, 2.68, 1.5], size: [5.1, 0.16, 4], mtl: 'mast-grey', colour: PALETTE.stack }, // roof-slab
+  { shape: 'box', at: [-0.95, 0.07, 3.72], size: [2.4, 0.14, 0.4], mtl: 'trim-concrete', colour: PALETTE.concrete }, // entrance-steps
+  { shape: 'box', at: [-0.95, 0.21, 3.58], size: [2.1, 0.14, 0.36], mtl: 'trim-concrete', colour: PALETTE.concrete }, // entrance-steps
+  { shape: 'box', at: [-0.95, 0.9, 3.53], size: [1.6, 1.6, 0.1], mtl: 'glazing', colour: PALETTE.parapet }, // entrance-door
+  { shape: 'box', at: [-0.95, 2.1, 3.54], size: [2.3, 0.18, 0.8], mtl: 'trim-concrete', colour: PALETTE.concrete }, // entrance-canopy
+  { shape: 'box', at: [-1.65, 0.95, -2.05], size: [3.7, 1.9, 2.9], mtl: 'station-navy', colour: PALETTE.police }, // cells
+  { shape: 'box', at: [-1.65, 1.45, -2.05], size: [3.76, 0.3, 2.96], mtl: 'glazing', colour: PALETTE.parapet }, // cells-clerestory
+  { shape: 'box', at: [-1.65, 2, -2.05], size: [3.92, 0.22, 3.12], mtl: 'police-blue', colour: PALETTE.policeRoof }, // cells-cap
+  { shape: 'box', at: [1.95, 0.03, -2.05], size: [3.1, 0.06, 2.9], mtl: 'yard-asphalt', colour: PALETTE.runway }, // yard
+  { shape: 'box', at: [1.95, 0.35, -3.42], size: [3.1, 0.7, 0.16], mtl: 'trim-concrete', colour: PALETTE.concrete }, // yard-wall-back
+  { shape: 'box', at: [3.42, 0.35, -2.05], size: [0.16, 0.7, 2.9], mtl: 'trim-concrete', colour: PALETTE.concrete }, // yard-wall-east
+  { shape: 'box', at: [0.48, 0.35, -2.8], size: [0.16, 0.7, 1.4], mtl: 'trim-concrete', colour: PALETTE.concrete }, // yard-wall-west
+  { shape: 'box', at: [1.35, 0.37, -2.1], size: [0.95, 0.62, 2.1], mtl: 'patrol-white', colour: PALETTE.marking }, // patrol-cars
+  { shape: 'box', at: [2.75, 0.37, -2.1], size: [0.95, 0.62, 2.1], mtl: 'patrol-white', colour: PALETTE.marking }, // patrol-cars
+  { shape: 'box', at: [1.35, 0.6, -2.35], size: [0.99, 0.26, 1.05], mtl: 'glazing', colour: PALETTE.parapet }, // car-glazing
+  { shape: 'box', at: [2.75, 0.6, -2.35], size: [0.99, 0.26, 1.05], mtl: 'glazing', colour: PALETTE.parapet }, // car-glazing
+  { shape: 'box', at: [0.9, 4.46, 2.6], size: [0.16, 3.4, 0.16], mtl: 'mast-grey', colour: PALETTE.stack }, // mast
+  { shape: 'box', at: [0.9, 5.56, 2.6], size: [1.3, 0.1, 0.1], mtl: 'mast-grey', colour: PALETTE.stack }, // mast
+  { shape: 'box', at: [0.9, 5.06, 2.6], size: [0.1, 0.1, 1], mtl: 'mast-grey', colour: PALETTE.stack }, // mast
+  { shape: 'box', at: [-2.4, 2.9, 1], size: [1.2, 0.28, 0.8], mtl: 'mast-grey', colour: PALETTE.stack }, // mast
+  { shape: 'box', at: [-2.4, 2.9, 2.6], size: [0.7, 0.28, 0.7], mtl: 'mast-grey', colour: PALETTE.stack }, // mast
+  { shape: 'box', at: [-0.95, 1.86, 3.58], size: [0.34, 0.36, 0.26], mtl: 'signal-blue', colour: PALETTE.policeRoof }, // blue-lights
+  { shape: 'box', at: [0.9, 6.28, 2.6], size: [0.2, 0.24, 0.2], mtl: 'signal-blue', colour: PALETTE.policeRoof }, // blue-lights
+  { shape: 'box', at: [1.35, 0.76, -2.35], size: [0.6, 0.1, 0.22], mtl: 'signal-blue', colour: PALETTE.policeRoof }, // blue-lights
+  { shape: 'box', at: [2.75, 0.76, -2.35], size: [0.6, 0.1, 0.22], mtl: 'signal-blue', colour: PALETTE.policeRoof }, // blue-lights
+];

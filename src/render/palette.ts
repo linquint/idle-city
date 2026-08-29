@@ -60,6 +60,10 @@ export const PALETTE = {
   // `flame`, so a burning roof still wins the eye over a painted marking.
   emergency: 0xd8453c,
   police: 0x1c2740,
+  // The station's head band and cell cap, and its blue lights — over the door,
+  // on the mast head and on each patrol car's roof bar. Paint and light in one
+  // colour, which is why the model keeps them apart by material name rather
+  // than by hex; see `policeStationSet`.
   policeRoof: 0x7fa8ff,
   fire: 0x6d2f2c,
   fireRoof: 0xe0574b,

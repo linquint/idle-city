@@ -38,7 +38,12 @@ import { Glow } from './glow.ts';
 import { GrowableInstancedMesh, SlotRanges } from './growable.ts';
 import { GrowthSchedule } from './growth.ts';
 import { PALETTE } from './palette.ts';
-import { HOSPITAL_PARTS, FIRE_STATION_PARTS, BUS_DEPOT_PARTS } from './civicModels.ts';
+import {
+  HOSPITAL_PARTS,
+  FIRE_STATION_PARTS,
+  BUS_DEPOT_PARTS,
+  POLICE_STATION_PARTS,
+} from './civicModels.ts';
 import { mergeByMaterial, type ModelPart } from './model.ts';
 import type { OverlaySource } from './zones.ts';
 
@@ -1342,13 +1347,14 @@ const PART_AT_SITE = new THREE.Vector3(0, 0, 0);
  * play camera.
  *
  * A set is a list of parts rather than a fixed body-roof-mark triple, because
- * the types have grown apart. Seven of them are a slab with one thing standing
- * on it and say exactly that through `civicTrio`; the hospital, the fire
- * station and the depot are modelled — assembled from part tables generated out
- * of `models/` and merged by material, to eight, nine and nine meshes. A list
- * is what both kinds are, and the cost still grows with the *table* rather than
- * with the city: every mesh is built once, in this constructor, and a hundred
- * hospitals are a hundred instances in it rather than a hundred draw calls.
+ * the types have grown apart. Six of them are a slab with one thing standing on
+ * it and say exactly that through `civicTrio`; the hospital, the police
+ * station, the fire station and the depot are modelled — assembled from part
+ * tables generated out of `models/` and merged by material, to eight meshes and
+ * nine each. A list is what both kinds are, and the cost still grows with the
+ * *table* rather than with the city: every mesh is built once, in this
+ * constructor, and a hundred hospitals are a hundred instances in it rather
+ * than a hundred draw calls.
  */
 class CivicMeshes {
   private readonly meshes: readonly GrowableInstancedMesh[];
@@ -1443,7 +1449,7 @@ class CivicMeshes {
 }
 
 /**
- * A slab, the roof on it, and one thing standing on that: seven of the ten types.
+ * A slab, the roof on it, and one thing standing on that: six of the ten types.
  *
  * The body rises out of the ground and the other two ride up on it, which is
  * the growth animation every civic building had when there was only one shape
@@ -1582,7 +1588,7 @@ interface Finish {
 /**
  * A civic building assembled from its model: one instanced mesh per material.
  *
- * The three composed types come through here and the seven slabs go through
+ * The four composed types come through here and the six slabs go through
  * `civicTrio`; the only thing that makes this different is that the geometry
  * came out of a file. Growth is `ride` with no offset throughout, which comes
  * out as the whole assembly scaling about the site's ground centre — the one
@@ -1620,7 +1626,7 @@ function modelSet(
  * The hospital: a ward slab across the back of the site and a low treatment
  * wing across the front of it, in an L around the ambulance bay.
  *
- * It is the first of the three civic types that are *composed* rather than
+ * It is the first of the four civic types that are *composed* rather than
  * massed, and it earns that by being the building the city is told to buy
  * first — the anchor of the service ladder, on the site the player looks at
  * longest. What it has to do from the play camera is read as a hospital rather
@@ -1683,8 +1689,10 @@ function hospitalSet(scene: THREE.Scene, capacity: number): CivicMeshes {
  * stop reading as the *police station*, which is the same dark 2x2 block a
  * player meets in the same first hour. Height is what separates them, and this
  * has it three ways: a hall, a taller dorm behind, and a 5.3-unit tower over
- * both. The police station is the flattest thing on a civic quad and this is
- * now the tallest, which is a difference that survives any camera angle.
+ * both — 1.3 units square, so it reads as a *mass*. The police station's radio
+ * mast goes higher, and that is the distinction rather than a collision with
+ * it: a 0.16-unit spike reads as a line at every distance a tower of brick
+ * reads as a volume, so the two never trade places at any camera angle.
  *
  * The two lit surfaces are the appliance bay doors and the beacon on the tower
  * cap. Both are what a fire station *is* at night, and the beacon is the only
@@ -1736,13 +1744,13 @@ function fireStationSet(scene: THREE.Scene, capacity: number): CivicMeshes {
  * the fire station's 5.3-unit tower — so nothing hides them from the play
  * camera.
  *
- * Told apart from the other 2x2 types by what is on the ground rather than by
- * height, which is a gap the other four services leave: the police station is a
- * closed block, the school a flat hall, the fire station a tower, and not one of
- * them has anything standing on the site beside it. Read from overhead this is
- * the one civic square that is mostly yard — bays painted across the tarmac, a
- * coach in three of them and the fourth left to the fuel pump, and a lit canopy
- * across the mouth of the shed.
+ * Told apart from the other 2x2 types by how much of the site is *not* the
+ * building. The police station is the only other one with a yard and gives it a
+ * fifth of the square; this gives two thirds, which is what makes it read from
+ * overhead as a yard with a shed at the back rather than as a building with
+ * some ground left over — bays painted across the tarmac, a coach in three of
+ * them and the fourth left to the fuel pump, and a lit canopy across the mouth
+ * of the shed.
  *
  * The lime is the depot's own livery and is worn three times on purpose: the
  * shed cap, a band down each bus, and the sign on the pylon. That is what makes
@@ -1783,27 +1791,75 @@ function busDepotSet(scene: THREE.Scene, capacity: number): CivicMeshes {
   );
 }
 
+/**
+ * The police station: a banded block on the street, a low cell wing behind it,
+ * and the patrol yard alongside.
+ *
+ * The fourth composed type, and the other half of the pair the fire station was
+ * remodelled against: those two shared a dark palette and a footprint, and the
+ * fire station answered it by going up. This answers it by spreading out — a
+ * block on the street, a lower wing behind it, and a working yard beside both.
+ *
+ * What carries the type, in the order the camera finds it:
+ *
+ *  - The **banding**. Two stone courses around a navy block, and a blue head
+ *    band under the roof slab. A dark 2x2 mass reads as one unlit lump from the
+ *    play camera, and three horizontals are what break it up without touching
+ *    the silhouette.
+ *  - The **yard**, walled on three sides with the two patrol cars parked in it.
+ *    The traffic outside is slate, the buses green and the lorries grey-blue, so
+ *    a white body is the one nothing else on the map is wearing — which is what
+ *    keeps them reading as police cars at the size a car is two units long.
+ *  - The **mast**, which is the type's signature from across the district: a
+ *    0.16-unit spike with a cross-arm and a blue light on top. It goes higher
+ *    than the fire station's tower and reads as a *line* rather than as a mass,
+ *    so the two never trade places at any camera angle.
+ *
+ * Twenty-nine pieces, nine meshes. The blue is worn twice and merged by name:
+ * the head band and the cell cap are paint and the lights are lights, exactly
+ * as the fire station's roof caps and beacon are.
+ */
+function policeStationSet(scene: THREE.Scene, capacity: number): CivicMeshes {
+  // The lamp over the door, the mast head, and a bar on each patrol car. A low
+  // floor because the whole of a blue light is that it comes on.
+  const blues = new Glow(PALETTE.policeRoof, 0.3);
+  return modelSet(
+    scene,
+    POLICE_STATION_PARTS,
+    new Map<string, Finish>([
+      // The street block and the cell wing behind it.
+      ['station-navy', { name: 'police:walls', tint: true, receiveShadow: true }],
+      // The two stone courses. Proud of the walls by 3cm, so never casting.
+      ['band-stone', { name: 'police:bands', castShadow: false }],
+      // The head band and the cell wing's cap: paint, and the same blue as the
+      // lights, which is why the merge is keyed on the material name.
+      ['police-blue', { name: 'police:caps', receiveShadow: true }],
+      ['glazing', { name: 'police:glazing', castShadow: false }],
+      // The roof slab, the mast, and the plant sitting beside it.
+      ['mast-grey', { name: 'police:mast' }],
+      // The steps, the door canopy, and the wall around the yard.
+      ['trim-concrete', { name: 'police:trim', receiveShadow: true }],
+      ['yard-asphalt', { name: 'police:yard', castShadow: false, receiveShadow: true }],
+      // The patrol cars, in the white the airport paints its markings with.
+      // Shared deliberately: it is the brightest surface the city has, and two
+      // of them parked in a dark yard are what the eye lands on first.
+      ['patrol-white', { name: 'police:cars', receiveShadow: true }],
+      ['signal-blue', { name: 'police:lights', glow: blues, castShadow: false }],
+    ]),
+    capacity,
+  );
+}
+
 /** One mesh set per service, in SERVICES order. */
 function civicSet(scene: THREE.Scene, service: Service, capacity: number): CivicMeshes {
   if (service.key === 'hospital') return hospitalSet(scene, capacity);
-  if (service.key === 'police') {
-    return civicTrio(
-      scene,
-      service.key,
-      { body: PALETTE.police, roof: PALETTE.policeRoof, height: 1.7 },
-      // A deep parapet ringing the roof: one closed square block, which is the
-      // opposite of the hospital's two-volume L at the same footprint.
-      new THREE.BoxGeometry(CIVIC_W + 0.7, 0.7, CIVIC_W + 0.7),
-      new THREE.MeshLambertMaterial({ color: PALETTE.police }),
-      new THREE.Vector3(0, 0.6, 0),
-      capacity,
-    );
-  }
+  if (service.key === 'police') return policeStationSet(scene, capacity);
   if (service.key === 'fire') return fireStationSet(scene, capacity);
   if (service.key === 'school') {
     // A long low hall with a lit clerestory band along its roofline. Read from
-    // the play camera it is the flattest thing on a 2x2 site, which is what
-    // tells it apart from the police station's parapet at the same footprint.
+    // the play camera it is the flattest thing on a 2x2 site — nothing stands
+    // on it at all — which is what tells it apart from the police station's
+    // banded block and mast at the same footprint.
     const windows = new Glow(PALETTE.sodium, 0.34);
     return civicTrio(
       scene,
@@ -1897,11 +1953,11 @@ class Outline {
  * separately and are not part of this: they stand on 2x2 and 3x3 sites, have no
  * level ladder, and are told apart by silhouette rather than by style. Ten
  * types — six services, the city hall, the power plant and two landmark sizes
- * — seven of them a slab, a roof and one mark at three meshes each, plus the
- * three modelled ones: the hospital at eight meshes, and the fire station and
- * the depot at nine each. The count grows with the *table* rather than with the
- * city: a mesh is built once per type and every hospital the player opens is
- * another instance in the ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
+ * — six of them a slab, a roof and one mark at three meshes each, plus the four
+ * modelled ones: the hospital at eight meshes, and the police station, the fire
+ * station and the depot at nine each. The count grows with the *table* rather
+ * than with the city: a mesh is built once per type and every hospital the
+ * player opens is another instance in the ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
 export const BUILDING_MESH_BUDGET = 24;

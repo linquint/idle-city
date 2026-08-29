@@ -298,15 +298,24 @@ box.
 - Industry is the anti-tower — wide, low and flat, with one stack. Height is how
   the housing tiers say "bigger", so industry competes on footprint instead.
 - Civic buildings get 2x2 plots, which is room for a silhouette each rather than
-  three colours of the same box: the police station is a low dark block and the
-  school a long flat hall. Three of them go further and are *modelled* rather
-  than massed — the hospital as a ward slab and a lower treatment wing in an L,
-  with a helipad and a painted cross on the roofs the play camera looks down at;
-  the fire station as an appliance hall, a dormitory and a hose tower with a
-  beacon on top, so it cannot be mistaken for the police station at the same
-  footprint; the depot as a low shed over a lit apron with the fleet parked on
-  it, which is the one civic square that is mostly yard. All three are generated
-  from the models in `models/` — see `npm run model:parts`.
+  three colours of the same box: the school is a long flat hall, the university
+  a tower. Four of them go further and are *modelled* rather than massed — the
+  hospital as a ward slab and a lower treatment wing in an L, with a helipad and
+  a painted cross on the roofs the play camera looks down at; the fire station
+  as an appliance hall, a dormitory and a hose tower with a beacon on top; the
+  police station as a banded block with a cell wing, a walled yard with two
+  patrol cars in it, and a radio mast that goes higher than the fire station's
+  tower while reading as a line rather than a mass; the depot as a low shed over
+  a lit apron with the fleet parked on it, which is the one civic square that is
+  mostly yard. All four are generated from the models in `models/` — see
+  `npm run model:parts`.
+
+  The converter takes axis-aligned boxes and discs/rings and **refuses**
+  anything else, including two solids welded at a shared corner. A refusal is a
+  modelling instruction, not a licence to write the geometry by hand: change the
+  model and re-run. The police station's yard wall arrived as three wall
+  segments meeting at their corners, so the model splits them into a group each
+  and the geometry is untouched.
 - Land nobody will build on is drawn as courtyard, not left as a hole — block
   interiors, and the civic sites still standing empty.
 
