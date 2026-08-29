@@ -5,18 +5,21 @@ import {
   BUS_DEPOT_PARTS,
   FIRE_STATION_PARTS,
   HOSPITAL_PARTS,
+  MUSEUM_PARTS,
   POLICE_STATION_PARTS,
+  STADIUM_PARTS,
 } from '../src/render/civicModels';
 import type { ModelPart } from '../src/render/model';
 import { CELL } from '../src/sim/config';
-import { CityLayout, worldX, worldZ } from '../src/sim/layout';
+import { CityLayout, worldX, worldZ, type Coord } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
 
 /**
- * The four civic buildings that come out of a model, checked as a black box.
+ * The six buildings on a reserved square that come out of a model, checked as a
+ * black box.
  *
- * The other six are a slab with one thing standing on them, and bounds checks
- * on those would only restate `civicTrio`. These four are assembled from part
+ * The other four are a slab with one thing standing on them, and bounds checks
+ * on those would only restate `civicTrio`. These six are assembled from part
  * tables generated out of `models/`, and three things can go wrong with that
  * which cannot go wrong with a slab:
  *
@@ -76,8 +79,14 @@ function expected(parts: readonly ModelPart[]): Map<string, { min: number[]; max
 interface Modelled {
   readonly label: string;
   readonly parts: readonly ModelPart[];
-  /** Position in the civic interleave — hospitals 0, police 1, fire 2, depot 4. */
-  readonly slot: number;
+  /**
+   * The lower-left plot of the site the `i`-th of these stands on. A service
+   * reads the civic interleave by its position in it — hospitals 0, police 1,
+   * fire 2, depot 4 — and a landmark has a list of its own.
+   */
+  readonly site: (layout: CityLayout, i: number) => Coord;
+  /** Plots a side: 2 for a civic square, 3 for the stadium's. */
+  readonly span: number;
   readonly count: (n: number) => Partial<GameState>;
   /** Which mesh each of the model's materials is drawn into. */
   readonly meshes: ReadonlyMap<string, string>;
@@ -87,7 +96,8 @@ const MODELLED: readonly Modelled[] = [
   {
     label: 'hospital',
     parts: HOSPITAL_PARTS,
-    slot: 0,
+    site: (layout, i) => layout.civicSiteFor(0, i),
+    span: 2,
     count: (n) => ({ hospitals: n }),
     meshes: new Map([
       ['clinic-white', 'hospital:walls'],
@@ -103,7 +113,8 @@ const MODELLED: readonly Modelled[] = [
   {
     label: 'fire station',
     parts: FIRE_STATION_PARTS,
-    slot: 2,
+    site: (layout, i) => layout.civicSiteFor(2, i),
+    span: 2,
     count: (n) => ({ fire: n }),
     meshes: new Map([
       ['engine-brick', 'fire:walls'],
@@ -121,7 +132,8 @@ const MODELLED: readonly Modelled[] = [
   {
     label: 'police station',
     parts: POLICE_STATION_PARTS,
-    slot: 1,
+    site: (layout, i) => layout.civicSiteFor(1, i),
+    span: 2,
     count: (n) => ({ police: n }),
     meshes: new Map([
       ['station-navy', 'police:walls'],
@@ -139,7 +151,8 @@ const MODELLED: readonly Modelled[] = [
   {
     label: 'bus depot',
     parts: BUS_DEPOT_PARTS,
-    slot: 4,
+    site: (layout, i) => layout.civicSiteFor(4, i),
+    span: 2,
     count: (n) => ({ depots: n }),
     meshes: new Map([
       ['depot-teal', 'transit:walls'],
@@ -153,6 +166,41 @@ const MODELLED: readonly Modelled[] = [
       ['plant-grey', 'transit:canopies'],
       ['trim-concrete', 'transit:columns'],
       ['bay-light', 'transit:lights'],
+    ]),
+  },
+  {
+    label: 'museum',
+    parts: MUSEUM_PARTS,
+    // A landmark is reserved one square of each size a district, so the i-th
+    // museum is the i-th district's and needs no interleave.
+    site: (layout, i) => layout.landmarkSmallSiteCell(i),
+    span: 2,
+    count: (n) => ({ museums: n }),
+    meshes: new Map([
+      ['plinth-grey', 'museum:plinth'],
+      ['landmark-stone', 'museum:walls'],
+      ['cornice-brown', 'museum:cornice'],
+      ['glazing', 'museum:glazing'],
+      ['lantern-light', 'museum:lantern'],
+    ]),
+  },
+  {
+    label: 'stadium',
+    parts: STADIUM_PARTS,
+    site: (layout, i) => layout.landmarkLargeSiteCell(i),
+    // The one modelled building on a 3x3 square, which is the whole reason
+    // `site` and `span` are read off the entry rather than assumed.
+    span: 3,
+    count: (n) => ({ stadiums: n }),
+    meshes: new Map([
+      ['seating-grey', 'stadium:concourse'],
+      ['pitch-green', 'stadium:pitch'],
+      ['marking-white', 'stadium:markings'],
+      ['landmark-stone', 'stadium:stands'],
+      ['roof-brown', 'stadium:roof'],
+      ['gate-dark', 'stadium:gates'],
+      ['mast-grey', 'stadium:masts'],
+      ['floodlight', 'stadium:floods'],
     ]),
   },
 ];
@@ -173,9 +221,13 @@ function boxes(root: THREE.Object3D, prefix: string, i: number): Map<string, THR
 }
 
 /** The centre of the site the `i`-th building of a type stands on. */
-function siteCentre(layout: CityLayout, slot: number, i: number): THREE.Vector3 {
-  const cell = layout.civicSiteFor(slot, i);
-  return new THREE.Vector3(worldX(cell.x) + CELL / 2, 0, worldZ(cell.z) + CELL / 2);
+function siteCentre(layout: CityLayout, building: Modelled, i: number): THREE.Vector3 {
+  const cell = building.site(layout, i);
+  // `worldX` gives the centre of the plot the square is indexed by, and the
+  // building straddles the whole square: half a cell further for a 2x2, a whole
+  // one for the stadium's 3x3. This is the offset `CivicMeshes` is built with.
+  const off = ((building.span - 1) * CELL) / 2;
+  return new THREE.Vector3(worldX(cell.x) + off, 0, worldZ(cell.z) + off);
 }
 
 /**
@@ -205,7 +257,7 @@ describe.each(MODELLED)('the $label', (building) => {
     buildings.sync(state({ districts: 1, ...building.count(1) }), 0);
     // Past the end of the growth animation: the model is what it settles at.
     buildings.update(1e6);
-    return { root, layout, buildings, centre: siteCentre(layout, building.slot, 0) };
+    return { root, layout, buildings, centre: siteCentre(layout, building, 0) };
   };
 
   it('stands where the model puts it, material for material', () => {
@@ -236,16 +288,17 @@ describe.each(MODELLED)('the $label', (building) => {
 
   it('keeps inside its own site and out of the ground', () => {
     const { root, centre } = settled();
-    // A civic site is two plots a side. Anything past that is over a kerb or
-    // into a neighbour, and anything under zero is through the pavement.
+    // Anything past the site's own half-span is over a kerb or into a
+    // neighbour, and anything under zero is through the pavement.
+    const half = (building.span * CELL) / 2;
     for (const [name, box] of boxes(root, prefix, 0)) {
       expect(box.min.y, `${name} sits on the ground`).toBeGreaterThanOrEqual(-EPSILON);
       for (const corner of [box.min, box.max]) {
         expect(Math.abs(corner.x - centre.x), `${name} within its site in x`).toBeLessThanOrEqual(
-          CELL + EPSILON,
+          half + EPSILON,
         );
         expect(Math.abs(corner.z - centre.z), `${name} within its site in z`).toBeLessThanOrEqual(
-          CELL + EPSILON,
+          half + EPSILON,
         );
       }
     }
@@ -322,7 +375,7 @@ describe.each(MODELLED)('the $label', (building) => {
     expect(names()).toEqual([...building.meshes.values()].sort());
 
     // And the twelfth is the model too, on its own district's site.
-    const centre = siteCentre(layout, building.slot, 11);
+    const centre = siteCentre(layout, building, 11);
     const drawn = boxes(root, prefix, 11);
     for (const [mtl, box] of expected(building.parts)) {
       const got = drawn.get(building.meshes.get(mtl) as string);

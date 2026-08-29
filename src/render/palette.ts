@@ -74,10 +74,15 @@ export const PALETTE = {
   university: 0xd6c9a8,
   universityRoof: 0x9a7f4e,
   // Landmarks. Pale stone against every civic blue and teal on the map, because
-  // a landmark's job is to be picked out from across the city — and a lit band
-  // at its base, so it still reads after dark when its neighbours have gone
-  // dark. The two sizes share a palette and differ in silhouette.
+  // a landmark's job is to be picked out from across the city. The two sizes
+  // share a palette and differ in silhouette — a colonnaded hall against a bowl
+  // of stands — and each keeps a lit fitting of its own, the museum's roof
+  // lantern and the stadium's four floodlights, so both still say where they
+  // are after dark when their neighbours have gone flat.
   landmark: 0xe4dccb,
+  // The cornices and portico roof on the museum, the facade band and canopy on
+  // the stadium. Warm brown against the stone, which is what draws every
+  // horizontal line on a landmark from the play camera.
   landmarkRoof: 0x9c6f4f,
   // The city hall. Pale limestone like a landmark, on the one roof colour
   // nothing else in the city wears — the map already has mint, cornflower, red,

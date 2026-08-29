@@ -28,6 +28,7 @@ const PALETTE = {
   0x6d2f2c: 'fire', 0xe0574b: 'fireRoof', 0xc9d1da: 'concrete',
   0x3d5a52: 'depot', 0xc2d24f: 'depotRoof', 0x5f8f5a: 'bus',
   0x1c2740: 'police', 0x7fa8ff: 'policeRoof', 0x9ea1a8: 'kerb',
+  0xe4dccb: 'landmark', 0x9c6f4f: 'landmarkRoof', 0x3f8f57: 'park',
 };
 
 /* ---- parsing ------------------------------------------------------------ */

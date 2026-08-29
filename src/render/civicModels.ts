@@ -140,3 +140,72 @@ export const POLICE_STATION_PARTS: readonly ModelPart[] = [
   { shape: 'box', at: [1.35, 0.76, -2.35], size: [0.6, 0.1, 0.22], mtl: 'signal-blue', colour: PALETTE.policeRoof }, // blue-lights
   { shape: 'box', at: [2.75, 0.76, -2.35], size: [0.6, 0.1, 0.22], mtl: 'signal-blue', colour: PALETTE.policeRoof }, // blue-lights
 ];
+
+/** The museum: a colonnaded hall between two wings, on a stone plinth. */
+export const MUSEUM_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [0, 0.25, 0], size: [7, 0.5, 7], mtl: 'plinth-grey', colour: PALETTE.kerb }, // plinth
+  { shape: 'box', at: [-2.55, 1.7, -0.4], size: [1.7, 2.4, 5.6], mtl: 'landmark-stone', colour: PALETTE.landmark }, // wings
+  { shape: 'box', at: [2.55, 1.7, -0.4], size: [1.7, 2.4, 5.6], mtl: 'landmark-stone', colour: PALETTE.landmark }, // wings
+  { shape: 'box', at: [0, 2.3, -0.4], size: [3.4, 3.6, 5.6], mtl: 'landmark-stone', colour: PALETTE.landmark }, // hall
+  { shape: 'box', at: [0, 4.22, -0.4], size: [3.64, 0.24, 5.84], mtl: 'cornice-brown', colour: PALETTE.landmarkRoof }, // cornice
+  { shape: 'box', at: [-2.55, 3.02, -0.4], size: [1.94, 0.24, 5.84], mtl: 'cornice-brown', colour: PALETTE.landmarkRoof }, // cornice
+  { shape: 'box', at: [2.55, 3.02, -0.4], size: [1.94, 0.24, 5.84], mtl: 'cornice-brown', colour: PALETTE.landmarkRoof }, // cornice
+  { shape: 'box', at: [0, 3.7, 3.1], size: [4.6, 0.3, 1.5], mtl: 'cornice-brown', colour: PALETTE.landmarkRoof }, // portico-roof
+  { shape: 'box', at: [-1.9, 2.025, 3.5], size: [0.36, 3.05, 0.36], mtl: 'landmark-stone', colour: PALETTE.landmark }, // columns
+  { shape: 'box', at: [-0.64, 2.025, 3.5], size: [0.36, 3.05, 0.36], mtl: 'landmark-stone', colour: PALETTE.landmark }, // columns
+  { shape: 'box', at: [0.64, 2.025, 3.5], size: [0.36, 3.05, 0.36], mtl: 'landmark-stone', colour: PALETTE.landmark }, // columns
+  { shape: 'box', at: [1.9, 2.025, 3.5], size: [0.36, 3.05, 0.36], mtl: 'landmark-stone', colour: PALETTE.landmark }, // columns
+  { shape: 'box', at: [0, 0.1, 3.8], size: [5, 0.2, 0.28], mtl: 'plinth-grey', colour: PALETTE.kerb }, // steps
+  { shape: 'box', at: [0, 0.3, 3.62], size: [4.6, 0.2, 0.28], mtl: 'plinth-grey', colour: PALETTE.kerb }, // steps
+  { shape: 'box', at: [0, 1.3, 2.44], size: [1.8, 1.6, 0.12], mtl: 'glazing', colour: PALETTE.parapet }, // entrance-door
+  { shape: 'box', at: [-2.95, 1.7, 2.44], size: [0.5, 1.4, 0.12], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [-2.15, 1.7, 2.44], size: [0.5, 1.4, 0.12], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [2.15, 1.7, 2.44], size: [0.5, 1.4, 0.12], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [2.95, 1.7, 2.44], size: [0.5, 1.4, 0.12], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [-3.44, 1.7, -2], size: [0.12, 1.4, 0.5], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [-3.44, 1.7, -0.4], size: [0.12, 1.4, 0.5], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [-3.44, 1.7, 1.2], size: [0.12, 1.4, 0.5], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [3.44, 1.7, -2], size: [0.12, 1.4, 0.5], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [3.44, 1.7, -0.4], size: [0.12, 1.4, 0.5], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [3.44, 1.7, 1.2], size: [0.12, 1.4, 0.5], mtl: 'glazing', colour: PALETTE.parapet }, // windows
+  { shape: 'box', at: [0, 4.9, -0.4], size: [2.2, 1.1, 2.2], mtl: 'lantern-light', colour: PALETTE.sodium }, // lantern
+  { shape: 'box', at: [0, 5.56, -0.4], size: [2.5, 0.22, 2.5], mtl: 'cornice-brown', colour: PALETTE.landmarkRoof }, // lantern-cap
+];
+
+/** The stadium: a bowl of stands around a marked pitch, under four masts. */
+export const STADIUM_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [0, 0.15, 0], size: [11.4, 0.3, 11.4], mtl: 'seating-grey', colour: PALETTE.kerb }, // concourse
+  { shape: 'box', at: [0, 0.35, 0], size: [7, 0.1, 7], mtl: 'pitch-green', colour: PALETTE.park }, // pitch
+  { shape: 'box', at: [0, 0.41, -3.2], size: [6.4, 0.02, 0.12], mtl: 'marking-white', colour: PALETTE.marking }, // pitch-markings
+  { shape: 'box', at: [0, 0.41, 3.2], size: [6.4, 0.02, 0.12], mtl: 'marking-white', colour: PALETTE.marking }, // pitch-markings
+  { shape: 'box', at: [-3.2, 0.41, 0], size: [0.12, 0.02, 6.4], mtl: 'marking-white', colour: PALETTE.marking }, // pitch-markings
+  { shape: 'box', at: [3.2, 0.41, 0], size: [0.12, 0.02, 6.4], mtl: 'marking-white', colour: PALETTE.marking }, // pitch-markings
+  { shape: 'box', at: [0, 0.41, 0], size: [6.4, 0.02, 0.12], mtl: 'marking-white', colour: PALETTE.marking }, // pitch-markings
+  { shape: 'box', at: [0, 1.6, -4.85], size: [11, 2.6, 1.3], mtl: 'landmark-stone', colour: PALETTE.landmark }, // stands-back
+  { shape: 'box', at: [0, 1.6, 4.85], size: [11, 2.6, 1.3], mtl: 'landmark-stone', colour: PALETTE.landmark }, // stands-front
+  { shape: 'box', at: [-4.85, 1.6, 0], size: [1.3, 2.6, 8.4], mtl: 'landmark-stone', colour: PALETTE.landmark }, // stands-west
+  { shape: 'box', at: [4.85, 1.6, 0], size: [1.3, 2.6, 8.4], mtl: 'landmark-stone', colour: PALETTE.landmark }, // stands-east
+  { shape: 'box', at: [0, 0.95, -3.85], size: [8.4, 1.3, 0.7], mtl: 'seating-grey', colour: PALETTE.kerb }, // tiers-back
+  { shape: 'box', at: [0, 0.95, 3.85], size: [8.4, 1.3, 0.7], mtl: 'seating-grey', colour: PALETTE.kerb }, // tiers-front
+  { shape: 'box', at: [-3.85, 0.95, 0], size: [0.7, 1.3, 7], mtl: 'seating-grey', colour: PALETTE.kerb }, // tiers-west
+  { shape: 'box', at: [3.85, 0.95, 0], size: [0.7, 1.3, 7], mtl: 'seating-grey', colour: PALETTE.kerb }, // tiers-east
+  { shape: 'box', at: [0, 2.1, -4.85], size: [11.08, 0.26, 1.38], mtl: 'roof-brown', colour: PALETTE.landmarkRoof }, // facade-band
+  { shape: 'box', at: [0, 2.1, 4.85], size: [11.08, 0.26, 1.38], mtl: 'roof-brown', colour: PALETTE.landmarkRoof }, // facade-band
+  { shape: 'box', at: [-4.85, 2.1, 0], size: [1.38, 0.26, 8.48], mtl: 'roof-brown', colour: PALETTE.landmarkRoof }, // facade-band
+  { shape: 'box', at: [4.85, 2.1, 0], size: [1.38, 0.26, 8.48], mtl: 'roof-brown', colour: PALETTE.landmarkRoof }, // facade-band
+  { shape: 'box', at: [0, 3.02, -4.55], size: [11, 0.24, 1.9], mtl: 'roof-brown', colour: PALETTE.landmarkRoof }, // canopies
+  { shape: 'box', at: [0, 3.02, 4.55], size: [11, 0.24, 1.9], mtl: 'roof-brown', colour: PALETTE.landmarkRoof }, // canopies
+  { shape: 'box', at: [-4.55, 3.02, 0], size: [1.9, 0.24, 8.4], mtl: 'roof-brown', colour: PALETTE.landmarkRoof }, // canopies
+  { shape: 'box', at: [4.55, 3.02, 0], size: [1.9, 0.24, 8.4], mtl: 'roof-brown', colour: PALETTE.landmarkRoof }, // canopies
+  { shape: 'box', at: [-2.6, 1, 5.46], size: [1.4, 1.4, 0.14], mtl: 'gate-dark', colour: PALETTE.parapet }, // gates
+  { shape: 'box', at: [0, 1, 5.46], size: [1.4, 1.4, 0.14], mtl: 'gate-dark', colour: PALETTE.parapet }, // gates
+  { shape: 'box', at: [2.6, 1, 5.46], size: [1.4, 1.4, 0.14], mtl: 'gate-dark', colour: PALETTE.parapet }, // gates
+  { shape: 'box', at: [-4.9, 3.55, -4.9], size: [0.5, 6.5, 0.5], mtl: 'mast-grey', colour: PALETTE.stack }, // masts
+  { shape: 'box', at: [4.9, 3.55, -4.9], size: [0.5, 6.5, 0.5], mtl: 'mast-grey', colour: PALETTE.stack }, // masts
+  { shape: 'box', at: [-4.9, 3.55, 4.9], size: [0.5, 6.5, 0.5], mtl: 'mast-grey', colour: PALETTE.stack }, // masts
+  { shape: 'box', at: [4.9, 3.55, 4.9], size: [0.5, 6.5, 0.5], mtl: 'mast-grey', colour: PALETTE.stack }, // masts
+  { shape: 'box', at: [-4.9, 6.9, -4.9], size: [1, 0.4, 0.7], mtl: 'floodlight', colour: PALETTE.sodium }, // floodlights
+  { shape: 'box', at: [4.9, 6.9, -4.9], size: [1, 0.4, 0.7], mtl: 'floodlight', colour: PALETTE.sodium }, // floodlights
+  { shape: 'box', at: [-4.9, 6.9, 4.9], size: [1, 0.4, 0.7], mtl: 'floodlight', colour: PALETTE.sodium }, // floodlights
+  { shape: 'box', at: [4.9, 6.9, 4.9], size: [1, 0.4, 0.7], mtl: 'floodlight', colour: PALETTE.sodium }, // floodlights
+];
