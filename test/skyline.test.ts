@@ -575,17 +575,25 @@ describe('what the ladder costs to draw', () => {
     // would read as a stunted apartment block. Industry is under commerce: it
     // is the anti-tower.
     //
-    // Both orderings are about the *massed* rungs, and level 0 is not one — it
-    // is modelled in all three zones, and what `bodyExtent` reports there is a
-    // model's whole silhouette, chimney and fin sign and all. That is a
-    // different quantity from a massed body, which has never counted the stack
-    // standing on it: a level-1 industrial shed is 1.3 tall and carries a stack
-    // 1.35 times that, and this has always reported 1.93 rather than 3.05. So
-    // comparing model heights to each other here would be comparing silhouettes
-    // to bodies, and it would say a works with a 6-unit flue is "taller" than a
-    // shop in a sense the massed numbers never meant. Level 0 was already the
-    // exception for commerce against housing, for a smaller version of the same
-    // reason; it is now the exception for both orderings.
+    // Both orderings skip level 0, because it is modelled in all three zones
+    // and what `bodyExtent` reports for a model is its whole silhouette,
+    // chimney and fin sign and all. That is a different quantity from a massed
+    // body, which has never counted the stack standing on it: a level-1
+    // industrial shed is 1.3 tall and carries a stack 1.35 times that, and this
+    // has always reported 1.93 rather than 3.05. Comparing the two kinds of
+    // number would say a works with a 6-unit flue is "taller" than a shop in a
+    // sense the massed numbers never meant.
+    //
+    // Level 1 became a *mixed* rung when commerce was modelled there, and is
+    // asserted anyway. Housing and commerce are both silhouettes now (6.47 and
+    // 4.52) and industry is still a massed body (2.53), so the second
+    // comparison is the cross-kind one the paragraph above declines to make at
+    // level 0. It is kept because the mismatch runs the safe way here: an
+    // industrial silhouette would be *taller* than its body, and the side that
+    // would grow is the one already 1.99 below. The direction is what makes it
+    // safe rather than the margin — so if industry's second rung is ever
+    // modelled, split this loop rather than widening it, because level 1 then
+    // becomes level 0's problem exactly.
     for (let level = 1; level < LEVELS; level++) {
       expect(bodyExtent('shop', level).height).toBeLessThan(bodyExtent('home', level).height);
       expect(bodyExtent('industry', level).height).toBeLessThan(bodyExtent('shop', level).height);
@@ -618,12 +626,24 @@ describe('what the ladder costs to draw', () => {
   it('draws a merged building across its whole parcel', () => {
     const root = new THREE.Scene();
     const buildings = new Buildings(root, new CityLayout());
-    // Six merged shops and six single ones on the same district. The merged
-    // ones are the *oldest* slots, so they are the level-3 set; the singles are
-    // at level 2 rather than level 1 because level 1 is modelled, and a model
-    // is never stretched to a parcel — the comparison has to be between two
-    // massed bodies to mean anything.
-    buildings.sync(state({ shops: 12, shopLevels: mix(0, 6, 0, 6), mergedC: 6, districts: 2 }), 0);
+    // Six merged shops against six single-plot works. The comparison has to be
+    // between two *massed* bodies to mean anything — a model is never stretched
+    // to a parcel — and it can no longer be made within one zone: every rung
+    // that stands on a single plot is `LEVEL_FOOTPRINT`'s first two, and
+    // commerce now models both of them. Industry models only its first, so its
+    // second is the last massed body in the game standing on one plot, and that
+    // is what the merged shops are measured against.
+    buildings.sync(
+      state({
+        shops: 6,
+        shopLevels: mix(0, 0, 0, 6),
+        mergedC: 6,
+        industry: 6,
+        industryLevels: mix(0, 6),
+        districts: 2,
+      }),
+      0,
+    );
 
     const matrix = new THREE.Matrix4();
     const scale = new THREE.Vector3();
@@ -635,10 +655,14 @@ describe('what the ladder costs to draw', () => {
       return Math.max(scale.x, scale.z) / Math.min(scale.x, scale.z);
     };
     const merged = meshes(root, 'shop:3')[0];
-    const single = meshes(root, 'shop:1')[0];
+    const single = meshes(root, 'industry:1')[0];
     // A merged shop is oblong by roughly the parcel's two plots against one
-    // shop's width; a single one is square to within its own jitter and its
-    // style's proportions.
+    // shop's width; a single-plot works is square to within its own jitter and
+    // its style's proportions. Both meshes have to actually be there: a body
+    // that stopped being drawn would otherwise leave `aspect` reading the
+    // matrix the previous call decomposed, and both arms would pass.
+    expect(merged).toBeDefined();
+    expect(single).toBeDefined();
     for (let i = 0; i < 6; i++) expect(aspect(merged, i)).toBeGreaterThan(1.8);
     for (let i = 0; i < 6; i++) expect(aspect(single, i)).toBeLessThan(1.4);
   });

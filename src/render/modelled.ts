@@ -16,6 +16,13 @@ import {
   SHOP_PARADE_PARTS,
 } from './shopModels.ts';
 import {
+  HIGHSTREET_BLIND_PARTS,
+  HIGHSTREET_CORNICE_PARTS,
+  HIGHSTREET_GABLE_PARTS,
+  HIGHSTREET_LOFT_PARTS,
+  HIGHSTREET_ORIEL_PARTS,
+} from './highStreetModels.ts';
+import {
   INDUSTRY_DOCK_PARTS,
   INDUSTRY_MILL_PARTS,
   INDUSTRY_SHED_PARTS,
@@ -57,28 +64,34 @@ import type { ZoneKind } from '../sim/state.ts';
 /**
  * The modelled rungs of the three ladders, and the meshes that draw them.
  *
- * The first rung of housing, of commerce and of industry, plus housing's
- * second: the rungs the city is mostly *made* of. Every plot a player buys
- * starts on a first rung, a district that has not been pushed up the ladder is
- * nothing but them, and they are what a new player spends their first hour
- * looking at. They were a box with a cone on it, a box with a canopy on it and
- * a box with a stack on it, which is the right answer for a rung the camera
- * flies past and the wrong one for the rung it lives at.
+ * The first rung of housing, of commerce and of industry, plus housing's second
+ * through fifth and commerce's second: the rungs the city is mostly *made* of.
+ * Every plot a player buys starts on a first rung, a district that has not been
+ * pushed up the ladder is nothing but them, and they are what a new player
+ * spends their first hour looking at. They were a box with a cone on it, a box
+ * with a canopy on it and a box with a stack on it, which is the right answer
+ * for a rung the camera flies past and the wrong one for the rung it lives at.
  *
  * So each is modelled, five times over, and a plot gets one of the five. What
  * that buys is a *street*: five silhouettes a rung, each with a front, standing
  * along a kerb in the order the seed put them in. What it costs is five meshes
  * a rung, and most of this file is about keeping it to five.
  *
- * **Housing is modelled at every rung, and it is the only zone modelled above
- * its first.** That is not a step toward modelling everything: it is where the
- * cliffs were. A player's first promotion turned a street of five house
- * silhouettes into twenty-four copies of one 2.6 x 4.6 box, and the second
- * turned *that* into the same box twice as wide and twice as tall — the merge,
- * which is the most consequential thing a player does to a district and read as
- * the least. Commerce and industry climb too, but a district climbs *housing*
- * first and climbs it most — see `LEVEL_HOUSING` — so housing's rungs are the
- * most-looked-at surfaces in the game by a distance.
+ * **Housing is modelled at every rung and commerce at its first two, and both
+ * are where the cliffs were rather than a step toward modelling everything.** A
+ * player's first promotion turned a street of five house silhouettes into
+ * twenty-four copies of one 2.6 x 4.6 box, and the second turned *that* into
+ * the same box twice as wide and twice as tall — the merge, which is the most
+ * consequential thing a player does to a district and read as the least. A
+ * district climbs *housing* first and climbs it most — see `LEVEL_HOUSING` — so
+ * housing's rungs are the most-looked-at surfaces in the game by a distance.
+ *
+ * Commerce's second is the same cliff one zone over: a shopping street of five
+ * silhouettes became copies of one 3.0 x 3.2 box, in the hour after the one the
+ * shops were built for. It is the only rung outside housing modelled above a
+ * first, and what it is *not* is the start of climbing commerce — the rung
+ * above it is the merge, and nothing has argued for that yet. Industry is
+ * modelled at its first rung only.
  *
  * Nothing in housing is massed now. What finished it was the measurement rather
  * than an argument: the note that used to stand here said the top rung was the
@@ -164,6 +177,13 @@ const MODELS: Readonly<Record<ModelledKind, readonly (readonly (readonly ModelPa
       SHOP_ARCADE_PARTS,
       SHOP_MARKET_PARTS,
       SHOP_CAFE_PARTS,
+    ],
+    [
+      HIGHSTREET_CORNICE_PARTS,
+      HIGHSTREET_BLIND_PARTS,
+      HIGHSTREET_GABLE_PARTS,
+      HIGHSTREET_ORIEL_PARTS,
+      HIGHSTREET_LOFT_PARTS,
     ],
   ],
   industry: [

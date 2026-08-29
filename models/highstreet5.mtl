@@ -1,0 +1,61 @@
+# Exported by three-d-stage
+newmtl shop-navy
+Kd 0.0203 0.0369 0.0723
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl shop-glass
+Kd 0.1529 0.2462 0.4179
+Ks 0.2000 0.2000 0.2000
+Ns 156
+d 1.0000
+
+newmtl facade-band
+Kd 0.4851 0.5395 0.6240
+Ks 0.2000 0.2000 0.2000
+Ns 44
+d 1.0000
+
+newmtl door-timber
+Kd 0.1470 0.0612 0.0319
+Ks 0.2000 0.2000 0.2000
+Ns 28
+d 1.0000
+
+newmtl shopfront-light
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+
+newmtl forecourt-paving
+Kd 0.2542 0.1590 0.1248
+Ks 0.2000 0.2000 0.2000
+Ns 20
+d 1.0000
+
+newmtl shutter-grey
+Kd 0.3419 0.3564 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 44
+d 1.0000
+
+newmtl shop-sign
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+
+newmtl trim-concrete
+Kd 0.5841 0.6376 0.7011
+Ks 0.2000 0.2000 0.2000
+Ns 52
+d 1.0000
+
+newmtl roof-plant
+Kd 0.0887 0.1248 0.2016
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+

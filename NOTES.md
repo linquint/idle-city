@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 8, +8 shared parts, +35 models = 51 (asserted, plus the cage) | 12, +8, +40 = **60**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 7, +8 shared parts, +40 models = 55 (asserted, plus the cage) | 11, +8, +45 = **64**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -114,8 +114,8 @@ clothes.
 > measured for. The mesh row is the smallest of Option A's problems and it is
 > the only one this note has ever been able to price.
 >
-> A seventh and last, after housing's *fifth*: eight bodies and thirty-five
-> models, 48 -> 52, floor for a fourth zone now 60. Housing is finished — every
+> A seventh, after housing's *fifth*: eight bodies and thirty-five models,
+> 48 -> 52, floor for a fourth zone now 60. Housing is finished — every
 > rung modelled, no body mesh at any of them — so this row stops moving for
 > that reason and the next thing to move it would be a decision rather than a
 > continuation.
@@ -128,6 +128,28 @@ clothes.
 > in its **first** rung, where the buildings are. That is bad news for Option A
 > rather than good: a fourth zone's unavoidable spend is precisely the
 > expensive one, and it buys a rung nobody has asked to look at.
+>
+> An eighth, and the entry above called it: the next thing to move this row was
+> a decision rather than a continuation, and the decision was commerce's
+> *second* rung. Seven bodies and forty models, 52 -> 56, floor for a fourth
+> zone now 64. What is worth recording is that it did **not** move the argument
+> the way six continuations of housing did, because it sharpened the precedent
+> rather than extending it. The test was "a rung earns models by being a rung
+> players look at", which is loose enough that a fourth zone could have claimed
+> it; the high streets narrowed it to "a rung earns models by being the far side
+> of a promotion a player *watches happen*". A fourth zone fails the narrow test
+> more clearly than the loose one: there is no promotion to watch, because there
+> is no first rung yet. It still arrives owing five models on a rung nobody has
+> seen, and now against 64.
+>
+> The measurement came in cheaper than the row would predict, which is recorded
+> because it cuts the other way and this file is not a case for the budget being
+> soft: commerce's promotion is +13.7% on the commercial geometry and +4.7% on
+> the whole scene (`lod:calibrate` part 1g), against the walk-ups' +11.3% on the
+> scene — smaller in absolute terms despite a district carrying 45 commercial
+> plots to 24 residential, because the high street models are simpler than the
+> walk-ups. That is a fact about these five models rather than about commerce,
+> and it does not generalise to commerce's remaining rungs.
 
 ### Option B — a second building type on the commercial frontage
 
