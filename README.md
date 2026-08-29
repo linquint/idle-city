@@ -251,7 +251,7 @@ contract: pure function of the slot and the seed, nothing stored — and the sam
 hash across both of housing's modelled rungs, so the plot that was the terrace
 is the deck block when it climbs.
 
-**Housing is modelled four rungs up because that is where the cliffs were.** A
+**Housing is modelled at every rung because that is where the cliffs were.** A
 player's first promotion turned a street of five house silhouettes into
 twenty-four copies of one 2.6 x 4.6 box, in the hour after the one the houses
 were built for — so the second rung is five walk-ups: a brick block with its
@@ -268,13 +268,22 @@ joined by a low link block. The fourth is five arcologies, which at 22 units
 tall have stopped reading as things with countable floors and so each carry one
 full-height idea instead: a slab ribbed by fins, open loggias between solid end
 shafts, two shafts split by a glazed notch, a flight of planted setback
-terraces, and an expressed concrete frame with spandrel infill.
+terraces, and an expressed concrete frame with spandrel infill. The fifth and
+last is five pinnacles at 27 units, read almost entirely as shapes against the
+sky: stepped tiers under a finned crown, twin shafts joined high by a glazed sky
+bridge, a glazed core braced by four tapering buttresses, planted sky gardens
+cut clean through the slab, and a finned shaft under an open louvred crown. All
+five meet the pavement at the same lit entrance portal, which is the only part
+of a megastructure a street-level camera ever sees — the variety is above, where
+it can be read from across the city.
 
-Commerce and industry climb too, but a district climbs housing first and climbs
-it most, so their second rungs are not close and are still massed. Housing's top
-rung is massed as well — and not for cost, since a rung above the merge turns
-out to be free: a megastructure is the end state of a city that has stopped
-changing, seen at the widest camera the game has.
+**Housing is therefore modelled at every rung, and is the only zone in the city
+with no body mesh at all.** Commerce and industry climb too, but a district
+climbs housing first and climbs it most, so their rungs above the first are
+still massed — and the honest reading is that they are worth *less* than
+housing's were rather than that they are next: a district carries 45 commercial
+plots to 24 residential, so commerce is where a rung of models would cost the
+most, and it is also the zone a player promotes last.
 
 A tower is the first modelled building that stands on a **merged parcel**, and
 that is a different footprint rather than a bigger one — oblong, 6.8 by 2.8, and
@@ -287,24 +296,26 @@ can end up across the frontage.
 
 ### Rendering notes
 
-The city is a handful of `InstancedMesh` draw calls — 9 bodies, one per (zone,
-level) the ladder masses, 8 shared detail parts and 30 models, plus roads, kerbs
+The city is a handful of `InstancedMesh` draw calls — 8 bodies, one per (zone,
+level) the ladder masses, 8 shared detail parts and 35 models, plus roads, kerbs
 and land tiles — so a city of four thousand buildings costs about the same as a
-city of forty. The 48 is a budget rather than an accident, and
+city of forty. The 52 is a budget rather than an accident, and
 `test/skyline.test.ts` asserts it: the naive version of the same variety is 45
-draw calls for what is fundamentally the same box.
+draw calls for what is fundamentally the same box. The 8 bodies are commerce and
+industry only; housing has none.
 
-- The thirty models are merged by **vertex colour**, one mesh each, which is
-  the choice the bus makes and for the mirror of the bus's reason: a mesh per
+- The thirty-five models are merged by **vertex colour**, one mesh each, which
+  is the choice the bus makes and for the mirror of the bus's reason: a mesh per
   material would be 42, 44 and 43 draw calls for the three most numerous
   buildings in the city. The one thing that merge cannot carry is a light, so
   each model's lit pieces — a house's window band, a walk-up's one per floor, a
-  tower's warning beacon, an arcology's eight, a shop's shopfront and sign, a
-  works's bay lights and its sawtooth of north lights — are handed to the shared
-  band mesh that every other building already wears, and the night ramp comes
-  back for nothing. The notched shafts' eight is the most any model carries and
-  is what sizes the reserved part stride. Modelling housing's first rung also
-  retired the hipped roof from the part bank, which had no other wearer.
+  tower's warning beacon, an arcology's eight, a pinnacle's lit entrance portal,
+  a shop's shopfront and sign, a works's bay lights and its sawtooth of north
+  lights — are handed to the shared band mesh that every other building already
+  wears, and the night ramp comes back for nothing. The notched shafts' eight is
+  the most any model carries and is what sizes the reserved part stride.
+  Modelling housing's first rung also retired the hipped roof from the part
+  bank, which had no other wearer.
 - A modelled building has a **front**, which nothing in the city had before: a
   box is a box at every turn. So it turns to face its street, found by asking
   `isRoad` about the plot's four neighbours, and a corner plot picks between its
@@ -326,11 +337,15 @@ draw calls for what is fundamentally the same box.
   those become 588 towers at 1,429. A tower is 4.13x the model a walk-up is —
   they are the largest models in the city, 67 to 241 boxes against a house's 17
   to 23 — but the merge halves the count, so the rung costs 2.06x the one below
-  rather than the 4x its size suggests. Above the merge it stops costing
-  altogether: the 588 towers become 588 *arcologies* at 1,404 each, which is
-  14,304 triangles **fewer**, because the count is fixed and a rung is then
-  worth only the difference between two models. `npm run lod:calibrate` parts 1b
-  to 1e are the measurements, and the note on `ModelMeshes` sets out the two
+  rather than the 4x its size suggests. **Above the merge the ladder turns
+  over**: 588 arcologies at 1,404 each and 588 pinnacles at 673, so rung 3 is
+  the peak and the top of the ladder is the second-cheapest rung modelled. The
+  parcel count is pinned above the merge, so a rung is worth only the difference
+  between two models — and the models get simpler as they climb, because a
+  pinnacle is read as a shape against the sky rather than as something with
+  countable floors. The expensive half of the ladder is the bottom half, which
+  is also the half a player looks at longest. `npm run lod:calibrate` parts 1b
+  to 1f are the measurements, and the note on `ModelMeshes` sets out the two
   optimisations — a casting/flat split, and a silhouette geometry driven by
   `DetailMask` — that are deliberately not made until a GPU says which is
   needed. The balcony slab, 120 of whose 241 boxes are sub-pixel balcony rails,
@@ -413,7 +428,8 @@ draw calls for what is fundamentally the same box.
   a planted quad with a campanile on the back corner, which is the shape that
   stops it reading as the city hall at a bigger footprint. All eight are
   generated from the models in `models/` — see `npm run model:parts`, which is
-  also where the five houses, walk-ups, towers and arcologies come from.
+  also where the five houses, walk-ups, towers, arcologies and pinnacles come
+  from.
 - Two modelled things are not buildings. A **park** is a plot-sized lawn with
   paths, planting, a pond, three trees, benches and a lit lamp, drawn by `Parks`
   rather than `Buildings`; its trees used to be scattered per park by `hash01`,

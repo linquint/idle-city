@@ -379,13 +379,24 @@ interface LevelShape {
  */
 const ZONE_SHAPES: Readonly<Record<ZoneKind, readonly LevelShape[]>> = {
   home: [
-    // Housing's first rung is drawn from `models/house*.obj` rather than from
-    // this row, and the row is what those models were built to: a house's body
-    // is 2.2 x 1.6 x 2.2 in every one of the five. It stays because the ladder
-    // still has a rung here — the row states it, and the two rungs above it
-    // step from it — and because `LEVELS` indexes straight into this array.
-    // The bound a level-1 house is actually checked against is the model's own
-    // reach: see `bodyExtent`, which reads `HOUSE_EXTENT` for this rung.
+    // **Housing is modelled at every rung, so not one width or height in this
+    // row is drawn.** They stay for three reasons and it is worth being precise
+    // about which, because a row of dead numbers invites someone to change one:
+    //
+    //   - `LEVELS` indexes straight into this array, and the ladder's shape is
+    //     stated here;
+    //   - `beacon` is live. `writeModelParts` reads it off this row to decide
+    //     whether a modelled building carries a warning light, so the flags in
+    //     the last three entries are load-bearing where the numbers beside them
+    //     are not;
+    //   - the models were *built* to these numbers, one rung at a time — a
+    //     house's body is 2.2 x 1.6 x 2.2, a walk-up's 2.6 x 4.6, and the three
+    //     merged rungs are MERGED_SPAN by 11.5, 22 and 27. The row is the brief
+    //     the modeller worked to, so changing one here now means re-exporting a
+    //     model rather than moving a building.
+    //
+    // What a housing rung is actually bounded by is its models' own reach: see
+    // `bodyExtent`, which takes this branch for every level of this zone.
     { width: 2.2, height: 1.6, depth: 1, beacon: false },
     { width: 2.6, height: 4.6, depth: 1, beacon: false },
     { width: 2.8, height: 11.5, depth: 1, beacon: true },
@@ -2696,8 +2707,8 @@ class Outline {
 /**
  * The instanced meshes the three zone ladders are allowed to cost, all told.
  *
- * Nine bodies, eight shared detail parts, thirty models and the construction
- * cage. The alternative the styles were designed against is 45 meshes: five
+ * Eight bodies, eight shared detail parts, thirty-five models and the
+ * construction cage. The alternative the styles were designed against is 45 meshes: five
  * levels by three styles by three zones, each a draw call for what is
  * fundamentally the same box. Asserted in test/skyline.test.ts, so a later
  * change cannot quietly double the draw calls.
@@ -2742,23 +2753,36 @@ class Outline {
  *     the caution was about *diminishing* returns, not absent ones, and what it
  *     mispriced is that a merged rung is the widest thing in a district and
  *     therefore the thing a distant skyline is mostly made of. Five silhouettes
- *     at 22 units read from further away than five at 4.6 do, not less far.
+ *     at 22 units read from further away than five at 4.6 do, not less far;
+ *   - **+5 -1, the pinnacles** and `home:4`. Housing's top, which finishes the
+ *     ladder: `home` is now the first zone in the city with no body mesh at
+ *     any rung. The note that used to stand here said this was the one to
+ *     leave, and what overturned it was the measurement rather than an
+ *     argument — part 1e found a rung above the merge costs *negative*
+ *     triangles, because the parcel count is fixed and a rung is then worth
+ *     only the difference between two models. The cost of this one was never
+ *     the geometry; it was four draw calls, and they were the only thing to
+ *     weigh.
  *
- * So 25 - 2 + 4 x 5 = 44... which is 48. The three first rungs a district is
+ * So 25 - 2 + 4 x 6 = 47... which is 52. The three first rungs a district is
  * made of get fifteen silhouettes for the price of thirteen boxes, and
- * housing's next three get fifteen more for twelve. Housing is one body and
- * twenty models; commerce and industry are four bodies and five models each.
+ * housing's other four get twenty more for sixteen. Housing is no bodies and
+ * twenty-five models; commerce and industry are four bodies and five each.
  *
- * **The one rung left is housing's top, and it is the one to leave.** A
- * megastructure is the end state of a city that has stopped changing, seen at
- * the widest camera the game has; the second rungs of commerce and industry
- * would be a better spend than it if either were ever made. What has *not*
- * changed through five of these is the test the note above set: a rung earns
- * models by being a rung players look at, and the burden is on the spend.
+ * **Housing is finished and the ladder's shape has changed, so the test this
+ * note has applied five times needs restating.** It was "a rung earns models by
+ * being a rung players look at", and it held while the alternative was a box.
+ * The open candidates now are commerce's and industry's rungs 2 to 5, and the
+ * honest reading is that they are worth *less* than housing's were rather than
+ * that they are next: a district carries 45 commercial plots to 24 residential,
+ * so commerce is the zone where a rung of models costs most in triangles — see
+ * part 1b, where commerce is already the largest single line in the scene — and
+ * it is also the zone a player promotes last and looks at least. The burden
+ * stays on the spend, and it is heavier here than it was for housing.
  *
  * The cost that is *not* in this number is triangles rather than draw calls: a
  * modelled building is 14 to 241 boxes where the massed one was one, which is
- * measured by tools/lod.calibrate.mjs parts 1b to 1e rather than bounded here.
+ * measured by tools/lod.calibrate.mjs parts 1b to 1f rather than bounded here.
  * The towers are most of that range and the balcony slab is most of the towers.
  *
  * The cage is the twenty-fifth and it is worth saying what it costs, because a
@@ -2785,7 +2809,7 @@ class Outline {
  * ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
-export const BUILDING_MESH_BUDGET = 48;
+export const BUILDING_MESH_BUDGET = 52;
 
 /**
  * The building layer. It owns no game state: given counts, it reconciles the

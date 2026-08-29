@@ -442,6 +442,58 @@ console.log('what the arcologies cost against the towers\n');
 }
 console.log('');
 
+// ------------------------------------------------------- part 1f
+
+/**
+ * The whole housing ladder, now that every rung of it is modelled.
+ *
+ * The five parts before this each measured one step. This is the shape they
+ * make together, and it is the number to quote when someone asks what modelling
+ * housing cost: the same district, promoted rung by rung, from the city a new
+ * player builds to the one a finished city is.
+ *
+ * Read it as two halves. Below the merge, promoting is *cheaper per building*
+ * and there are twice as many of them; above it the count is pinned at the
+ * parcel and a rung is worth only the difference between two models. That is
+ * why the curve turns over rather than running away.
+ */
+console.log('the whole housing ladder, rung by rung\n');
+{
+  const rung = (level) => {
+    const scene = level <= 1 ? stand(MAX_DISTRICTS, 0, level) : stand(MAX_DISTRICTS, level);
+    const rows = submitted(scene.root).filter((r) => r.name.startsWith(`model:home:${level}:`));
+    return {
+      n: rows.reduce((a, r) => a + r.count, 0),
+      tris: rows.reduce((a, r) => a + r.tris, 0),
+      whole: totals(submitted(scene.root)).tris,
+    };
+  };
+  const names = ['houses', 'walk-ups', 'towers', 'arcologies', 'pinnacles'];
+  const all = names.map((_, l) => rung(l));
+
+  console.log(`  districts ${MAX_DISTRICTS}, housing alone climbing, commerce and industry at level 1`);
+  console.log('');
+  console.log('    rung                buildings     triangles      each      massed');
+  all.forEach((r, l) => {
+    console.log(
+      `    ${`${l + 1}. ${names[l]}`.padEnd(20)}${thou(r.n, 9)}${thou(r.tris, 14)}${thou(r.tris / Math.max(1, r.n), 10)}${thou(r.n * 24, 12)}`,
+    );
+  });
+  console.log('');
+  const first = all[0];
+  const last = all[all.length - 1];
+  console.log(`  Peak is rung 3 at ${thou(all[2].tris, 1)}; the ladder ends *below* it, at`);
+  console.log(`  ${thou(last.tris, 1)} on ${last.n.toLocaleString('en-GB')} buildings. Massed, the top rung was`);
+  console.log(`  ${thou(last.n * 24, 1)} triangles, so the five silhouettes there cost ${thou(last.tris - last.n * 24, 1)}.`);
+  console.log('');
+  console.log('  The shape worth remembering: modelling a rung costs in proportion to how');
+  console.log('  many buildings stand on it, and the merge halves that at rung 3. So the');
+  console.log('  expensive half of this ladder is the bottom half, which is also the half');
+  console.log('  a player spends the most time looking at — the spend and the value line');
+  console.log('  up, which is not something that had to be true.');
+}
+console.log('');
+
 // ------------------------------------------------------------------- part 2
 
 /**

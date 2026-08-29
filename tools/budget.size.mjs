@@ -217,6 +217,16 @@ const BUDGETS = [
     // — or if raw is re-based a third time for the same reason — the honest
     // move is to stop re-basing and to make the tables denser, rather than to
     // keep restating that generated output is generated.
+    //
+    // The pinnacles then finished housing's ladder and landed **inside both
+    // halves**: 429,390 and 93,922, with 4.9% and 5.6% still under. So the
+    // "a sixth rung will breach raw again" above was wrong, and the reason is
+    // worth keeping because it is the same reason the triangle curve turns
+    // over (`lod:calibrate` part 1f): the models get *smaller* as the ladder
+    // climbs — 47 to 78 boxes against the towers' 67 to 241 — because a
+    // building read as a shape against the sky needs less articulation than one
+    // whose floors you can count. A rung is not a fixed unit of source. No
+    // re-base, and the numbers below are the ones the arcologies set.
     raw: 451_500,
     gzip: 99_500,
   },

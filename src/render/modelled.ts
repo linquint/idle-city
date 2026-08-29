@@ -43,6 +43,13 @@ import {
   HIGHRISE_LOGGIA_PARTS,
   HIGHRISE_NOTCH_PARTS,
 } from './highriseModels.ts';
+import {
+  PINNACLE_BRIDGE_PARTS,
+  PINNACLE_BUTTRESS_PARTS,
+  PINNACLE_GARDEN_PARTS,
+  PINNACLE_LOUVRE_PARTS,
+  PINNACLE_TIERS_PARTS,
+} from './pinnacleModels.ts';
 import { CELL, LEVEL_FOOTPRINT } from '../sim/config.ts';
 import { cellX, cellZ, isRoad } from '../sim/layout.ts';
 import type { ZoneKind } from '../sim/state.ts';
@@ -63,7 +70,7 @@ import type { ZoneKind } from '../sim/state.ts';
  * along a kerb in the order the seed put them in. What it costs is five meshes
  * a rung, and most of this file is about keeping it to five.
  *
- * **Housing is modelled four rungs up, and it is the only zone modelled above
+ * **Housing is modelled at every rung, and it is the only zone modelled above
  * its first.** That is not a step toward modelling everything: it is where the
  * cliffs were. A player's first promotion turned a street of five house
  * silhouettes into twenty-four copies of one 2.6 x 4.6 box, and the second
@@ -73,11 +80,13 @@ import type { ZoneKind } from '../sim/state.ts';
  * first and climbs it most — see `LEVEL_HOUSING` — so housing's rungs are the
  * most-looked-at surfaces in the game by a distance.
  *
- * Only the top rung is massed now, and the reason it stays that way is not
- * cost — the arcologies proved a rung above the merge is free — but that a
- * megastructure is the end state of a city that has stopped changing, seen at
- * the widest camera the game has. If that ever stops being true, the geometry
- * is the cheap part.
+ * Nothing in housing is massed now. What finished it was the measurement rather
+ * than an argument: the note that used to stand here said the top rung was the
+ * one to leave, on the grounds that a megastructure is the end state of a city
+ * that has stopped changing — and then part 1e found that a rung above the
+ * merge costs no geometry at all, which left four draw calls as the only thing
+ * being weighed. `ZONE_SHAPES.home` still states the ladder and still carries
+ * the `beacon` flags, but not one of its widths or heights is drawn.
  *
  * The third rung is also the first modelled anything that stands on a **merged
  * parcel**, which is a genuinely different footprint rather than a bigger one:
@@ -140,6 +149,13 @@ const MODELS: Readonly<Record<ModelledKind, readonly (readonly (readonly ModelPa
       HIGHRISE_GARDEN_PARTS,
       HIGHRISE_FRAME_PARTS,
     ],
+    [
+      PINNACLE_TIERS_PARTS,
+      PINNACLE_BRIDGE_PARTS,
+      PINNACLE_BUTTRESS_PARTS,
+      PINNACLE_GARDEN_PARTS,
+      PINNACLE_LOUVRE_PARTS,
+    ],
   ],
   shop: [
     [
@@ -166,8 +182,13 @@ export const MODELLED_KINDS = Object.keys(MODELS) as readonly ModelledKind[];
 /**
  * How many rungs from the bottom each zone draws from models.
  *
- * Four for housing and one for the other two. Read by `modelledAt`, which is
- * the only thing that should ever ask.
+ * All five for housing and one for the other two. Housing reaching `LEVELS` is
+ * the one value here with a consequence beyond this file: a zone modelled at
+ * every rung has no body mesh at any of them, so `ZoneLayer.bodies` is all
+ * holes for `home`. Nothing special is done about that — the arrays were
+ * always allowed to be empty — but it is the first time one is.
+ *
+ * Read by `modelledAt`, which is the only thing that should ever ask.
  */
 export const MODEL_LEVELS: Readonly<Record<ModelledKind, number>> = {
   home: MODELS.home.length,
@@ -526,6 +547,7 @@ export function modelFacing(
  *     1,176 walk-ups   407,184 triangles     (  346 each)   part 1c
  *       588 towers     840,120 triangles     (1,429 each)   part 1d
  *       588 arcologies 825,816 triangles     (1,404 each)   part 1e
+ *       588 pinnacles  395,940 triangles     (  673 each)   part 1f
  *
  * The walk-ups are a straight swap on the same plots — +140,280, which is 52.6%
  * on the housing and 11.3% on the whole scene, 1,416,216 to 1,575,768.
@@ -538,13 +560,23 @@ export function modelFacing(
  * costing 2.06x the one below it: +432,936, rather than the +2.4M a naive
  * reading of the model size would predict.
  *
- * And the arcologies are **free**, which is the fact that changes how the next
- * one of these should be argued. Both rungs stand on a merged parcel, so the
- * count is identical — the same 588 parcels — and the rung costs exactly what
- * the two models differ by, which here is *minus* 14,304 triangles. From the
- * merge up, a rung of models is five more silhouettes and four more draw calls
- * for no triangles at all. The expensive rungs are the ones below it, where
- * modelling multiplies across a plot count that doubles as you descend.
+ * **And then it turns over.** The arcologies came in 14,304 triangles *under*
+ * the towers and the pinnacles at less than half of them, so rung 3 is the peak
+ * of this ladder and the top of it is the second-cheapest rung modelled. Two
+ * things compound to make that so, and neither is an accident:
+ *
+ *   - above the merge the parcel count is pinned, so a rung is worth only the
+ *     difference between two models rather than a multiple of a building count;
+ *   - and the models get *simpler* as they climb, because what a rung has to
+ *     say changes. A walk-up shows its floors; a pinnacle at 27 units is read
+ *     as a shape against the sky, and articulating it further would spend
+ *     geometry the camera at that distance cannot resolve.
+ *
+ * So the expensive half of the housing ladder is the bottom half, which is also
+ * the half a player spends the most time looking at. The spend and the value
+ * line up, which is not something that had to be true and is worth not
+ * disturbing: the next zone to be modelled should be measured at its *first*
+ * rung, where the buildings are, rather than argued for at its top.
  *
  * Two moves are available and neither is made, so the reasoning survives:
  *

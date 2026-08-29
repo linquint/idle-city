@@ -107,7 +107,7 @@ const spread = (total: number): number[] => {
 };
 
 describe('the skyline the renderer draws', () => {
-  it('gives every home exactly one body, and every massed one a roof', () => {
+  it('draws every home from its rung, and gives it exactly one roof', () => {
     const { buildings, counts } = scene();
     for (const levels of [
       mix(24),
@@ -118,9 +118,11 @@ describe('the skyline the renderer draws', () => {
     ]) {
       buildings.sync(state({ homes: 24, homeLevels: [...levels] }), 0);
       const seen = counts();
-      // Housing's first two rungs are modelled and have no body mesh at all,
-      // each drawing from its own set of five; the rungs above are one mesh
-      // each, exactly as before.
+      // Housing is modelled at every rung, so each cohort lands in its own
+      // rung's set of five and no `home:N` body mesh draws anything — there
+      // are none to draw. Written as a loop over `MODEL_LEVELS` rather than
+      // over `LEVELS` so that a rung going back to massed would fail here
+      // rather than pass vacuously.
       let modelledHomes = 0;
       for (const l of modelRungs('home')) {
         expect(seen.get(`home:${l}`) ?? 0).toBe(0);
@@ -130,8 +132,9 @@ describe('the skyline the renderer draws', () => {
       for (let l = MODEL_LEVELS.home; l < LEVELS; l++) {
         expect(seen.get(`home:${l}`) ?? 0).toBe(levels[l]);
       }
-      // Every building still has exactly one roof; the modelled ones carry
-      // theirs themselves, so the bank draws one for each of the rest.
+      // Every one of the 24 is accounted for by a model, and so none of them
+      // takes a roof from the shared bank: they carry their own.
+      expect(modelledHomes).toBe(24);
       expect(roofTotal(seen)).toBe(24 - modelledHomes);
     }
   });
@@ -168,53 +171,70 @@ describe('the skyline the renderer draws', () => {
       expect(seen.get('home:2') ?? 0).toBe(0);
       expect(roofTotal(seen)).toBe(0);
     }
-    // And the promotion off the modelled rungs, which is the one that hands a
-    // building to a body mesh and its roof to the bank. Derived from
-    // `MODEL_LEVELS` rather than written as a number, because which rung that
-    // is has moved three times now and this test is not about which one it is.
-    const last = MODEL_LEVELS.home - 1;
-    const massed = MODEL_LEVELS.home;
+    // Housing has no massed rung left to promote *to* — it is modelled all the
+    // way up — so the promotion that hands a building to a body mesh and its
+    // roof to the bank is now a commerce story. It is still worth keeping: that
+    // hand-off is the case the shared bank exists for, and commerce is where it
+    // still happens.
+    const last = MODEL_LEVELS.shop - 1;
+    const massed = MODEL_LEVELS.shop;
+    expect(massed).toBeLessThan(LEVELS);
     for (let promoted = 0; promoted <= 24; promoted++) {
       const levels = new Array<number>(LEVELS).fill(0);
       levels[last] = 24 - promoted;
       levels[massed] = promoted;
-      buildings.sync(state({ homes: 24, homeLevels: mix(...levels) }), 6 + promoted * 0.1);
+      buildings.sync(state({ shops: 24, shopLevels: mix(...levels) }), 6 + promoted * 0.1);
       const seen = counts();
-      expect(modelTotal(seen, 'home', last)).toBe(24 - promoted);
-      expect(seen.get(`home:${massed}`) ?? 0).toBe(promoted);
+      expect(modelTotal(seen, 'shop', last)).toBe(24 - promoted);
+      expect(seen.get(`shop:${massed}`) ?? 0).toBe(promoted);
       expect(roofTotal(seen)).toBe(promoted);
     }
   });
 
   it('draws a ruin on its plot, in the modelled set, and unlit', () => {
     const { buildings, counts } = scene();
-    // Twenty standing homes at housing's lowest *massed* rung, four boarded up.
-    // The ruins hold their plots, so the city still draws 24 buildings. That
-    // rung rather than a modelled one because what this is about is a ruin
-    // dropping off the modelled rungs entirely, and it is derived rather than
-    // written down because which rung it is has moved three times.
-    const massed = MODEL_LEVELS.home;
+    // Twenty standing homes at the top of the ladder, four boarded up. The
+    // ruins hold their plots, so the city still draws 24 buildings.
+    const top = LEVELS - 1;
     const standing = new Array<number>(LEVELS).fill(0);
-    standing[massed] = 20;
+    standing[top] = 20;
     buildings.sync(state({ homes: 24, homeLevels: mix(...standing), abandonedR: 4 }), 0);
     const seen = counts();
-    expect(seen.get(`home:${massed}`)).toBe(20);
-    // A ruin is drawn in the *first* rung's set, whatever the plot had climbed
-    // to — so a boarded-up plot is a darkened house rather than a darkened box,
-    // and never a darkened walk-up, tower or arcology.
-    expect(seen.get('home:0') ?? 0).toBe(0);
+    // Housing is modelled at every rung now, so the standing twenty are in the
+    // top rung's model set rather than in a body mesh — and the ruins are in
+    // the *first* rung's, whatever the plot had climbed to. A boarded-up plot
+    // is a darkened house, never a darkened pinnacle.
+    expect(modelTotal(seen, 'home', top)).toBe(20);
+    expect(seen.get(`home:${top}`) ?? 0).toBe(0);
     expect(modelTotal(seen, 'home', 0)).toBe(4);
-    for (let l = 1; l < MODEL_LEVELS.home; l++) expect(modelTotal(seen, 'home', l)).toBe(0);
-    // Twenty roofs out of the bank: the standing massed blocks. The four ruins
-    // wear their model's own roof and take nothing from it.
-    expect(roofTotal(seen)).toBe(20);
-    // And a ruin keeps its plot and loses everything else, its lit band
-    // included: twenty standing buildings can light bands, four ruins cannot.
+    for (let l = 1; l < top; l++) expect(modelTotal(seen, 'home', l)).toBe(0);
+    // And nothing here takes a roof from the bank at all, standing or ruined:
+    // every housing rung carries its own now.
+    expect(roofTotal(seen)).toBe(0);
+    // A ruin keeps its plot and loses everything else, its lit pieces included:
+    // twenty standing buildings can light them, four ruins cannot.
     const lit = seen.get('part:band') ?? 0;
     const full = new Array<number>(LEVELS).fill(0);
-    full[massed] = 24;
+    full[top] = 24;
     buildings.sync(state({ homes: 24, homeLevels: mix(...full) }), 1);
     expect(counts().get('part:band') ?? 0).toBeGreaterThan(lit);
+  });
+
+  it('takes a roof from the bank for a massed rung, and only for one', () => {
+    const { buildings, counts } = scene();
+    // The other half of the sentence above, kept where it is still true.
+    // Housing carries its own roof at every rung; commerce and industry carry
+    // theirs only at their first, so a city of level-2 shops is exactly what
+    // the bank's roofs are for.
+    const massed = MODEL_LEVELS.shop;
+    const levels = new Array<number>(LEVELS).fill(0);
+    levels[massed] = 16;
+    buildings.sync(state({ shops: 20, shopLevels: mix(...levels), abandonedC: 4 }), 0);
+    const seen = counts();
+    // Sixteen standing, four shuttered — and a ruin still holds its plot in the
+    // modelled first rung, so it wears its model's own roof and takes none.
+    expect(roofTotal(seen)).toBe(16);
+    expect(modelTotal(seen, 'shop', 0)).toBe(4);
   });
 
   it('puts out the lights on a shuttered building but leaves it standing', () => {
@@ -249,14 +269,30 @@ describe('the skyline the renderer draws', () => {
     expect(modelTotal(walkups, 'home', 1)).toBe(24);
     expect(roofTotal(walkups)).toBe(0);
 
-    // A whole district of megastructures: a mix of the two shapes left. Ten of
-    // them rather than twenty-four — each stands on a merged parcel, and a
-    // district offers about ten pairs of housing frontage.
+    // And so does every rung above them, which is the state the ladder has
+    // reached: a district of megastructures draws no roof from the bank either.
+    // Ten of them rather than twenty-four — each stands on a merged parcel, and
+    // a district offers about ten pairs of housing frontage.
     buildings.sync(state(housed(10, LEVELS - 1)), 1);
-    const towers = counts();
-    for (const l of modelRungs('home')) expect(modelTotal(towers, 'home', l)).toBe(0);
-    expect(towers.get('part:flat') ?? 0).toBeGreaterThan(0);
-    expect(towers.get('part:parapet') ?? 0).toBeGreaterThan(0);
+    const top = counts();
+    expect(modelTotal(top, 'home', LEVELS - 1)).toBe(10);
+    expect(roofTotal(top)).toBe(0);
+
+    // The two shapes the bank still has are for the zones that still mass, so
+    // that is where they are asserted. A district of level-4 works is a mix of
+    // both, which is what "more than one roof shape" was always about.
+    buildings.sync(state(making(9, LEVELS - 2)), 2);
+    const works = counts();
+    expect(
+      (works.get('part:flat') ?? 0) + (works.get('part:parapet') ?? 0),
+    ).toBeGreaterThan(0);
+    buildings.sync(
+      state({ ...making(9, LEVELS - 2), ...trading(20, LEVELS - 2) }),
+      3,
+    );
+    const both = counts();
+    expect(both.get('part:flat') ?? 0).toBeGreaterThan(0);
+    expect(both.get('part:parapet') ?? 0).toBeGreaterThan(0);
   });
 
   it('builds a street out of all five models, in every zone', () => {

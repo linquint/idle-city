@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 9, +8 shared parts, +30 models = 47 (asserted, plus the cage) | 13, +8, +35 = **56**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 8, +8 shared parts, +35 models = 51 (asserted, plus the cage) | 12, +8, +40 = **60**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -113,6 +113,21 @@ clothes.
 > generator change and a fifth frontage number the sampler has never been
 > measured for. The mesh row is the smallest of Option A's problems and it is
 > the only one this note has ever been able to price.
+>
+> A seventh and last, after housing's *fifth*: eight bodies and thirty-five
+> models, 48 -> 52, floor for a fourth zone now 60. Housing is finished — every
+> rung modelled, no body mesh at any of them — so this row stops moving for
+> that reason and the next thing to move it would be a decision rather than a
+> continuation.
+>
+> One correction to the entry above, since the full ladder is now measured
+> (`lod:calibrate` part 1f). "Modelling a rung is not uniformly expensive" was
+> right but understated: the ladder *peaks at rung 3* and comes down, because
+> above the merge the parcel count is pinned and the models get simpler as they
+> climb. The cost of modelling a zone is therefore concentrated almost entirely
+> in its **first** rung, where the buildings are. That is bad news for Option A
+> rather than good: a fourth zone's unavoidable spend is precisely the
+> expensive one, and it buys a rung nobody has asked to look at.
 
 ### Option B — a second building type on the commercial frontage
 
