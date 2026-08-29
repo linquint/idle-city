@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Zones, ZONE_MODES, type ZoneMode } from '../src/render/zones';
 import { LEVELS, MAX_DISTRICTS } from '../src/sim/config';
 import { homeCapacity, industryCapacity, shopCapacity } from '../src/sim/economy';
-import { CityLayout } from '../src/sim/layout';
+import { CityLayout, SELLABLE_PER_DISTRICT } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
 import { housedOn, making, served, trading, zoning } from './levels';
 
@@ -84,7 +84,11 @@ describe('what each mode costs', () => {
    * The instance counts the design was sized against.
    *
    * An empty 49-district city has every zoned plot unbuilt, which is the worst
-   * case for the plot pads: 4,018 of them, one InstancedMesh, one draw call.
+   * case for the plot pads: one InstancedMesh, one draw call, one instance per
+   * sellable plot. Read off SELLABLE_PER_DISTRICT rather than typed, because
+   * the number moved when the eleventh square took four industrial plots —
+   * 3,822 now against 4,018 — and a literal here would have been a second
+   * place for the land budget to live.
    * The traffic mode is the other shape entirely — it follows the road cells,
    * which are 81 a district by construction and do not move as the city builds.
    */
@@ -95,7 +99,7 @@ describe('what each mode costs', () => {
     z.set('plan');
     z.sync(empty);
     const plots = z.instances;
-    expect(plots).toBe(4_018);
+    expect(plots).toBe(SELLABLE_PER_DISTRICT * MAX_DISTRICTS);
 
     z.set('traffic');
     z.sync(empty);

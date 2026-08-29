@@ -24,6 +24,15 @@ import {
  */
 const CIVIC_TYPES = 5;
 
+/**
+ * How many types share the 2x2 culture sites: the library and the theatre.
+ *
+ * A number rather than an import for the reason CIVIC_TYPES is one — this file
+ * is the bottom of the simulation and the count is the only part of the table
+ * it needs.
+ */
+const CULTURE_TYPES = 2;
+
 export interface Coord {
   /** Global grid column. Districts tile this space, so it goes negative. */
   readonly x: number;
@@ -627,6 +636,17 @@ export interface DistrictPlan {
   readonly landmarksSmall: readonly CivicSite[];
   readonly sites: readonly CivicSite[];
   /**
+   * 2x2 culture sites: the library and the theatre, sliced after the civic six
+   * and before the city hall.
+   *
+   * A class of its own rather than a second entry on `landmarksSmall`, and the
+   * measurement is in FRONTAGE_TARGET.cultureSites: two small-landmark sites a
+   * district would have doubled the museum's allowance and taken museums-only
+   * coverage from 46% of a one-district city to 83%, which is LANDMARK_MOOD
+   * becoming a way to skip the hospital.
+   */
+  readonly cultures: readonly CivicSite[];
+  /**
    * 2x2 city hall sites, sliced *after* the civic six.
    *
    * After, and that is the whole of house rule four made concrete: `siteCapacity`
@@ -701,14 +721,21 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
   for (const site of universities) for (const c of site.cells) reserved.add(c);
   for (const site of landmarksLarge) for (const c of site.cells) reserved.add(c);
   const squares = civicSites(layout, reserved);
+  // Sliced in the order the claim has always been sliced, with culture appended
+  // *after* the city hall rather than beside the small landmark. That ordering
+  // is deliberate: it leaves the museum on square 0 and the civic six on 1..6
+  // exactly where they were, so the only thing the eleventh square moves inside
+  // a plan is the hall, the plant and the spare.
   const landmarksSmall = squares.slice(0, FRONTAGE_TARGET.landmarkSmallSites);
   const sites = squares.slice(
     FRONTAGE_TARGET.landmarkSmallSites,
     FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites,
   );
   const afterCivic = FRONTAGE_TARGET.landmarkSmallSites + FRONTAGE_TARGET.civicSites;
-  const cityHalls = squares.slice(afterCivic, afterCivic + FRONTAGE_TARGET.cityHallSites);
-  const afterHall = afterCivic + FRONTAGE_TARGET.cityHallSites;
+  const cultures = squares.slice(afterCivic, afterCivic + FRONTAGE_TARGET.cultureSites);
+  const afterCulture = afterCivic + FRONTAGE_TARGET.cultureSites;
+  const cityHalls = squares.slice(afterCulture, afterCulture + FRONTAGE_TARGET.cityHallSites);
+  const afterHall = afterCulture + FRONTAGE_TARGET.cityHallSites;
   const powerPlants = squares.slice(afterHall, afterHall + FRONTAGE_TARGET.powerSites);
   const spareSquares = squares.slice(afterHall + FRONTAGE_TARGET.powerSites);
 
@@ -731,6 +758,7 @@ export function districtPlan(layout: DistrictLayout): DistrictPlan {
     landmarksLarge,
     landmarksSmall,
     sites,
+    cultures,
     cityHalls,
     powerPlants,
     spareSquares,
@@ -759,12 +787,14 @@ function onTarget(plan: DistrictPlan): boolean {
     plan.industrial.length === FRONTAGE_TARGET.industrial &&
     plan.sites.length === FRONTAGE_TARGET.civicSites &&
     plan.landmarksSmall.length === FRONTAGE_TARGET.landmarkSmallSites &&
+    plan.cultures.length === FRONTAGE_TARGET.cultureSites &&
     plan.cityHalls.length === FRONTAGE_TARGET.cityHallSites &&
     plan.powerPlants.length === FRONTAGE_TARGET.powerSites &&
     plan.spareSquares.length ===
       FRONTAGE_TARGET.squares -
         FRONTAGE_TARGET.civicSites -
         FRONTAGE_TARGET.landmarkSmallSites -
+        FRONTAGE_TARGET.cultureSites -
         FRONTAGE_TARGET.cityHallSites -
         FRONTAGE_TARGET.powerSites &&
     plan.universities.length === FRONTAGE_TARGET.universitySites &&
@@ -780,7 +810,7 @@ function onTarget(plan: DistrictPlan): boolean {
  * probability of exhausting them is 3.9e-8 per district, or about 2e-6 across a
  * full 49-district city — measured over 20,000 plans, not assumed.
  */
-export const FRONTAGE_MAX_ATTEMPTS = 512;
+export const FRONTAGE_MAX_ATTEMPTS = 1_024;
 
 export function planFor(seed: number): DistrictPlan {
   for (let i = 0; i < FRONTAGE_MAX_ATTEMPTS; i++) {
@@ -913,6 +943,7 @@ export const SPARE_PLOTS_PER_DISTRICT =
   (FRONTAGE_TARGET.squares -
     FRONTAGE_TARGET.civicSites -
     FRONTAGE_TARGET.landmarkSmallSites -
+    FRONTAGE_TARGET.cultureSites -
     FRONTAGE_TARGET.cityHallSites -
     FRONTAGE_TARGET.powerSites) *
     4;
@@ -940,6 +971,7 @@ export const CIVIC_SITES_PER_DISTRICT = FRONTAGE_TARGET.civicSites;
 export const UNIVERSITY_SITES_PER_DISTRICT = FRONTAGE_TARGET.universitySites;
 export const LANDMARK_LARGE_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkLargeSites;
 export const LANDMARK_SMALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.landmarkSmallSites;
+export const CULTURE_SITES_PER_DISTRICT = FRONTAGE_TARGET.cultureSites;
 export const CITY_HALL_SITES_PER_DISTRICT = FRONTAGE_TARGET.cityHallSites;
 export const POWER_SITES_PER_DISTRICT = FRONTAGE_TARGET.powerSites;
 
@@ -1859,6 +1891,8 @@ interface DistrictPlots {
   readonly landmarksLarge: Coord[];
   /** Lower-left plot of each 2x2 landmark site, in site order. */
   readonly landmarksSmall: Coord[];
+  /** Lower-left plot of each 2x2 culture site, in site order. */
+  readonly cultures: Coord[];
   /** Lower-left plot of each 2x2 city hall site, in site order. */
   readonly cityHalls: Coord[];
   /** Lower-left plot of each 2x2 power plant site, in site order. */
@@ -1924,6 +1958,7 @@ function placeDistrict(index: number, z: Zoning): DistrictPlots {
     universities: plan.universities.map((site) => toGlobal(site.cell)),
     landmarksLarge: plan.landmarksLarge.map((site) => toGlobal(site.cell)),
     landmarksSmall: plan.landmarksSmall.map((site) => toGlobal(site.cell)),
+    cultures: plan.cultures.map((site) => toGlobal(site.cell)),
     cityHalls: plan.cityHalls.map((site) => toGlobal(site.cell)),
     powerPlants: plan.powerPlants.map((site) => toGlobal(site.cell)),
     spareSquares: plan.spareSquares.map((site) => toGlobal(site.cell)),
@@ -1988,6 +2023,14 @@ export class CityLayout {
    */
   private readonly _landmarksLarge: Coord[] = [];
   private readonly _landmarksSmall: Coord[] = [];
+  /**
+   * Culture sites, one a district, appended exactly as the others are.
+   *
+   * Its own list rather than a second small-landmark entry, so the museum's
+   * allowance does not double — see FRONTAGE_TARGET.cultureSites, which carries
+   * the coverage measurement that decided it.
+   */
+  private readonly _cultures: Coord[] = [];
   /**
    * City hall sites, one per district and only ever one of them built on.
    *
@@ -2105,7 +2148,8 @@ export class CityLayout {
     for (const list of [
       this._residential, this._commercial, this._industrial, this._scrub,
       this._civic, this._universities, this._landmarksLarge, this._landmarksSmall,
-      this._cityHalls, this._powerPlants, this._spareSquares, this._parks, this._spare,
+      this._cultures, this._cityHalls, this._powerPlants, this._spareSquares,
+      this._parks, this._spare,
     ]) {
       list.length = 0;
     }
@@ -2157,6 +2201,7 @@ export class CityLayout {
     this._universities.push(...plan.universities.map((site) => toGlobal(site.cell)));
     this._landmarksLarge.push(...plan.landmarksLarge.map((site) => toGlobal(site.cell)));
     this._landmarksSmall.push(...plan.landmarksSmall.map((site) => toGlobal(site.cell)));
+    this._cultures.push(...plan.cultures.map((site) => toGlobal(site.cell)));
     this._cityHalls.push(...plan.cityHalls.map((site) => toGlobal(site.cell)));
     this._powerPlants.push(...plan.powerPlants.map((site) => toGlobal(site.cell)));
     this._spareSquares.push(...plan.spareSquares.map((site) => toGlobal(site.cell)));
@@ -2346,6 +2391,32 @@ export class CityLayout {
 
   get landmarkSmallSites(): number {
     return this._landmarksSmall.length;
+  }
+
+  /**
+   * Lower-left plot of the i-th culture site. One a district, so the i-th is the
+   * i-th district's — and the library and the theatre interleave across them the
+   * way the civic types interleave across theirs. See `cultureSiteFor`.
+   */
+  cultureSiteCell(i: number): Coord {
+    return this._cultures[i] as Coord;
+  }
+
+  get cultureSites(): number {
+    return this._cultures.length;
+  }
+
+  /**
+   * Which culture site the i-th building of a kind stands on.
+   *
+   * `civicSiteFor` in miniature, and the same rule for the same reason: a fixed
+   * interleave is the only assignment that survives a reload, because the save
+   * holds a count and the position has to fall out of the ordinal. Two types
+   * over one site a district, so each gets half a district's worth — culture is
+   * scarcer than a museum by construction.
+   */
+  cultureSiteFor(offset: number, i: number): Coord {
+    return this.cultureSiteCell(i * CULTURE_TYPES + offset);
   }
 
   /**

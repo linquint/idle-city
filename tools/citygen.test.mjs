@@ -428,15 +428,18 @@ check(`frontage: districts land on ${FRONTAGE_TARGET.residential}/${FRONTAGE_TAR
       `seed ${i}: ${plan.universities.length} university sites`,
     );
     // Every square the district reserves, not only the ones something stands
-    // on: the landmark sites and the spare squares are land the sale lists
-    // never saw, and leaving them out of this sum is what would let the budget
-    // drift without anything noticing.
+    // on: the landmark sites, culture's own square and the spare squares are
+    // land the sale lists never saw, and leaving them out of this sum is what
+    // would let the budget drift without anything noticing. It is also what
+    // caught the eleventh square arriving — this sum read 140 of 144 until
+    // `cultures` joined it.
     const accounted =
       plan.residential.length +
       plan.commercial.length +
       plan.industrial.length +
       (plan.sites.length +
         plan.landmarksSmall.length +
+        plan.cultures.length +
         plan.cityHalls.length +
         plan.powerPlants.length +
         plan.spareSquares.length) *

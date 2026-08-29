@@ -35,7 +35,11 @@ import {
   shopCapacity,
   siteCapacity,
 } from '../src/sim/economy';
-import { BUILDABLE_PARKS_PER_DISTRICT } from '../src/sim/layout';
+import {
+  BUILDABLE_PARKS_PER_DISTRICT,
+  LANDMARK_LARGE_SITES_PER_DISTRICT,
+  LANDMARK_SMALL_SITES_PER_DISTRICT,
+} from '../src/sim/layout';
 import { load, migrate, save, SAVE_KEY, secondsAway } from '../src/sim/save';
 import { Game } from '../src/sim/game';
 import { createState, SAVE_VERSION, type GameState } from '../src/sim/state';
@@ -792,11 +796,15 @@ describe('landmarks across a save', () => {
     expect(kept.museums).toBe(3);
     expect(kept.stadiums).toBe(2);
 
-    // One of each size a district, so a doctored save gets the land's answer.
+    // Two small sites and one large a district, so a doctored save gets the
+    // land's answer. Read off the constants rather than typed, because the
+    // small count moved when culture took the eleventh square — see
+    // FRONTAGE_TARGET.landmarkSmallSites.
     const stuffed = migrate({ homes: 9, districts: 2, museums: 900, stadiums: 900 }, 0)!;
     expect(stuffed.museums).toBe(landmarkSiteCapacity(stuffed, 'museum'));
     expect(stuffed.stadiums).toBe(landmarkSiteCapacity(stuffed, 'stadium'));
-    expect(stuffed.museums).toBe(2);
+    expect(stuffed.museums).toBe(2 * LANDMARK_SMALL_SITES_PER_DISTRICT);
+    expect(stuffed.stadiums).toBe(2 * LANDMARK_LARGE_SITES_PER_DISTRICT);
   });
 
   it('survives a round trip with the rest of the city', () => {

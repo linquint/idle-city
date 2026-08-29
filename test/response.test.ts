@@ -26,6 +26,7 @@ import {
   happinessTarget,
   missesDeadline,
   parkCapacity,
+  plotsOf,
   resolvesAt,
   responseResolvesAt,
   responseSeconds,
@@ -266,15 +267,33 @@ describe('the police response', () => {
 });
 
 describe('calls under the clock', () => {
+  /**
+   * A city with a crime problem and nothing else wrong.
+   *
+   * `served()` and the depots are here for the reason `test/fire.test.ts` gives
+   * for its own fixture: an unserved city of this size collapses inside the run
+   * — happiness falls, occupancy hits its floor, residents go from 3,840 to 4 —
+   * and `crimePressure` reads residents, so what would be measured is the
+   * collapse rather than the calls. The police are then taken back out by
+   * `policed`, which is the one shortfall these tests are about.
+   */
   const city = (patch: Partial<GameState> = {}): GameState =>
     state({
       ...built(240, 100, 40, 1),
+      ...served(),
       districts: 12,
+      depots: 40,
+      depotStaff: 1,
       occupancyR: 1,
       occupancyC: 1,
       occupancyI: 1,
       happiness: 1,
-      cash: 0,
+      // Enough to pay the payroll. `served()` is forty of everything and
+      // `integrateStaffing` decays a type's staffing against unpaid wages, so a
+      // bankrupt city loses its *fire* coverage over a long run and starts
+      // losing buildings — which would make "a missed call destroys nothing"
+      // a test about arrears. Auto-development is still off: it needs a hall.
+      cash: 1e12,
       ...patch,
     });
 
@@ -399,9 +418,18 @@ describe('calls under the clock', () => {
     const game = new Game(policed({ ...city(), fire: 40, fireStaff: 1 }, 0));
     const before = { ...game.state };
     for (let i = 0; i < 40_000; i++) game.advance(0.1);
-    expect(game.state.homes).toBe(before.homes);
-    expect(game.state.shops).toBe(before.shops);
-    expect(game.state.industry).toBe(before.industry);
+    // Plots, not buildings. A city left running promotes, and a promotion past
+    // MERGE_LEVEL turns two buildings into one — so `homes` falls while the
+    // land it stands on does not. What a missed call must never do is take a
+    // plot off the books, which is what `demolish` does and what this asserts.
+    for (const kind of ['home', 'shop', 'industry'] as const) {
+      expect(plotsOf(game.state, kind)).toBe(plotsOf(before, kind));
+    }
+    // And calls really did come in over the run, so the assertion above is
+    // about a city that had them rather than one that never did. The cursor
+    // rather than the open list: a call resolves, so what is open at the
+    // instant the loop stops is a coin toss.
+    expect(game.state.callCursor).toBeGreaterThan(0);
   });
 });
 

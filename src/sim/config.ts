@@ -146,7 +146,7 @@ export const ROAD_CELLS_PER_DISTRICT = DISTRICT_SPAN * DISTRICT_SPAN - TARGET_PL
 export const FRONTAGE_TARGET = {
   residential: 24,
   commercial: 45,
-  industrial: 13,
+  industrial: 9,
   /**
    * 2x2 quads a district claims, all of them reserved before the build lists
    * are drawn. Six go to civic, one to a small landmark, one to the city hall
@@ -154,11 +154,28 @@ export const FRONTAGE_TARGET = {
    * squares something stands on is what keeps `homeCapacity` independent of
    * build order. There is nothing spare in it any more.
    */
-  squares: 9,
+  squares: 11,
   /** 2x2 civic sites per district. 6 x 4 = 24 plots, mostly dead interior. */
   civicSites: 6,
   /** 2x2 landmark sites per district, taken from the same claim. */
   landmarkSmallSites: 1,
+  /**
+   * 2x2 culture sites per district: the library and the theatre.
+   *
+   * A class of its own rather than a second small-*landmark* site, and that is
+   * the whole of what keeps LANDMARKS' calibration standing. Two small-landmark
+   * sites a district would have doubled the museum's allowance, and a museum is
+   * an area-of-effect: measured, museums alone would have covered 83% of a
+   * one-district city and 64% of a full map against the 46% and 47% the reach
+   * was set to. LANDMARK_MOOD is deliberately worth less than the cheapest
+   * service weight so that a landmark cannot be a way to skip the hospital, and
+   * a museum that covered two thirds of the map would have been exactly that.
+   *
+   * One site a district, and the library and the theatre interleave on it the
+   * way the civic types interleave on theirs — so culture is scarcer than a
+   * museum by construction, which is the right shape for the cheap tier.
+   */
+  cultureSites: 1,
   /**
    * 2x2 city hall sites per district, sliced after the civic six.
    *
@@ -811,8 +828,22 @@ export const SHOP_GROWTH = DISTRICT_FILL_MULTIPLE ** (1 / FRONTAGE_TARGET.commer
  * auto-develop, 65 greedy — so the demand loop is still what gates the zone
  * rather than the price.
  */
-export const INDUSTRY_BASE = 120;
-export const INDUSTRY_GROWTH = 1.14;
+/**
+ * 120 and 1.14 until the eleventh square, and both scaled with the land.
+ *
+ * A works on the re-cut district does 13/9 of what a works did, so it costs
+ * 13/9 of what a works cost: 120 x 13/9 is 173. And the *curve* has to scale
+ * too, or a district's industry would get cheaper for having less of it —
+ * `ZONE_FILL_MULTIPLE.industry` is `INDUSTRY_GROWTH ** FRONTAGE_TARGET.industrial`,
+ * so the growth is re-solved to keep that product where it was: 1.14^13 is
+ * 5.49 and 1.208^9 is 5.48.
+ *
+ * Measured end to end: filling one district of industry costs 3,724 against
+ * 3,852, which is 3% and inside the noise of a cost curve that compounds over
+ * plots taken.
+ */
+export const INDUSTRY_BASE = 173;
+export const INDUSTRY_GROWTH = 1.208;
 
 /**
  * Each industrial building adds this share of base income.
@@ -1020,9 +1051,30 @@ export const DEMAND_SCALE = 300;
  */
 export const WORKING_SHARE = 0.55;
 
-/** Jobs per built plot. The two numbers ZONE_SHARE was derived from. */
+/**
+ * Jobs per built plot. The two numbers ZONE_SHARE was derived from.
+ *
+ * Industry was 20 and is 29, and that is the eleventh square being paid for
+ * rather than a balance change wanted for its own sake. `FRONTAGE_TARGET`
+ * dropped industrial frontage from 13 plots to 9 to buy culture its site, and
+ * industry is the densest employer in the game — so at 20 a district's whole
+ * job supply fell from 620 to 540 against 53 workers, `demandTargets.r` is
+ * `(jobs - reachableWorkers) / scale`, and residential demand pinned at -1 for
+ * 25 minutes of a 24-hour run and 1,244 of a 48-hour one.
+ *
+ * 29 is 20 x 13/9, which is the whole of the derivation: the same jobs on less
+ * land. Measured, a district supplies 621 against the 620 it supplied before,
+ * and `npm run economy:calibrate` pins nothing under any policy at 12, 24 or 48
+ * hours — see tools/phase7.calibrate.mjs section 0c, which carries the reading
+ * that forced it.
+ *
+ * ZONE_SHARE itself does not move, and could not: it is the *sampler's* input
+ * and the frontage tuple is its output, so a change there changes the tuple it
+ * was supposed to fix. Once the land is fixed, density is the only free
+ * variable — which is what re-solving the equilibrium at 24/45/9 means.
+ */
 export const JOBS_PER_COMMERCIAL = 8;
-export const JOBS_PER_INDUSTRIAL = 20;
+export const JOBS_PER_INDUSTRIAL = 29;
 
 /**
  * What one commercial or industrial *building* is worth to the labour market at
@@ -1203,7 +1255,13 @@ export const SHOP_TRIPS = LEVEL_FOOTPRINT.map(
  * tools/economy.calibrate.mjs, where industrial demand pins under no policy.
  */
 export const SUPPLY_DRAW = 4;
-export const INDUSTRIAL_OUTPUT = 9;
+/**
+ * 9 until the eleventh square, and 13 for exactly the reason
+ * JOBS_PER_INDUSTRIAL is 29: `9 x 13/9` is 13, so nine plots make what thirteen
+ * made. Measured, a district draws 240 and supplies 117 — the same 117 it
+ * supplied at 13 plots x 9, so the goods cycle's ratio did not move at all.
+ */
+export const INDUSTRIAL_OUTPUT = 13;
 
 /**
  * Goods one shop draws and one works makes, per level.
@@ -1446,7 +1504,7 @@ export const ZONE_FLOOR = {
  * pool from the back and a pool whose size moved with the industrial count would
  * move every commercial plot in the district each time industry surveyed.
  */
-export const INDUSTRY_RESERVE = 9;
+export const INDUSTRY_RESERVE = FRONTAGE_TARGET.industrial - ZONE_FLOOR.industry;
 
 /**
  * The demand a zone needs before the surveyor will zone it more land.
@@ -2288,7 +2346,7 @@ export interface Landmark {
  */
 export const LANDMARKS: readonly Landmark[] = [
   { key: 'museum',  name: 'Museums',  buildLabel: 'Open museum',   base: 4_000,  growth: 1.6, span: 2, reach: 24 },
-  { key: 'stadium', name: 'Stadiums', buildLabel: 'Build stadium', base: 12_000, growth: 1.7, span: 3, reach: 38 },
+  { key: 'stadium', name: 'Stadiums', buildLabel: 'Build stadium', base: 12_000, growth: 1.7, span: 3, reach: 34 },
 ];
 
 /**
