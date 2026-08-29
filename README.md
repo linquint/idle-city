@@ -297,8 +297,11 @@ box.
 - Industry is the anti-tower — wide, low and flat, with one stack. Height is how
   the housing tiers say "bigger", so industry competes on footprint instead.
 - Civic buildings get 2x2 plots, which is room for a silhouette each rather than
-  three colours of the same box: the hospital is pale with a tower, the police
-  station low and dark, the fire station squat with a lit bay-door face.
+  three colours of the same box: the police station is low and dark, the fire
+  station squat with a lit bay-door face. The hospital goes further and is the
+  one type composed rather than massed — a ward slab and a lower treatment wing
+  in an L, with a helipad, plant and a painted cross on the roofs the play
+  camera actually looks down at.
 - Land nobody will build on is drawn as courtyard, not left as a hole — block
   interiors, and the civic sites still standing empty.
 
