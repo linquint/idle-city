@@ -138,9 +138,25 @@ const totals = (rows) => ({
   shadowDrawn: rows.filter((r) => r.count > 0 && r.shadow).length,
 });
 
-/** The whole city, standing in one scene, exactly as `View` assembles it. */
-function stand(districts, level) {
+/**
+ * The whole city, standing in one scene, exactly as `View` assembles it.
+ *
+ * `housingAt` moves the housing cohort off `level` without moving the other two
+ * zones, which is what part 1c needs to measure the promotion in isolation. It
+ * is only legal between levels of the same footprint — the count `city` fitted
+ * is a count of *buildings*, and a rung that stands on two plots would need
+ * half as many — so it is used for 0 -> 1 and asserted rather than trusted.
+ */
+function stand(districts, level, housingAt = level) {
   const state = city(districts, level);
+  if (housingAt !== level) {
+    if ((LEVEL_FOOTPRINT[housingAt] ?? 1) !== (LEVEL_FOOTPRINT[level] ?? 1)) {
+      throw new Error(`levels ${level} and ${housingAt} have different footprints`);
+    }
+    const levels = new Array(LEVELS).fill(0);
+    levels[housingAt] = state.homes;
+    state.homeLevels = levels;
+  }
   const root = new THREE.Scene();
   const layout = new CityLayout();
   const ground = new Ground(root, layout);
@@ -203,8 +219,11 @@ console.log('');
  * Part 1 stands the city at level 4, where there is not a single first-rung
  * building in it — so it says nothing at all about the ten models. The
  * case that pays for them is the opposite one: a player who annexes widely and
- * promotes little has a 49-district city of nothing but the modelled rungs, and
- * that is the most modelled geometry the game can ever have standing.
+ * promotes little has a 49-district city of nothing but the modelled rungs,
+ * which is the most *buildings* the game can ever have standing as models. Part
+ * 1c is the other half: the same city with its housing promoted one rung, which
+ * is the most modelled geometry, because a walk-up is a bigger model than the
+ * house it replaces.
  *
  * The comparison is against what that same city used to be: one box per
  * building, one roof out of the shared bank. That is not a state this build can
@@ -249,6 +268,229 @@ console.log('what modelling every zone\'s first rung costs\n');
   console.log(`  which is ${fixed((100 * t.tris) / before - 100, 1, 1)}% more, for 9 draw calls and fifteen silhouettes.`);
   console.log('  It is also worth reading against part 1, which is the *other* worst case:');
   console.log('  a level-4 city has half the buildings and dresses them to the teeth.');
+}
+console.log('');
+
+// ------------------------------------------------------- part 1c
+
+/**
+ * What modelling housing's *second* rung costs, measured as the swap it is.
+ *
+ * The question part 1b cannot answer, and the one the fourth +4 on
+ * BUILDING_MESH_BUDGET has to be argued against: a district that promotes its
+ * housing does not gain buildings, it trades them. A plot holds one building,
+ * so 1,176 houses become 1,176 walk-ups — and what the promotion costs is the
+ * difference between the two models rather than the whole of the second one.
+ *
+ * Housing alone moves, with commerce and industry left on their first rung.
+ * That is the city the trade is visible in: promoting all three at once would
+ * mix in the massed rungs the other two climb to, and the reading would be
+ * about those instead.
+ */
+console.log("what modelling housing's second rung costs\n");
+{
+  const houses = stand(MAX_DISTRICTS, 0);
+  const walkups = stand(MAX_DISTRICTS, 0, 1);
+  const homeRows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:home:${level}:`));
+  const sum = (rows, key) => rows.reduce((n, r) => n + r[key], 0);
+
+  const before = homeRows(houses.root, 0);
+  const after = homeRows(walkups.root, 1);
+  const nBefore = sum(before, 'count');
+  const nAfter = sum(after, 'count');
+  const tBefore = sum(before, 'tris');
+  const tAfter = sum(after, 'tris');
+  const whole = totals(submitted(houses.root)).tris;
+  const wholeAfter = totals(submitted(walkups.root)).tris;
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce and industry at level 1 throughout`);
+  console.log('');
+  console.log('    housing            buildings     triangles      each');
+  console.log(
+    `    ${'level 1, houses'.padEnd(19)}${thou(nBefore, 9)}${thou(tBefore, 14)}${thou(tBefore / Math.max(1, nBefore), 10)}`,
+  );
+  console.log(
+    `    ${'level 2, walk-ups'.padEnd(19)}${thou(nAfter, 9)}${thou(tAfter, 14)}${thou(tAfter / Math.max(1, nAfter), 10)}`,
+  );
+  console.log('');
+  console.log(`  The same ${nBefore.toLocaleString('en-GB')} plots, so the promotion is a swap and not an addition:`);
+  console.log(`  ${thou(tAfter - tBefore, 1)} triangles more, which is ${fixed((100 * tAfter) / tBefore - 100, 1, 1)}% on the housing and`);
+  console.log(`  ${fixed((100 * wholeAfter) / whole - 100, 1, 1)}% on the whole scene — ${thou(whole, 1)} to ${thou(wholeAfter, 1)}.`);
+  console.log('');
+  console.log('  Massed, this rung was a box and a roof: 24 triangles a building, so the');
+  console.log(`  rung the player promotes to went from ${thou(nAfter * 24, 1)} triangles to`);
+  console.log(`  ${thou(tAfter, 1)} for five silhouettes and 4 draw calls. That is the price,`);
+  console.log('  and it buys the one promotion every player makes.');
+}
+console.log('');
+
+// ------------------------------------------------------- part 1d
+
+/**
+ * What the towers cost, which is the one that had to be looked at before it was
+ * spent rather than after.
+ *
+ * They are the largest models in the city by a wide margin — 67 to 241 boxes
+ * against a house's 17 to 23 — and the arithmetic that makes them affordable is
+ * the merge rather than the models: a tower stands on *two* plots, so a district
+ * that has climbed to them holds about half as many buildings as one of walk-
+ * ups. Whether the halving covers a model five times the size is the question,
+ * and it is a measurement rather than an opinion.
+ *
+ * Housing alone moves again, for the reason part 1c gives. `city` is asked for a
+ * level-2 city directly here rather than patched, because this rung *does*
+ * change the building count — the footprint is 2 — and `city` is what knows how
+ * to fit a cohort to the land.
+ */
+console.log('what the towers cost, and what the merge pays back\n');
+{
+  const walkups = stand(MAX_DISTRICTS, 0, 1);
+  const towers = stand(MAX_DISTRICTS, 2);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:home:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(walkups.root, 1);
+  const after = rows(towers.root, 2);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+
+  console.log(`  districts ${MAX_DISTRICTS}, housing alone climbing`);
+  console.log('');
+  console.log('    housing            buildings     triangles      each');
+  console.log(
+    `    ${'level 2, walk-ups'.padEnd(19)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 3, towers'.padEnd(19)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log('    tower                     instances     triangles');
+  for (const r of after) {
+    console.log(`    ${r.name.padEnd(25)}${thou(r.count, 10)}${thou(r.tris, 14)}`);
+  }
+  console.log('');
+  const ratio = tA / Math.max(1, tB);
+  console.log(`  A tower is ${fixed(tA / Math.max(1, nA) / (tB / Math.max(1, nB)), 1, 2)}x the model a walk-up is, and the merge`);
+  console.log(`  halves the count: ${nB.toLocaleString('en-GB')} walk-ups become ${nA.toLocaleString('en-GB')} towers. Net, the rung`);
+  console.log(`  costs ${fixed(ratio, 1, 2)}x what the one below it does — ${thou(tA - tB, 1)} triangles.`);
+  console.log('');
+  console.log('  The balcony slab is the outlier and worth naming: 241 boxes, 120 of them');
+  console.log('  balcony rails that are a tenth of a unit across. From the orbit camera');
+  console.log('  they are sub-pixel, which is the silhouette-geometry case `ModelMeshes`');
+  console.log('  sets out and does not build. This is the number to re-read when it is.');
+}
+console.log('');
+
+// ------------------------------------------------------- part 1e
+
+/**
+ * The arcologies, which is the rung where the swap stops costing entirely.
+ *
+ * Both rungs stand on a merged parcel, so unlike every promotion below it this
+ * one does not change the building count at all: the same 588 parcels, a
+ * different model on each. That makes it the cleanest of these comparisons —
+ * whatever the difference is, it is the models and nothing else.
+ */
+console.log('what the arcologies cost against the towers\n');
+{
+  const towers = stand(MAX_DISTRICTS, 2);
+  const arcologies = stand(MAX_DISTRICTS, 3);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:home:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(towers.root, 2);
+  const after = rows(arcologies.root, 3);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+  const wholeB = totals(submitted(towers.root)).tris;
+  const wholeA = totals(submitted(arcologies.root)).tris;
+
+  console.log(`  districts ${MAX_DISTRICTS}, housing alone climbing, commerce and industry at level 1`);
+  console.log('');
+  console.log('    housing            buildings     triangles      each');
+  console.log(
+    `    ${'level 3, towers'.padEnd(19)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 4, arcologies'.padEnd(19)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log('    arcology                  instances     triangles');
+  for (const r of after) {
+    console.log(`    ${r.name.padEnd(25)}${thou(r.count, 10)}${thou(r.tris, 14)}`);
+  }
+  console.log('');
+  console.log(`  Same ${nA.toLocaleString('en-GB')} parcels either way — both rungs merge — so this is the models`);
+  console.log(`  and nothing else: ${thou(tA - tB, 1)} triangles, ${fixed((100 * tA) / Math.max(1, tB) - 100, 1, 1)}% on the housing and`);
+  console.log(`  ${fixed((100 * wholeA) / Math.max(1, wholeB) - 100, 1, 1)}% on the whole scene, ${thou(wholeB, 1)} to ${thou(wholeA, 1)}.`);
+  console.log('');
+  console.log('  Which is the answer to the question the towers raised, and it came back');
+  console.log('  better than the question assumed: a rung of models above the merge is not');
+  console.log('  another 2x, it is whatever the two models differ by — and here that is');
+  console.log('  *negative*. The towers cost what they did because they replaced twice as');
+  console.log('  many smaller buildings. From the merge up the count is fixed, so the');
+  console.log('  fourth rung of housing is the first one in this whole sequence that is');
+  console.log('  free: five more silhouettes, four more draw calls, and slightly fewer');
+  console.log('  triangles than the rung it stands above.');
+}
+console.log('');
+
+// ------------------------------------------------------- part 1f
+
+/**
+ * The whole housing ladder, now that every rung of it is modelled.
+ *
+ * The five parts before this each measured one step. This is the shape they
+ * make together, and it is the number to quote when someone asks what modelling
+ * housing cost: the same district, promoted rung by rung, from the city a new
+ * player builds to the one a finished city is.
+ *
+ * Read it as two halves. Below the merge, promoting is *cheaper per building*
+ * and there are twice as many of them; above it the count is pinned at the
+ * parcel and a rung is worth only the difference between two models. That is
+ * why the curve turns over rather than running away.
+ */
+console.log('the whole housing ladder, rung by rung\n');
+{
+  const rung = (level) => {
+    const scene = level <= 1 ? stand(MAX_DISTRICTS, 0, level) : stand(MAX_DISTRICTS, level);
+    const rows = submitted(scene.root).filter((r) => r.name.startsWith(`model:home:${level}:`));
+    return {
+      n: rows.reduce((a, r) => a + r.count, 0),
+      tris: rows.reduce((a, r) => a + r.tris, 0),
+      whole: totals(submitted(scene.root)).tris,
+    };
+  };
+  const names = ['houses', 'walk-ups', 'towers', 'arcologies', 'pinnacles'];
+  const all = names.map((_, l) => rung(l));
+
+  console.log(`  districts ${MAX_DISTRICTS}, housing alone climbing, commerce and industry at level 1`);
+  console.log('');
+  console.log('    rung                buildings     triangles      each      massed');
+  all.forEach((r, l) => {
+    console.log(
+      `    ${`${l + 1}. ${names[l]}`.padEnd(20)}${thou(r.n, 9)}${thou(r.tris, 14)}${thou(r.tris / Math.max(1, r.n), 10)}${thou(r.n * 24, 12)}`,
+    );
+  });
+  console.log('');
+  const first = all[0];
+  const last = all[all.length - 1];
+  console.log(`  Peak is rung 3 at ${thou(all[2].tris, 1)}; the ladder ends *below* it, at`);
+  console.log(`  ${thou(last.tris, 1)} on ${last.n.toLocaleString('en-GB')} buildings. Massed, the top rung was`);
+  console.log(`  ${thou(last.n * 24, 1)} triangles, so the five silhouettes there cost ${thou(last.tris - last.n * 24, 1)}.`);
+  console.log('');
+  console.log('  The shape worth remembering: modelling a rung costs in proportion to how');
+  console.log('  many buildings stand on it, and the merge halves that at rung 3. So the');
+  console.log('  expensive half of this ladder is the bottom half, which is also the half');
+  console.log('  a player spends the most time looking at — the spend and the value line');
+  console.log('  up, which is not something that had to be true.');
 }
 console.log('');
 

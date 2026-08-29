@@ -1,0 +1,43 @@
+# Exported by three-d-stage
+newmtl wall-concrete
+Kd 0.5841 0.6376 0.7011
+Ks 0.2000 0.2000 0.2000
+Ns 36
+d 1.0000
+
+newmtl trim-grey
+Kd 0.3419 0.3564 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl glazing
+Kd 0.0273 0.0482 0.0908
+Ks 0.2000 0.2000 0.2000
+Ns 144
+d 1.0000
+
+newmtl window-light
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+
+newmtl roof-plant
+Kd 0.0887 0.1248 0.2016
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl door-timber
+Kd 0.1470 0.0612 0.0319
+Ks 0.2000 0.2000 0.2000
+Ns 28
+d 1.0000
+
+newmtl forecourt-paving
+Kd 0.2747 0.2542 0.2016
+Ks 0.2000 0.2000 0.2000
+Ns 20
+d 1.0000
+

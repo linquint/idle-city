@@ -4,6 +4,7 @@ import {
   CELL,
   CIVIC_SERVICES,
   LANDMARKS,
+  LEVEL_FOOTPRINT,
   LEVELS,
   SEED,
   SERVICES,
@@ -57,6 +58,8 @@ import {
   MODEL_LIT_MAX,
   MODEL_STYLES,
   MODELLED_KINDS,
+  type ModelExtent,
+  modelledAt,
   ModelMeshes,
   QUARTER,
   modelFacing,
@@ -133,23 +136,38 @@ const HEIGHT_JITTER_MAX = 1.24;
 /**
  * Whether a building is drawn from a model rather than massed from the ladder.
  *
- * The first rung of every zone, plus the ruins, which are drawn in that rung's
- * set because a boarded-up plot still holds a plot. Everything above it is a
- * box with dressing on it.
+ * The first rung of every zone and the second of housing, plus the ruins, which
+ * are drawn in the first rung's set because a boarded-up plot still holds a
+ * plot. Everything above is a box with dressing on it.
  *
- * It takes the kind as well as the level even though only the level decides
- * today. That is not ceremony and it is not a type guard either: narrowing on
- * the zone would make the massed branch unreachable, because every `ZoneKind`
- * is now a `ModelledKind`. What keeps a fourth zone honest is `MODELS` in
- * `modelled.ts`, which is a `Record` over `ZoneKind` — a zone arriving without
- * a table of models is a type error there, where the tables are.
+ * The kind decides as much as the level now — housing models two rungs and the
+ * other two zones model one — so this delegates the "how far up" half to
+ * `modelledAt` in `modelled.ts`, where the tables that answer it live. A zone
+ * arriving without a table of models is a type error there.
+ *
+ * A ruin is level -1 and is folded onto the first rung here rather than in
+ * `modelledAt`, because that is a fact about how `Buildings` draws a boarded-up
+ * plot rather than about which rungs have models. See `modelLevel`.
  *
  * A predicate rather than a field on `LevelShape`, because what it selects is
  * not a *shape* — it is which of two write paths a building takes, and the two
  * have different meshes, different bookkeeping and different jitter.
  */
 const modelled = (kind: ZoneKind, level: number): boolean =>
-  level <= 0 && (MODELLED_KINDS as readonly string[]).includes(kind);
+  (MODELLED_KINDS as readonly string[]).includes(kind) &&
+  modelledAt(kind as ModelledKind, Math.max(0, level));
+
+/**
+ * Which rung's models draw a building at this level.
+ *
+ * The level itself, except for a ruin: level -1 is drawn from the first rung's
+ * set, because a boarded-up plot is still a plot and the alternative is a mesh
+ * set that exists only to draw dark buildings. A ruined walk-up therefore
+ * reverts to a house on the way down, which is the one visible consequence and
+ * the right one — a ruin is a plot the city lost, and losing the building it
+ * had climbed to is what that should look like.
+ */
+const modelLevel = (level: number): number => Math.max(0, level);
 
 /**
  * Per-building height jitter for a model, deliberately a fifth of a block's.
@@ -172,13 +190,15 @@ const MODEL_HEIGHT_JITTER_MAX = 1.06;
  * and binds on industry, which is the widest thing on the map and has the least
  * room to grow.
  */
-const modelWidthJitter = (kind: ModelledKind, slot: number): number =>
-  Math.min(widthJitter(slot), cap(kind, slot));
-const modelDepthJitter = (kind: ModelledKind, slot: number): number =>
-  Math.min(depthJitter(slot), cap(kind, slot));
+const modelWidthJitter = (kind: ModelledKind, level: number, slot: number): number =>
+  Math.min(widthJitter(slot), cap(kind, level, slot));
+const modelDepthJitter = (kind: ModelledKind, level: number, slot: number): number =>
+  Math.min(depthJitter(slot), cap(kind, level, slot));
 
-const cap = (kind: ModelledKind, slot: number): number =>
-  MODEL_JITTER_MAX[kind][modelStyleOf(kind, slot)] as number;
+const cap = (kind: ModelledKind, level: number, slot: number): number =>
+  (MODEL_JITTER_MAX[kind][modelLevel(level)] as readonly number[])[
+    modelStyleOf(kind, slot)
+  ] as number;
 
 /**
  * Which way a modelled building turns to face its street, in quarter turns.
@@ -192,8 +212,19 @@ const MODEL_TURN_SALT: Readonly<Record<ModelledKind, number>> = {
   industry: 0x2d,
 };
 
-const modelTurn = (kind: ModelledKind, x: number, z: number, slot: number): number =>
-  modelFacing(x, z, variety(slot, MODEL_TURN_SALT[kind]));
+/**
+ * `alongX` for a placement, or null where the building turns freely.
+ *
+ * A merged parcel is oblong and a model built to it has to lie along it — see
+ * `modelFacing`. `plots` rather than `parcelPlots` is the question, because
+ * what constrains the turn is the land the building *covers* now: a level-2
+ * walk-up standing on a pair that has not merged yet is still on one plot and
+ * still turns freely.
+ */
+const modelAxis = (at: Placement): boolean | null => (at.plots > 1 ? at.alongX : null);
+
+const modelTurn = (kind: ModelledKind, at: Placement, slot: number): number =>
+  modelFacing(at.x, at.z, variety(slot, MODEL_TURN_SALT[kind]), modelAxis(at));
 
 /** A quarter turn applied to a model-space offset, exactly. */
 function turnXZ(
@@ -348,13 +379,24 @@ interface LevelShape {
  */
 const ZONE_SHAPES: Readonly<Record<ZoneKind, readonly LevelShape[]>> = {
   home: [
-    // Housing's first rung is drawn from `models/house*.obj` rather than from
-    // this row, and the row is what those models were built to: a house's body
-    // is 2.2 x 1.6 x 2.2 in every one of the five. It stays because the ladder
-    // still has a rung here — the row states it, and the two rungs above it
-    // step from it — and because `LEVELS` indexes straight into this array.
-    // The bound a level-1 house is actually checked against is the model's own
-    // reach: see `bodyExtent`, which reads `HOUSE_EXTENT` for this rung.
+    // **Housing is modelled at every rung, so not one width or height in this
+    // row is drawn.** They stay for three reasons and it is worth being precise
+    // about which, because a row of dead numbers invites someone to change one:
+    //
+    //   - `LEVELS` indexes straight into this array, and the ladder's shape is
+    //     stated here;
+    //   - `beacon` is live. `writeModelParts` reads it off this row to decide
+    //     whether a modelled building carries a warning light, so the flags in
+    //     the last three entries are load-bearing where the numbers beside them
+    //     are not;
+    //   - the models were *built* to these numbers, one rung at a time — a
+    //     house's body is 2.2 x 1.6 x 2.2, a walk-up's 2.6 x 4.6, and the three
+    //     merged rungs are MERGED_SPAN by 11.5, 22 and 27. The row is the brief
+    //     the modeller worked to, so changing one here now means re-exporting a
+    //     model rather than moving a building.
+    //
+    // What a housing rung is actually bounded by is its models' own reach: see
+    // `bodyExtent`, which takes this branch for every level of this zone.
     { width: 2.2, height: 1.6, depth: 1, beacon: false },
     { width: 2.6, height: 4.6, depth: 1, beacon: false },
     { width: 2.8, height: 11.5, depth: 1, beacon: true },
@@ -495,7 +537,7 @@ const MODEL_SALT: Readonly<Record<ModelledKind, number>> = {
 };
 
 /**
- * Which of its zone's five models a plot's first-rung building is.
+ * Which of its zone's five models a plot's modelled building is.
  *
  * The same contract `buildingStyle` keeps, for the same reasons: a pure
  * function of the slot and the seed, so a building keeps its character forever,
@@ -503,9 +545,15 @@ const MODEL_SALT: Readonly<Record<ModelledKind, number>> = {
  * nothing to store — a save is still counts. Exported so the tests can assert
  * exactly that, and that all five are actually reached.
  *
+ * Not a function of the *level* either, which is the same half of the contract
+ * and now has something to say: housing models two rungs, and a plot draws the
+ * same style index at both — the terrace becomes the deck block and stays
+ * recognisably that plot through the promotion. `MODEL_STYLES` is one number a
+ * zone rather than one a rung so that this can hold, and asserts it.
+ *
  * Its own salt rather than `buildingStyle`'s, so which model a plot gets and
- * which massed style it takes when it climbs off this rung are independent
- * draws rather than the same draw read twice.
+ * which massed style it takes when it climbs off the modelled rungs are
+ * independent draws rather than the same draw read twice.
  */
 export function modelStyleOf(kind: ModelledKind, slot: number): number {
   const styles = MODEL_STYLES[kind];
@@ -531,11 +579,23 @@ export function bodyExtent(kind: ZoneKind, level: number): { width: number; heig
   // street, so the side that ends up across the frontage is whichever of its
   // width and depth the quarter turn put there.
   if (modelled(kind, level)) {
+    const rung = modelLevel(level);
+    const caps = MODEL_JITTER_MAX[kind as ModelledKind][rung] as readonly number[];
+    // What this reports is the span across the *frontage*, which is the one the
+    // kerb bounds — the same quantity the massed branch below reports, where a
+    // merged body's stretch along its parcel is likewise not counted.
+    //
+    // For a single-plot model that is whichever span the turn puts there, and
+    // either can be. For a merged one it is always the depth: the model is
+    // built to an oblong parcel and lies along it at every turn it can take,
+    // so its long span is never the one facing the street. `jitterCap` is what
+    // bounds that long span, against two plots rather than one.
+    const merged = (LEVEL_FOOTPRINT[level] ?? 1) > 1;
     let width = 0;
     let height = 0;
-    MODEL_EXTENT[kind].forEach((model, style) => {
-      const span = Math.max(model.width, model.depth);
-      width = Math.max(width, span * Math.min(JITTER_MAX, MODEL_JITTER_MAX[kind][style] as number));
+    (MODEL_EXTENT[kind as ModelledKind][rung] as readonly ModelExtent[]).forEach((model, style) => {
+      const span = merged ? model.depth : Math.max(model.width, model.depth);
+      width = Math.max(width, span * Math.min(JITTER_MAX, caps[style] as number));
       height = Math.max(height, model.height * MODEL_HEIGHT_JITTER_MAX);
     });
     return { width, height };
@@ -550,9 +610,11 @@ export function bodyExtent(kind: ZoneKind, level: number): { width: number; heig
   return { width, height };
 }
 
-/** The model a slot's first-rung building is drawn from. */
-const modelOf = (kind: ModelledKind, slot: number) =>
-  MODEL_EXTENT[kind][modelStyleOf(kind, slot)] as (typeof MODEL_EXTENT)[ModelledKind][number];
+/** The model a slot's building is drawn from at a modelled rung. */
+const modelOf = (kind: ModelledKind, level: number, slot: number): ModelExtent =>
+  (MODEL_EXTENT[kind][modelLevel(level)] as readonly ModelExtent[])[
+    modelStyleOf(kind, slot)
+  ] as ModelExtent;
 
 const shapeOf = (kind: ZoneKind, level: number): LevelShape => {
   const shapes = ZONE_SHAPES[kind];
@@ -799,21 +861,25 @@ class ZoneLayer {
   /**
    * One body mesh per level, except where the level is modelled.
    *
-   * Null at a modelled first rung, whose buildings are drawn by `ModelMeshes`
+   * Null at every modelled rung, whose buildings are drawn by `ModelMeshes`
    * instead — a hole rather than an unused mesh, because an `InstancedMesh`
    * nothing ever writes to is still a draw call the budget has to answer for.
    */
   private readonly bodies: readonly (BodyMeshes | null)[];
   /**
-   * The five models this zone's first rung is drawn from, or null where it is
-   * massed all the way down — which is industry, and only industry.
+   * The five models each of this zone's modelled rungs is drawn from, indexed
+   * by level and null at every rung the zone masses.
+   *
+   * Parallel to `bodies` and exactly complementary to it: every level has one
+   * or the other and never both, which is what makes "a building is drawn once"
+   * a property of the arrays rather than of the code that reads them.
    *
    * Owned here rather than by `Buildings`, unlike the part bank beside it, and
    * the difference is what each is: the bank is one bank *shared* by every
    * zone, so only the layer above can know when to repack it; these are this
-   * zone's own five meshes and nothing else writes to them.
+   * zone's own meshes and nothing else writes to them.
    */
-  private readonly models: ModelMeshes | null;
+  private readonly models: readonly (ModelMeshes | null)[];
   readonly growth: GrowthSchedule;
   /** The cohort the scene is drawing, and where each level's run of slots begins. */
   private readonly cohort: LevelCohort = new Array<number>(LEVELS).fill(0);
@@ -855,23 +921,25 @@ class ZoneLayer {
     this.bodies = Array.from({ length: LEVELS }, (_, level) =>
       modelled(kind, level) ? null : new BodyMeshes(scene, kind, level, capacity),
     );
-    this.models = modelled(kind, 0) ? new ModelMeshes(scene, kind, capacity) : null;
+    this.models = Array.from({ length: LEVELS }, (_, level) =>
+      modelled(kind, level) ? new ModelMeshes(scene, kind as ModelledKind, level, capacity) : null,
+    );
   }
 
   /** States what this zone's bodies cover, so they can be frustum-culled. */
   setBounds(x: number, z: number, reach: number, top: number): void {
     for (const body of this.bodies) body?.mesh.setBounds(x, z, reach, top);
-    this.models?.setBounds(x, z, reach, top);
+    for (const models of this.models) models?.setBounds(x, z, reach, top);
   }
 
   /** Clears this zone's model instances, before a repack rewrites them all. */
   beginModels(): void {
-    this.models?.begin();
+    for (const models of this.models) models?.begin();
   }
 
   /** Publishes what the repack or the append wrote. Paired with `register`. */
   endModels(): void {
-    this.models?.end();
+    for (const models of this.models) models?.end();
   }
 
   /** How many buildings this layer is drawing. The append path's `from`. */
@@ -945,7 +1013,7 @@ class ZoneLayer {
       const body = this.bodies[l];
       if (body) ranges.set(body.mesh, this.kind, this.starts[l] ?? 0);
     }
-    this.models?.register(ranges);
+    for (const models of this.models) models?.register(ranges);
   }
 
   /** How many instances a level's mesh draws: its cohort, plus the ruins. */
@@ -1005,7 +1073,7 @@ class ZoneLayer {
   /** Rewrites every building in the zone, level by level. */
   writeAll(bank: PartBank, dummy: THREE.Object3D, tint: THREE.Color, now: number): void {
     const standing = this.shown - this.ruins;
-    this.models?.ensure(this.shown);
+    for (const models of this.models) models?.ensure(this.shown);
     for (let l = 0; l < LEVELS; l++) {
       const body = this.bodies[l];
       const count = this.levelCount(l);
@@ -1035,7 +1103,7 @@ class ZoneLayer {
     const body = this.bodies[0];
     const start = this.starts[0] ?? 0;
     body?.ensure(to - start);
-    this.models?.ensure(to);
+    for (const models of this.models) models?.ensure(to);
     for (let slot = from; slot < to; slot++) {
       this.writeOne(slot - start, slot, 0, bank, dummy, tint, now, true, null);
     }
@@ -1059,8 +1127,9 @@ class ZoneLayer {
     const at = this.layout.place(this.zone, slot, this.shownMerged, this.shownZoning, SCRATCH_AT);
     const scale = this.growth.scaleAt(slot, now);
     const colour = bodyColor(this.kind, slot, level, this.overlay?.(this.kind, slot) ?? null, tint);
-    if (this.models && modelled(this.kind, level)) {
-      this.writeModel(this.models, this.kind, slot, level, at, scale, colour, bank, dummy, place, scaffold);
+    const models = this.models[modelLevel(level)];
+    if (models && modelled(this.kind, level)) {
+      this.writeModel(models, this.kind, slot, level, at, scale, colour, bank, dummy, place, scaffold);
       return;
     }
     const body = this.bodies[Math.max(0, level)] as BodyMeshes;
@@ -1125,12 +1194,18 @@ class ZoneLayer {
    * different jitter, a rotation, an origin on the ground rather than at the
    * body's centre, and no dressing to choose.
    *
-   * A model never stretches to a merged parcel, and it never has to. A standing
-   * building on one is at MERGE_LEVEL or above by construction — the merge *is*
-   * the promotion to it — so the only thing that can be modelled and merged is
-   * a ruin, on a parcel whose building was boarded up after it merged. Drawing
-   * that as a cottage stretched to 6.8 units would be a worse answer than
-   * drawing a cottage standing on a double plot, which is what this does.
+   * A model is never *stretched* to a merged parcel, and it never has to be.
+   * The massed path stretches its box along the parcel because one box has to
+   * serve both footprints; a model is built to the footprint its rung stands
+   * on, so a tower arrives 6.8 units long and a house arrives 3. What a merged
+   * rung changes here is the *turn* rather than the scale — see `modelTurn`,
+   * which narrows an oblong model to the two quarter turns that lie along its
+   * parcel.
+   *
+   * The one case that is still merged and drawn from a rung built for a single
+   * plot is a ruin: a parcel whose building was boarded up after it merged
+   * reverts to the first rung's models, and a cottage standing on a double plot
+   * is a better answer than a cottage stretched to fill one.
    */
   private writeModel(
     models: ModelMeshes,
@@ -1146,10 +1221,10 @@ class ZoneLayer {
     scaffold: Scaffold | null,
   ): void {
     const style = modelStyleOf(kind, slot);
-    const model = modelOf(kind, slot);
-    const turn = modelTurn(kind, at.x, at.z, slot);
-    const sx = modelWidthJitter(kind, slot);
-    const sz = modelDepthJitter(kind, slot);
+    const model = modelOf(kind, level, slot);
+    const turn = modelTurn(kind, at, slot);
+    const sx = modelWidthJitter(kind, level, slot);
+    const sz = modelDepthJitter(kind, level, slot);
     const sy = modelHeightJitter(slot) * scale;
 
     // The model stands on y = 0, so it grows out of the ground by scaling about
@@ -1171,6 +1246,8 @@ class ZoneLayer {
 
     writeModelParts(
       kind,
+      modelLevel(level),
+      model.height,
       slot,
       style,
       // A ruin is dark and a building past the detail radius is undressed: the
@@ -1208,16 +1285,18 @@ class ZoneLayer {
           tint,
         );
         if (body) body.mesh.setColorAt(i, colour);
-        else if (this.models && modelled(this.kind, level)) {
+        else if (modelled(this.kind, level)) {
           // A modelled level has no body mesh; its instance lives in its own
           // style's run, which `ModelMeshes` is the only thing that can index.
-          this.models.recolor(modelStyleOf(this.kind, slot), slot, colour);
+          // A ruin is level -1 and draws from the first rung's set — the same
+          // fold `writeOne` makes, so the two agree on which mesh holds it.
+          this.models[modelLevel(level)]?.recolor(modelStyleOf(this.kind, slot), slot, colour);
           modelledAny = true;
         }
       }
       body?.flush();
     }
-    if (modelledAny) this.models?.flush();
+    if (modelledAny) for (const models of this.models) models?.flush();
   }
 
   /** Advances this zone's in-flight growth animations, and cages what is moving. */
@@ -1256,7 +1335,7 @@ class ZoneLayer {
     });
     if (moving) {
       for (const body of this.bodies) body?.flush();
-      this.models?.flush();
+      for (const models of this.models) models?.flush();
     }
     return moving;
   }
@@ -1474,10 +1553,17 @@ function putPart(
  * The dressing on a modelled building: its lit pieces, and nothing else.
  *
  * A model carries its own roof, canopy, chimney and gardens in its geometry, so
- * every part slot but the lit ones is spent — and those cannot be in the
+ * every part slot but the *lit* ones is spent — and those cannot be in the
  * geometry, because a vertex-colour merge has no room for a second material.
- * A house wears one, a shop a shopfront and a sign, and two of the shops a
- * third piece besides. See `MODEL_LIT`.
+ * A house wears one, a shop a shopfront and a sign, two of the shops a third
+ * piece besides, and a walk-up one per floor. See `MODEL_LIT`.
+ *
+ * The beacon is the second of those and arrived with the towers, which are the
+ * first modelled rung whose row asks for one. It is a light like the rest, so
+ * it comes out of the bank for the same reason — and it is placed from the
+ * model's own top rather than from the level's nominal height, because that is
+ * what a model has: the massed path adds its roof's rise to the body, and a
+ * model's roof is already inside the height `MODEL_EXTENT` reports.
  *
  * It still writes -1 into the slots it does not use, and that is not
  * housekeeping: `PART_SLOTS` is a fixed stride the growth animation reads long
@@ -1486,6 +1572,10 @@ function putPart(
  */
 function writeModelParts(
   kind: ModelledKind,
+  /** The rung whose models are being drawn. A ruin has already been folded to 0. */
+  level: number,
+  /** How far the model reaches, so the beacon can sit on top of it. */
+  top: number,
   slot: number,
   style: number,
   /** False for a ruin and past the detail radius — the same two `writeParts` bares. */
@@ -1508,9 +1598,10 @@ function writeModelParts(
     partAt[base + PS.stack] = -1;
     partAt[base + PS.setback] = -1;
     partAt[base + PS.plant] = -1;
-    partAt[base + PS.beacon] = -1;
   }
-  const boxes = lit ? (MODEL_LIT[kind][style] as readonly LitBox[]) : EMPTY_LIT;
+  const boxes = lit
+    ? ((MODEL_LIT[kind][level] as readonly (readonly LitBox[])[])[style] as readonly LitBox[])
+    : EMPTY_LIT;
   dummy.rotation.set(0, QUARTER[turn] ?? 0, 0);
   for (let b = 0; b < BANDS_MAX; b++) {
     const box = boxes[b];
@@ -1527,6 +1618,18 @@ function writeModelParts(
     dummy.scale.set(bw * sx, bh * sy, bd * sz);
     putPart(bank, PART.band, base + PS.band + b, partAt, dummy, null, place);
   }
+
+  // The warning light the tall rungs carry, on the model's own top. `lit` bares
+  // it with everything else: a ruin has no light on it, and a building past the
+  // detail radius is a silhouette. Scaled by the height jitter alone, because a
+  // beacon is a lamp rather than a part of the building — it does not get wider
+  // when the footprint does.
+  if (lit && shapeOf(kind, level).beacon) {
+    dummy.rotation.set(0, 0, 0);
+    dummy.position.set(x, (top + 0.35) * sy, z);
+    dummy.scale.setScalar(0.34 * sy);
+    putPart(bank, PART.beacon, base + PS.beacon, partAt, dummy, null, place);
+  } else if (place) partAt[base + PS.beacon] = -1;
 }
 
 const EMPTY_LIT: readonly LitBox[] = [];
@@ -1703,13 +1806,13 @@ export function bodyFootprint(
   out: { width: number; depth: number },
 ): { width: number; depth: number } {
   if (modelled(kind, level)) {
-    const model = modelOf(kind, slot);
-    const along = model.width * modelWidthJitter(kind, slot);
-    const across = model.depth * modelDepthJitter(kind, slot);
+    const model = modelOf(kind, level, slot);
+    const along = model.width * modelWidthJitter(kind, level, slot);
+    const across = model.depth * modelDepthJitter(kind, level, slot);
     // An odd quarter turn puts the model's depth across the world's x. A model
-    // never stretches to a merged parcel — see `writeModel` — so `plots` is not
-    // consulted here either.
-    const turned = modelTurn(kind, at.x, at.z, slot) % 2 === 1;
+    // is never *stretched* to a merged parcel — see `writeModel` — but a merged
+    // one is built to it, and `modelTurn` reads `at` for exactly that.
+    const turned = modelTurn(kind, at, slot) % 2 === 1;
     out.width = turned ? across : along;
     out.depth = turned ? along : across;
     return out;
@@ -1738,7 +1841,7 @@ export function roofline(kind: ZoneKind, slot: number, level: number): number {
   // A ruin keeps the shell it had at level 1, so a fire on one still lands on a
   // roof rather than in mid-air. For the modelled rung that shell is the model,
   // whose own top already includes its roof — there is no separate rise to add.
-  if (modelled(kind, level)) return modelOf(kind, slot).height * modelHeightJitter(slot);
+  if (modelled(kind, level)) return modelOf(kind, level, slot).height * modelHeightJitter(slot);
   const shape = shapeOf(kind, level);
   const style = styleOf(kind, slot);
   return shape.height * style.height * heightJitter(slot) + ROOF_RISE / 2;
@@ -2604,8 +2707,8 @@ class Outline {
 /**
  * The instanced meshes the three zone ladders are allowed to cost, all told.
  *
- * Twelve bodies, eight shared detail parts, fifteen models and the construction
- * cage. The alternative the styles were designed against is 45 meshes: five
+ * Eight bodies, eight shared detail parts, thirty-five models and the
+ * construction cage. The alternative the styles were designed against is 45 meshes: five
  * levels by three styles by three zones, each a draw call for what is
  * fundamentally the same box. Asserted in test/skyline.test.ts, so a later
  * change cannot quietly double the draw calls.
@@ -2627,15 +2730,60 @@ class Outline {
  *     the three shop styles still wear an awning, a fin and a setback from
  *     level 2 up;
  *   - **+5 -1, industry** and `industry:0`, on the same argument again. The
- *     stack and the plant survive it for the same reason.
+ *     stack and the plant survive it for the same reason;
+ *   - **+5 -1, the walk-ups** and `home:1`. The one rung above a first rung
+ *     that is modelled, and the argument for it is where the cliff was rather
+ *     than symmetry: a player's first promotion turned a street of five house
+ *     silhouettes into twenty-four copies of one box, at the hour they had just
+ *     spent looking at the houses. Nothing left the part bank with it — the
+ *     three massed housing styles still wear a parapet and a band from level 3
+ *     up — so this is the first of these moves that is +4 rather than +3, and
+ *     that is the honest price of it;
+ *   - **+5 -1, the towers** and `home:2`. Housing's third, and the first
+ *     modelled rung that stands on a *merged parcel* — which is the argument
+ *     for it as much as the look is. The merge is the most consequential thing
+ *     a player does to a district, and it read as the same box getting taller
+ *     and twice as wide;
+ *   - **+5 -1, the arcologies** and `home:3`. Housing's fourth, and the one
+ *     spend on this list that was made against the note that used to stand
+ *     here. That note said a fifth +4 had to say what a player would *see*, on
+ *     the grounds that a district this far up the ladder is viewed from far
+ *     enough out that a silhouette is most of what lands. It was asked for
+ *     anyway, and the reasoning is worth keeping rather than quietly deleting:
+ *     the caution was about *diminishing* returns, not absent ones, and what it
+ *     mispriced is that a merged rung is the widest thing in a district and
+ *     therefore the thing a distant skyline is mostly made of. Five silhouettes
+ *     at 22 units read from further away than five at 4.6 do, not less far;
+ *   - **+5 -1, the pinnacles** and `home:4`. Housing's top, which finishes the
+ *     ladder: `home` is now the first zone in the city with no body mesh at
+ *     any rung. The note that used to stand here said this was the one to
+ *     leave, and what overturned it was the measurement rather than an
+ *     argument — part 1e found a rung above the merge costs *negative*
+ *     triangles, because the parcel count is fixed and a rung is then worth
+ *     only the difference between two models. The cost of this one was never
+ *     the geometry; it was four draw calls, and they were the only thing to
+ *     weigh.
  *
- * So 25 - 2 + 4 + 4 = 36, and the three rungs a district is actually made of
- * get fifteen silhouettes for the price of thirteen boxes. Every ladder is now
- * four bodies rather than five, and every zone's first rung is a model.
+ * So 25 - 2 + 4 x 6 = 47... which is 52. The three first rungs a district is
+ * made of get fifteen silhouettes for the price of thirteen boxes, and
+ * housing's other four get twenty more for sixteen. Housing is no bodies and
+ * twenty-five models; commerce and industry are four bodies and five each.
+ *
+ * **Housing is finished and the ladder's shape has changed, so the test this
+ * note has applied five times needs restating.** It was "a rung earns models by
+ * being a rung players look at", and it held while the alternative was a box.
+ * The open candidates now are commerce's and industry's rungs 2 to 5, and the
+ * honest reading is that they are worth *less* than housing's were rather than
+ * that they are next: a district carries 45 commercial plots to 24 residential,
+ * so commerce is the zone where a rung of models costs most in triangles — see
+ * part 1b, where commerce is already the largest single line in the scene — and
+ * it is also the zone a player promotes last and looks at least. The burden
+ * stays on the spend, and it is heavier here than it was for housing.
  *
  * The cost that is *not* in this number is triangles rather than draw calls: a
- * modelled building is 15 to 31 boxes where the massed one was one, which is
- * measured by tools/lod.calibrate.mjs part 1b rather than bounded here.
+ * modelled building is 14 to 241 boxes where the massed one was one, which is
+ * measured by tools/lod.calibrate.mjs parts 1b to 1f rather than bounded here.
+ * The towers are most of that range and the balcony slab is most of the towers.
  *
  * The cage is the twenty-fifth and it is worth saying what it costs, because a
  * budget nobody argues with is a budget that drifts: it is one mesh, it is
@@ -2661,7 +2809,7 @@ class Outline {
  * ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
-export const BUILDING_MESH_BUDGET = 36;
+export const BUILDING_MESH_BUDGET = 52;
 
 /**
  * The building layer. It owns no game state: given counts, it reconciles the
