@@ -29,6 +29,7 @@ const PALETTE = {
   0x3d5a52: 'depot', 0xc2d24f: 'depotRoof', 0x5f8f5a: 'bus',
   0x1c2740: 'police', 0x7fa8ff: 'policeRoof', 0x9ea1a8: 'kerb',
   0x8b5c42: 'tile', 0xb9c2cf: 'awning', 0x8f8a7c: 'land', 0x6b4632: 'door',
+  0x27364c: 'shop', 0x6d88ad: 'shopGlass', 0x8a6f63: 'forecourt',
   0xe4dccb: 'landmark', 0x9c6f4f: 'landmarkRoof', 0x3f8f57: 'park',
   0xb9ab8e: 'school', 0x8d7f63: 'schoolRoof', 0x4a4f57: 'asphalt', 0x4a7a4e: 'hedge',
   0xc3b489: 'sand', 0x5b7f57: 'courtyard', 0x2f6076: 'water',

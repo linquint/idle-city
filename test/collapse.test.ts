@@ -243,7 +243,7 @@ describe('the plot that is rebuilt', () => {
     const size = new THREE.Vector3();
     const at = new THREE.Vector3();
     const heightOnPlot = (): number => {
-      for (const mesh of meshes(root, 'house:')) {
+      for (const mesh of meshes(root, 'model:home:')) {
         for (let i = 0; i < mesh.count; i++) {
           mesh.getMatrixAt(i, box);
           at.setFromMatrixPosition(box);

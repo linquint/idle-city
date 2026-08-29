@@ -7,9 +7,15 @@ import {
   BUILDING_MESH_BUDGET,
   Buildings,
   buildingStyle,
-  houseStyleOf,
+  modelStyleOf,
 } from '../src/render/buildings';
-import { HOUSE_EXTENT, HOUSE_STYLES } from '../src/render/houses';
+import {
+  MODEL_EXTENT,
+  MODEL_LIT,
+  MODEL_STYLES,
+  MODELLED_KINDS,
+  type ModelledKind,
+} from '../src/render/modelled';
 import { createState, type GameState, type ZoneKind } from '../src/sim/state';
 import { cohort, housed, making, mix, trading } from './levels';
 
@@ -61,12 +67,13 @@ const ROOF_PARTS = ['part:flat', 'part:parapet'] as const;
 const roofTotal = (counts: Map<string, number>): number =>
   ROOF_PARTS.reduce((sum, name) => sum + (counts.get(name) ?? 0), 0);
 
-/** The five modelled level-1 houses. See `HouseMeshes`. */
-const HOUSE_MESHES = Array.from({ length: HOUSE_STYLES }, (_, i) => `house:${i}`);
+/** The five modelled level-1 buildings of a zone. See `ModelMeshes`. */
+const modelMeshes = (kind: ModelledKind): string[] =>
+  Array.from({ length: MODEL_STYLES[kind] }, (_, i) => `model:${kind}:${i}`);
 
-/** Level-1 houses standing, over all five models. */
-const houseTotal = (counts: Map<string, number>): number =>
-  HOUSE_MESHES.reduce((sum, name) => sum + (counts.get(name) ?? 0), 0);
+/** Level-1 buildings of a zone standing, over all five of its models. */
+const modelTotal = (counts: Map<string, number>, kind: ModelledKind): number =>
+  modelMeshes(kind).reduce((sum, name) => sum + (counts.get(name) ?? 0), 0);
 
 /** Every InstancedMesh under a scene whose name starts with `prefix`. */
 const meshes = (root: THREE.Object3D, prefix: string): THREE.InstancedMesh[] => {
@@ -100,7 +107,7 @@ describe('the skyline the renderer draws', () => {
       // The first rung is modelled and has no body mesh at all; the rungs above
       // it are one mesh each, exactly as before.
       expect(seen.get('home:0') ?? 0).toBe(0);
-      expect(houseTotal(seen)).toBe(levels[0]);
+      expect(modelTotal(seen, 'home')).toBe(levels[0]);
       for (let l = 1; l < LEVELS; l++) {
         expect(seen.get(`home:${l}`) ?? 0).toBe(levels[l]);
       }
@@ -123,7 +130,7 @@ describe('the skyline the renderer draws', () => {
       const seen = counts();
       // A promotion off the modelled rung moves a building out of its model's
       // mesh and into a body mesh, and its roof appears in the bank as it goes.
-      expect(houseTotal(seen)).toBe(24 - promoted);
+      expect(modelTotal(seen, 'home')).toBe(24 - promoted);
       expect(seen.get('home:1')).toBe(promoted);
       expect(roofTotal(seen)).toBe(promoted);
     }
@@ -139,7 +146,7 @@ describe('the skyline the renderer draws', () => {
     // A ruin is drawn in the first rung's set, which is the modelled one — so a
     // boarded-up plot is a darkened house rather than a darkened box.
     expect(seen.get('home:0') ?? 0).toBe(0);
-    expect(houseTotal(seen)).toBe(4);
+    expect(modelTotal(seen, 'home')).toBe(4);
     // Twenty roofs out of the bank: the standing level-2 blocks. The four ruins
     // wear their model's own roof and take nothing from it.
     expect(roofTotal(seen)).toBe(20);
@@ -155,12 +162,13 @@ describe('the skyline the renderer draws', () => {
     buildings.sync(state({ ...trading(20) }), 0);
     const lit = counts().get('part:band') ?? 0;
     expect(lit).toBeGreaterThan(0);
-    expect(counts().get('shop:0')).toBe(20);
+    expect(modelTotal(counts(), 'shop')).toBe(20);
 
     // Seven closed. The bodies stay — the plot is still occupied — and the lit
-    // bands stop at the trading thirteen.
+    // pieces stop at the trading thirteen. On a modelled shop those are the
+    // shopfront and the sign, which is the whole of how a shuttered unit reads.
     buildings.sync(state({ shops: 20, shopLevels: mix(13), abandonedC: 7 }), 1);
-    expect((counts().get('shop:0') ?? 0)).toBe(20);
+    expect(modelTotal(counts(), 'shop')).toBe(20);
     expect(counts().get('part:band') ?? 0).toBeLessThan(lit);
   });
 
@@ -171,7 +179,7 @@ describe('the skyline the renderer draws', () => {
     // the hipped cone used to be for, and the reason it is gone.
     buildings.sync(state(housed(24)), 0);
     const cottages = counts();
-    expect(houseTotal(cottages)).toBe(24);
+    expect(modelTotal(cottages, 'home')).toBe(24);
     expect(roofTotal(cottages)).toBe(0);
 
     // A whole district of megastructures: a mix of the two shapes left. Ten of
@@ -179,54 +187,72 @@ describe('the skyline the renderer draws', () => {
     // district offers about ten pairs of housing frontage.
     buildings.sync(state(housed(10, LEVELS - 1)), 1);
     const towers = counts();
-    expect(houseTotal(towers)).toBe(0);
+    expect(modelTotal(towers, 'home')).toBe(0);
     expect(towers.get('part:flat') ?? 0).toBeGreaterThan(0);
     expect(towers.get('part:parapet') ?? 0).toBeGreaterThan(0);
   });
 
-  it('builds a street out of all five house models', () => {
+  it('builds a street out of all five models, in both modelled zones', () => {
     const { buildings, counts } = scene();
-    // Two districts of level-1 housing, which is the state a city spends its
-    // first hour in. Every model has to actually turn up in it, or the variety
-    // is a table nobody sees.
-    buildings.sync(state({ ...housed(48), districts: 2 }), 0);
+    // Two districts of first-rung housing and commerce, which is the state a
+    // city spends its first hour in. Every model has to actually turn up in it,
+    // or the variety is a table nobody sees.
+    buildings.sync(state({ ...housed(48), ...trading(60), districts: 2 }), 0);
     const seen = counts();
-    expect(houseTotal(seen)).toBe(48);
-    for (const name of HOUSE_MESHES) expect(seen.get(name) ?? 0).toBeGreaterThan(0);
+    expect(modelTotal(seen, 'home')).toBe(48);
+    expect(modelTotal(seen, 'shop')).toBe(60);
+    for (const kind of MODELLED_KINDS) {
+      for (const name of modelMeshes(kind)) expect(seen.get(name) ?? 0).toBeGreaterThan(0);
+    }
+    // Industry is not modelled and must not have grown a bank by accident.
+    expect(modelMeshes('home' as ModelledKind).length).toBe(MODEL_STYLES.home);
+    expect([...seen.keys()].filter((n) => n.startsWith('model:industry'))).toHaveLength(0);
   });
 
-  it('gives the five houses five silhouettes, all inside the plot', () => {
-    // Five models are only worth five meshes if they read as five buildings.
-    // Bounding boxes are a coarse proxy for that and a sharp one for the case
-    // that would matter: a model pasted twice.
-    const shapes = HOUSE_EXTENT.map((m) => `${m.width}x${m.depth}x${m.height}`);
-    expect(new Set(shapes).size).toBe(HOUSE_STYLES);
-    // A house turns to face its street, so either span can end up across the
-    // frontage and both have to clear the kerb. `bodyExtent` reports only the
-    // widest of the five; this is each of them.
-    for (const model of HOUSE_EXTENT) {
-      expect(Math.max(model.width, model.depth)).toBeLessThan(CELL);
+  it('gives every zone five silhouettes, all inside the plot', () => {
+    for (const kind of MODELLED_KINDS) {
+      // Five models are only worth five meshes if they read as five buildings.
+      // Bounding boxes are a coarse proxy for that and a sharp one for the case
+      // that would matter: a model pasted twice.
+      const shapes = MODEL_EXTENT[kind].map((m) => `${m.width}x${m.depth}x${m.height}`);
+      expect(new Set(shapes).size).toBe(MODEL_STYLES[kind]);
+      // A modelled building turns to face its street, so either span can end up
+      // across the frontage and both have to clear the kerb. `bodyExtent`
+      // reports only the widest of the five; this is each of them.
+      for (const model of MODEL_EXTENT[kind]) {
+        expect(Math.max(model.width, model.depth)).toBeLessThan(CELL);
+      }
+      // And every model is lit, or the zone goes dark at dusk one style at a
+      // time — the failure `MODEL_LIT` throws on, asserted from the outside.
+      for (const lit of MODEL_LIT[kind]) expect(lit.length).toBeGreaterThan(0);
     }
   });
 
-  it('picks a house from the slot and the seed, and never from the save', () => {
-    // The same contract `buildingStyle` keeps. A house's model must not depend
-    // on the cohort under it — a building keeps its character as the city grows
+  it('picks a model from the slot and the seed, and never from the save', () => {
+    // The same contract `buildingStyle` keeps. A building's model must not
+    // depend on the cohort under it — it keeps its character as the city grows
     // around it — and must not be anywhere in a save.
-    for (let slot = 0; slot < 400; slot++) {
-      const style = houseStyleOf(slot);
-      expect(style).toBe(houseStyleOf(slot));
-      expect(style).toBeGreaterThanOrEqual(0);
-      expect(style).toBeLessThan(HOUSE_STYLES);
-    }
-    // All five reachable, and none of them running away with the street.
     const draws = 4000;
-    const seen = new Array<number>(HOUSE_STYLES).fill(0);
-    for (let slot = 0; slot < draws; slot++) {
-      const style = houseStyleOf(slot);
-      seen[style] = (seen[style] as number) + 1;
+    for (const kind of MODELLED_KINDS) {
+      const styles = MODEL_STYLES[kind];
+      const seen = new Array<number>(styles).fill(0);
+      for (let slot = 0; slot < draws; slot++) {
+        const style = modelStyleOf(kind, slot);
+        expect(style).toBe(modelStyleOf(kind, slot));
+        expect(style).toBeGreaterThanOrEqual(0);
+        expect(style).toBeLessThan(styles);
+        seen[style] = (seen[style] as number) + 1;
+      }
+      // All five reachable, and none of them running away with the street.
+      for (const n of seen) expect(n).toBeGreaterThan(draws / styles / 2);
     }
-    for (const n of seen) expect(n).toBeGreaterThan(draws / HOUSE_STYLES / 2);
+    // And the two zones draw independently: a plot's house and the shop on the
+    // same slot must not be the same index, or half the map would rhyme.
+    let same = 0;
+    for (let slot = 0; slot < draws; slot++) {
+      if (modelStyleOf('home', slot) === modelStyleOf('shop', slot)) same++;
+    }
+    expect(same).toBeLessThan(draws * 0.3);
   });
 });
 
@@ -246,7 +272,8 @@ describe('what the ladder costs to draw', () => {
     root.traverse((object) => {
       if (!(object instanceof THREE.InstancedMesh)) return;
       if (
-        /^(home|shop|industry|house):\d+$/.test(object.name) ||
+        /^(home|shop|industry):\d+$/.test(object.name) ||
+        object.name.startsWith('model:') ||
         object.name.startsWith('part:')
       ) {
         names.push(object.name);
@@ -278,13 +305,16 @@ describe('what the ladder costs to draw', () => {
     expect(full.length).toBeLessThanOrEqual(BUILDING_MESH_BUDGET);
     // One body per (zone, level), and no duplicates anywhere.
     expect(new Set(full).size).toBe(full.length);
-    for (const kind of ['shop', 'industry']) {
-      expect(full.filter((name) => name.startsWith(`${kind}:`))).toHaveLength(LEVELS);
+    // Industry is massed all the way down, so it keeps a body per rung.
+    expect(full.filter((name) => name.startsWith('industry:'))).toHaveLength(LEVELS);
+    // The modelled zones are one short: their first rung has no body mesh — and
+    // the five models replacing it are five meshes, not five per rung.
+    for (const kind of MODELLED_KINDS) {
+      expect(full.filter((name) => name.startsWith(`${kind}:`))).toHaveLength(LEVELS - 1);
+      expect(full.filter((name) => name.startsWith(`model:${kind}:`))).toHaveLength(
+        MODEL_STYLES[kind],
+      );
     }
-    // Housing is one short: its first rung is modelled, so it has no body mesh
-    // — and the five models that replace it are five meshes, not five per rung.
-    expect(full.filter((name) => name.startsWith('home:'))).toHaveLength(LEVELS - 1);
-    expect(full.filter((name) => name.startsWith('house:'))).toHaveLength(HOUSE_STYLES);
   });
 
   it('never lets a body cross its own kerb', () => {
@@ -334,9 +364,11 @@ describe('what the ladder costs to draw', () => {
     buildings.sync(state({ ...housed(8), ...trading(12), ...making(5) }), 0);
     const seen = counts();
     // One roof each out of the one shared bank, for every building the ladder
-    // masses. The eight homes are at the modelled rung and carry their own.
-    expect(roofTotal(seen)).toBe(12 + 5);
-    expect(houseTotal(seen)).toBe(8);
+    // masses. The homes and the shops are at their modelled rungs and carry
+    // their own, so only the five workshops draw from it.
+    expect(roofTotal(seen)).toBe(5);
+    expect(modelTotal(seen, 'home')).toBe(8);
+    expect(modelTotal(seen, 'shop')).toBe(12);
     // And the bank is genuinely shared: no zone has a part mesh of its own.
     expect(meshes(new THREE.Scene(), 'shop:front')).toHaveLength(0);
   });
@@ -345,8 +377,11 @@ describe('what the ladder costs to draw', () => {
     const root = new THREE.Scene();
     const buildings = new Buildings(root, new CityLayout());
     // Six merged shops and six single ones on the same district. The merged
-    // ones are the *oldest* slots, so they are the level-2 set.
-    buildings.sync(state({ shops: 12, shopLevels: mix(6, 0, 6), mergedC: 6, districts: 2 }), 0);
+    // ones are the *oldest* slots, so they are the level-3 set; the singles are
+    // at level 2 rather than level 1 because level 1 is modelled, and a model
+    // is never stretched to a parcel — the comparison has to be between two
+    // massed bodies to mean anything.
+    buildings.sync(state({ shops: 12, shopLevels: mix(0, 6, 0, 6), mergedC: 6, districts: 2 }), 0);
 
     const matrix = new THREE.Matrix4();
     const scale = new THREE.Vector3();
@@ -357,8 +392,8 @@ describe('what the ladder costs to draw', () => {
       matrix.decompose(position, quaternion, scale);
       return Math.max(scale.x, scale.z) / Math.min(scale.x, scale.z);
     };
-    const merged = meshes(root, 'shop:2')[0];
-    const single = meshes(root, 'shop:0')[0];
+    const merged = meshes(root, 'shop:3')[0];
+    const single = meshes(root, 'shop:1')[0];
     // A merged shop is oblong by roughly the parcel's two plots against one
     // shop's width; a single one is square to within its own jitter and its
     // style's proportions.

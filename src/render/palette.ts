@@ -29,6 +29,16 @@ export const PALETTE = {
   door: 0x6b4632,
   parapet: 0x2e3e55,
   shop: 0x27364c,
+  // A shopfront's glass, and the one blue on the map that is *lighter* than the
+  // wall it is set into — every other glazing in the city is darker than its
+  // building. A shop is the only thing lit from the inside during the day, and
+  // a dark pane on a dark navy shell reads as a hole in the wall rather than as
+  // a window with something behind it.
+  shopGlass: 0x6d88ad,
+  // The paving in front of a shop: a warm grey-brown against the asphalt it
+  // meets and the navy above it, so a forecourt reads as swept ground rather
+  // than as more street.
+  forecourt: 0x8a6f63,
   // Shopfront dressing: a canvas canopy at street level or a sign fin above the
   // roofline. Warm and pale against the dark shop blue, so a parade of shops
   // reads as a parade from the play camera rather than as one long block.
