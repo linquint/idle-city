@@ -36,6 +36,13 @@ import {
   TOWER_TERRACE_PARTS,
   TOWER_TWIN_PARTS,
 } from './towerModels.ts';
+import {
+  HIGHRISE_FIN_PARTS,
+  HIGHRISE_FRAME_PARTS,
+  HIGHRISE_GARDEN_PARTS,
+  HIGHRISE_LOGGIA_PARTS,
+  HIGHRISE_NOTCH_PARTS,
+} from './highriseModels.ts';
 import { CELL, LEVEL_FOOTPRINT } from '../sim/config.ts';
 import { cellX, cellZ, isRoad } from '../sim/layout.ts';
 import type { ZoneKind } from '../sim/state.ts';
@@ -56,16 +63,21 @@ import type { ZoneKind } from '../sim/state.ts';
  * along a kerb in the order the seed put them in. What it costs is five meshes
  * a rung, and most of this file is about keeping it to five.
  *
- * **Housing is modelled three rungs up, and it is the only zone modelled above
+ * **Housing is modelled four rungs up, and it is the only zone modelled above
  * its first.** That is not a step toward modelling everything: it is where the
  * cliffs were. A player's first promotion turned a street of five house
  * silhouettes into twenty-four copies of one 2.6 x 4.6 box, and the second
  * turned *that* into the same box twice as wide and twice as tall — the merge,
  * which is the most consequential thing a player does to a district and read as
  * the least. Commerce and industry climb too, but a district climbs *housing*
- * first and climbs it most — see `LEVEL_HOUSING` — so housing's second and
- * third rungs are the next most-looked-at surfaces in the game and the rungs
- * above them are seen from far enough out that a silhouette is all that lands.
+ * first and climbs it most — see `LEVEL_HOUSING` — so housing's rungs are the
+ * most-looked-at surfaces in the game by a distance.
+ *
+ * Only the top rung is massed now, and the reason it stays that way is not
+ * cost — the arcologies proved a rung above the merge is free — but that a
+ * megastructure is the end state of a city that has stopped changing, seen at
+ * the widest camera the game has. If that ever stops being true, the geometry
+ * is the cheap part.
  *
  * The third rung is also the first modelled anything that stands on a **merged
  * parcel**, which is a genuinely different footprint rather than a bigger one:
@@ -121,6 +133,13 @@ const MODELS: Readonly<Record<ModelledKind, readonly (readonly (readonly ModelPa
       TOWER_TERRACE_PARTS,
       TOWER_TWIN_PARTS,
     ],
+    [
+      HIGHRISE_FIN_PARTS,
+      HIGHRISE_LOGGIA_PARTS,
+      HIGHRISE_NOTCH_PARTS,
+      HIGHRISE_GARDEN_PARTS,
+      HIGHRISE_FRAME_PARTS,
+    ],
   ],
   shop: [
     [
@@ -147,7 +166,7 @@ export const MODELLED_KINDS = Object.keys(MODELS) as readonly ModelledKind[];
 /**
  * How many rungs from the bottom each zone draws from models.
  *
- * Three for housing and one for the other two. Read by `modelledAt`, which is
+ * Four for housing and one for the other two. Read by `modelledAt`, which is
  * the only thing that should ever ask.
  */
 export const MODEL_LEVELS: Readonly<Record<ModelledKind, number>> = {
@@ -506,6 +525,7 @@ export function modelFacing(
  *     1,176 houses     266,904 triangles     (  227 each)   part 1b
  *     1,176 walk-ups   407,184 triangles     (  346 each)   part 1c
  *       588 towers     840,120 triangles     (1,429 each)   part 1d
+ *       588 arcologies 825,816 triangles     (1,404 each)   part 1e
  *
  * The walk-ups are a straight swap on the same plots — +140,280, which is 52.6%
  * on the housing and 11.3% on the whole scene, 1,416,216 to 1,575,768.
@@ -516,9 +536,15 @@ export function modelFacing(
  * to 23 — but promotion to that rung is the *merge*, so 1,176 walk-ups become
  * 588 towers. Halving the count against quadrupling the model leaves the rung
  * costing 2.06x the one below it: +432,936, rather than the +2.4M a naive
- * reading of the model size would predict. The merge is what makes a model that
- * size affordable at all, and it is why the rungs above — which merge too, but
- * are seen from further out — are the wrong place to spend the same again.
+ * reading of the model size would predict.
+ *
+ * And the arcologies are **free**, which is the fact that changes how the next
+ * one of these should be argued. Both rungs stand on a merged parcel, so the
+ * count is identical — the same 588 parcels — and the rung costs exactly what
+ * the two models differ by, which here is *minus* 14,304 triangles. From the
+ * merge up, a rung of models is five more silhouettes and four more draw calls
+ * for no triangles at all. The expensive rungs are the ones below it, where
+ * modelling multiplies across a plot count that doubles as you descend.
  *
  * Two moves are available and neither is made, so the reasoning survives:
  *

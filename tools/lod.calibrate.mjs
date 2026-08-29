@@ -385,6 +385,63 @@ console.log('what the towers cost, and what the merge pays back\n');
 }
 console.log('');
 
+// ------------------------------------------------------- part 1e
+
+/**
+ * The arcologies, which is the rung where the swap stops costing entirely.
+ *
+ * Both rungs stand on a merged parcel, so unlike every promotion below it this
+ * one does not change the building count at all: the same 588 parcels, a
+ * different model on each. That makes it the cleanest of these comparisons —
+ * whatever the difference is, it is the models and nothing else.
+ */
+console.log('what the arcologies cost against the towers\n');
+{
+  const towers = stand(MAX_DISTRICTS, 2);
+  const arcologies = stand(MAX_DISTRICTS, 3);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:home:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(towers.root, 2);
+  const after = rows(arcologies.root, 3);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+  const wholeB = totals(submitted(towers.root)).tris;
+  const wholeA = totals(submitted(arcologies.root)).tris;
+
+  console.log(`  districts ${MAX_DISTRICTS}, housing alone climbing, commerce and industry at level 1`);
+  console.log('');
+  console.log('    housing            buildings     triangles      each');
+  console.log(
+    `    ${'level 3, towers'.padEnd(19)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 4, arcologies'.padEnd(19)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log('    arcology                  instances     triangles');
+  for (const r of after) {
+    console.log(`    ${r.name.padEnd(25)}${thou(r.count, 10)}${thou(r.tris, 14)}`);
+  }
+  console.log('');
+  console.log(`  Same ${nA.toLocaleString('en-GB')} parcels either way — both rungs merge — so this is the models`);
+  console.log(`  and nothing else: ${thou(tA - tB, 1)} triangles, ${fixed((100 * tA) / Math.max(1, tB) - 100, 1, 1)}% on the housing and`);
+  console.log(`  ${fixed((100 * wholeA) / Math.max(1, wholeB) - 100, 1, 1)}% on the whole scene, ${thou(wholeB, 1)} to ${thou(wholeA, 1)}.`);
+  console.log('');
+  console.log('  Which is the answer to the question the towers raised, and it came back');
+  console.log('  better than the question assumed: a rung of models above the merge is not');
+  console.log('  another 2x, it is whatever the two models differ by — and here that is');
+  console.log('  *negative*. The towers cost what they did because they replaced twice as');
+  console.log('  many smaller buildings. From the merge up the count is fixed, so the');
+  console.log('  fourth rung of housing is the first one in this whole sequence that is');
+  console.log('  free: five more silhouettes, four more draw calls, and slightly fewer');
+  console.log('  triangles than the rung it stands above.');
+}
+console.log('');
+
 // ------------------------------------------------------------------- part 2
 
 /**

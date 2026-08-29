@@ -169,42 +169,51 @@ describe('the skyline the renderer draws', () => {
       expect(roofTotal(seen)).toBe(0);
     }
     // And the promotion off the modelled rungs, which is the one that hands a
-    // building to a body mesh and its roof to the bank.
+    // building to a body mesh and its roof to the bank. Derived from
+    // `MODEL_LEVELS` rather than written as a number, because which rung that
+    // is has moved three times now and this test is not about which one it is.
+    const last = MODEL_LEVELS.home - 1;
+    const massed = MODEL_LEVELS.home;
     for (let promoted = 0; promoted <= 24; promoted++) {
-      buildings.sync(
-        state({ homes: 24, homeLevels: mix(0, 0, 24 - promoted, promoted) }),
-        6 + promoted * 0.1,
-      );
+      const levels = new Array<number>(LEVELS).fill(0);
+      levels[last] = 24 - promoted;
+      levels[massed] = promoted;
+      buildings.sync(state({ homes: 24, homeLevels: mix(...levels) }), 6 + promoted * 0.1);
       const seen = counts();
-      expect(modelTotal(seen, 'home', 2)).toBe(24 - promoted);
-      expect(seen.get('home:3') ?? 0).toBe(promoted);
+      expect(modelTotal(seen, 'home', last)).toBe(24 - promoted);
+      expect(seen.get(`home:${massed}`) ?? 0).toBe(promoted);
       expect(roofTotal(seen)).toBe(promoted);
     }
   });
 
   it('draws a ruin on its plot, in the modelled set, and unlit', () => {
     const { buildings, counts } = scene();
-    // Twenty standing homes at level 4, four boarded up. The ruins hold their
-    // plots, so the city still draws 24 buildings. Level 4 rather than level 3
-    // because what this is about is a ruin dropping *off* the modelled rungs,
-    // and level 3 is one of them now.
-    buildings.sync(state({ homes: 24, homeLevels: mix(0, 0, 0, 20), abandonedR: 4 }), 0);
+    // Twenty standing homes at housing's lowest *massed* rung, four boarded up.
+    // The ruins hold their plots, so the city still draws 24 buildings. That
+    // rung rather than a modelled one because what this is about is a ruin
+    // dropping off the modelled rungs entirely, and it is derived rather than
+    // written down because which rung it is has moved three times.
+    const massed = MODEL_LEVELS.home;
+    const standing = new Array<number>(LEVELS).fill(0);
+    standing[massed] = 20;
+    buildings.sync(state({ homes: 24, homeLevels: mix(...standing), abandonedR: 4 }), 0);
     const seen = counts();
-    expect(seen.get('home:3')).toBe(20);
+    expect(seen.get(`home:${massed}`)).toBe(20);
     // A ruin is drawn in the *first* rung's set, whatever the plot had climbed
     // to — so a boarded-up plot is a darkened house rather than a darkened box,
-    // and never a darkened walk-up or tower.
+    // and never a darkened walk-up, tower or arcology.
     expect(seen.get('home:0') ?? 0).toBe(0);
     expect(modelTotal(seen, 'home', 0)).toBe(4);
-    expect(modelTotal(seen, 'home', 1)).toBe(0);
-    expect(modelTotal(seen, 'home', 2)).toBe(0);
-    // Twenty roofs out of the bank: the standing level-4 blocks. The four ruins
+    for (let l = 1; l < MODEL_LEVELS.home; l++) expect(modelTotal(seen, 'home', l)).toBe(0);
+    // Twenty roofs out of the bank: the standing massed blocks. The four ruins
     // wear their model's own roof and take nothing from it.
     expect(roofTotal(seen)).toBe(20);
     // And a ruin keeps its plot and loses everything else, its lit band
     // included: twenty standing buildings can light bands, four ruins cannot.
     const lit = seen.get('part:band') ?? 0;
-    buildings.sync(state({ homes: 24, homeLevels: mix(0, 0, 0, 24) }), 1);
+    const full = new Array<number>(LEVELS).fill(0);
+    full[massed] = 24;
+    buildings.sync(state({ homes: 24, homeLevels: mix(...full) }), 1);
     expect(counts().get('part:band') ?? 0).toBeGreaterThan(lit);
   });
 

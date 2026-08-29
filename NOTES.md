@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 10, +8 shared parts, +25 models = 43 (asserted, plus the cage) | 14, +8, +30 = **52**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 9, +8 shared parts, +30 models = 47 (asserted, plus the cage) | 13, +8, +35 = **56**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -96,6 +96,23 @@ clothes.
 > and Option A buys a zone nobody has seen. Those are not comparable spends
 > against one budget, and this row is not a running case for the budget being
 > soft.
+>
+> A sixth, after housing's *fourth*: nine bodies and thirty models, 44 -> 48,
+> floor for a fourth zone now 56. And one thing genuinely changed with that
+> one, so it is recorded rather than folded in: the arcologies came in at
+> *negative* triangle cost — a rung above the merge stands on a fixed parcel
+> count, so it is worth only the difference between two models, and that
+> difference happened to be -14,304 (`lod:calibrate` part 1e). Modelling a rung
+> is therefore not uniformly expensive, and the honest version of this row is
+> that the *draw calls* are the scarce thing rather than the geometry.
+>
+> That does not help Option A, and it is worth saying why rather than leaving
+> the reader to wonder. A fourth zone's cost here is four bodies and five
+> models — all of it draw calls, none of it the part that turned out to be
+> cheap — and it still arrives owing a first rung nobody has seen, against a
+> generator change and a fifth frontage number the sampler has never been
+> measured for. The mesh row is the smallest of Option A's problems and it is
+> the only one this note has ever been able to price.
 
 ### Option B — a second building type on the commercial frontage
 

@@ -192,7 +192,32 @@ const BUDGETS = [
     // move if it comes to that is a denser encoding for part tables — the
     // repeated `shape: 'box'` and the `mtl`/`colour` pair are most of the bytes
     // — which is a change to the converter and to `ModelPart`, not to any model.
-    raw: 393_000,
+    //
+    // The arcologies — housing's fourth rung, five more models — then breached
+    // raw alone: 403,219 and 91,929. Raw over by 10,219 B (+2.6%), gzip 7.6%
+    // *under* the ceiling that had just been set. That is the reading the note
+    // above asked for and it came back the good way round, so the answer is the
+    // one this file has always given to it: re-base raw, leave gzip, and do not
+    // reach for the packing change while the number a player actually
+    // downloads still has headroom under it.
+    //
+    // One finding is worth recording rather than left to be rediscovered, and
+    // it is the reason raw breached so soon after a re-base. **A rung of five
+    // models now costs more than this budget's one-feature headroom.** The
+    // towers cost 52,776 B raw and the arcologies 52,079, while +12% of the
+    // base they landed on is about 47,000. The rungs are not getting bigger —
+    // those two are within 1.3% of each other — the point is that "one
+    // substantial feature" and "five building models" have drifted apart as
+    // units, and this budget is denominated in the first. So a sixth rung is
+    // not a thing to be surprised by breaching raw again.
+    //
+    // What that changes about the standing advice: the packing change is still
+    // gated on gzip, because gzip is what reaches a player and raw is a
+    // statement about the source. But if a rung ever lands that breaches *both*
+    // — or if raw is re-based a third time for the same reason — the honest
+    // move is to stop re-basing and to make the tables denser, rather than to
+    // keep restating that generated output is generated.
+    raw: 451_500,
     gzip: 99_500,
   },
   {

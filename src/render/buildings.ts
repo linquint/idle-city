@@ -2696,8 +2696,8 @@ class Outline {
 /**
  * The instanced meshes the three zone ladders are allowed to cost, all told.
  *
- * Ten bodies, eight shared detail parts, twenty-five models and the
- * construction cage. The alternative the styles were designed against is 45 meshes: five
+ * Nine bodies, eight shared detail parts, thirty models and the construction
+ * cage. The alternative the styles were designed against is 45 meshes: five
  * levels by three styles by three zones, each a draw call for what is
  * fundamentally the same box. Asserted in test/skyline.test.ts, so a later
  * change cannot quietly double the draw calls.
@@ -2732,26 +2732,33 @@ class Outline {
  *     modelled rung that stands on a *merged parcel* — which is the argument
  *     for it as much as the look is. The merge is the most consequential thing
  *     a player does to a district, and it read as the same box getting taller
- *     and twice as wide. It is also the last of these that is cheap to make:
- *     the rungs above merge too, so the geometry could follow, but a district
- *     of arcologies is a late-game skyline seen from far enough out that a
- *     silhouette is all that survives.
+ *     and twice as wide;
+ *   - **+5 -1, the arcologies** and `home:3`. Housing's fourth, and the one
+ *     spend on this list that was made against the note that used to stand
+ *     here. That note said a fifth +4 had to say what a player would *see*, on
+ *     the grounds that a district this far up the ladder is viewed from far
+ *     enough out that a silhouette is most of what lands. It was asked for
+ *     anyway, and the reasoning is worth keeping rather than quietly deleting:
+ *     the caution was about *diminishing* returns, not absent ones, and what it
+ *     mispriced is that a merged rung is the widest thing in a district and
+ *     therefore the thing a distant skyline is mostly made of. Five silhouettes
+ *     at 22 units read from further away than five at 4.6 do, not less far.
  *
- * So 25 - 2 + 4 + 4 + 4 + 4 = 44. The three first rungs a district is made of
- * get fifteen silhouettes for the price of thirteen boxes, and housing's second
- * and third get ten more for eight. Housing is two bodies and fifteen models;
- * commerce and industry are four bodies and five models each.
+ * So 25 - 2 + 4 x 5 = 44... which is 48. The three first rungs a district is
+ * made of get fifteen silhouettes for the price of thirteen boxes, and
+ * housing's next three get fifteen more for twelve. Housing is one body and
+ * twenty models; commerce and industry are four bodies and five models each.
  *
- * **A fifth +4 is not free and should be argued for, not assumed.** The
- * candidates now are housing's top two rungs and the second rungs of commerce
- * and industry, and none has the argument the three that landed did: a district
- * climbs housing first and climbs it most, and by the time it has climbed past
- * the towers the camera is far enough out that footprint and height carry the
- * type on their own. The next one has to say what a player would *see*.
+ * **The one rung left is housing's top, and it is the one to leave.** A
+ * megastructure is the end state of a city that has stopped changing, seen at
+ * the widest camera the game has; the second rungs of commerce and industry
+ * would be a better spend than it if either were ever made. What has *not*
+ * changed through five of these is the test the note above set: a rung earns
+ * models by being a rung players look at, and the burden is on the spend.
  *
  * The cost that is *not* in this number is triangles rather than draw calls: a
  * modelled building is 14 to 241 boxes where the massed one was one, which is
- * measured by tools/lod.calibrate.mjs parts 1b to 1d rather than bounded here.
+ * measured by tools/lod.calibrate.mjs parts 1b to 1e rather than bounded here.
  * The towers are most of that range and the balcony slab is most of the towers.
  *
  * The cage is the twenty-fifth and it is worth saying what it costs, because a
@@ -2778,7 +2785,7 @@ class Outline {
  * ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
-export const BUILDING_MESH_BUDGET = 44;
+export const BUILDING_MESH_BUDGET = 48;
 
 /**
  * The building layer. It owns no game state: given counts, it reconciles the
