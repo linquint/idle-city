@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 15, +9 shared parts = 24 (asserted) | 20, +9 = **29**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 14, +8 shared parts, +5 house models = 27 (asserted, plus the cage) | 19, +8, +5 = **32**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -64,6 +64,14 @@ The rest of the cost, for completeness:
 
 **Verdict: not viable this cycle.** It is a generator change wearing a feature's
 clothes.
+
+> Re-measured after housing's first rung was modelled, which moved the mesh row
+> above: the ladder is now fourteen bodies rather than fifteen (that rung has no
+> body mesh), eight shared parts rather than nine (the hipped roof had no other
+> wearer) and five house models. The conclusion is unchanged and slightly
+> firmer — a fourth zone would want five more bodies *and* a fifth frontage
+> number, against a budget that has just spent its headroom on the rung the city
+> is actually made of.
 
 ### Option B — a second building type on the commercial frontage
 

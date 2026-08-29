@@ -233,17 +233,38 @@ were away says nothing; anything still wrong when you look says so once.
 looks in all — and a style is a parameter set rather than a mesh: proportions, a
 colour band, how many lit window bands, and which of the shared unit-geometry
 detail parts it wears. Which one a building gets is `hash(slot, SEED)`, so it is
-stable forever, identical on every device, and nowhere in the save.
+stable forever, identical on every device, and nowhere in the save. Housing's
+**first rung is the exception**, and it is a different kind of variety: it is
+drawn from five *models* rather than massed, and the same hash picks which. A
+level-1 house is the building the city is mostly made of and the one a new
+player looks at longest, so it gets five silhouettes — a cottage, a terrace with
+a bay, a veranda house with a dormer, a semi under a shared chimney and a flat-
+roofed modern with a carport — instead of three parameter sets on a box. Same
+contract: pure function of the slot and the seed, nothing stored.
 
 ### Rendering notes
 
-The city is a handful of `InstancedMesh` draw calls — 15 bodies, one per (zone,
-level), and 9 shared detail parts, plus roads, kerbs and land tiles — so a city
-of four thousand buildings costs about the same as a city of forty. The 24 is a
-budget rather than an accident, and `test/skyline.test.ts` asserts it: the naive
-version of the same variety is 45 draw calls for what is fundamentally the same
-box.
+The city is a handful of `InstancedMesh` draw calls — 14 bodies, one per (zone,
+level) except housing's modelled first rung, 8 shared detail parts and 5 house
+models, plus roads, kerbs and land tiles — so a city of four thousand buildings
+costs about the same as a city of forty. The 28 is a budget rather than an
+accident, and `test/skyline.test.ts` asserts it: the naive version of the same
+variety is 45 draw calls for what is fundamentally the same box.
 
+- The five houses are merged by **vertex colour**, one mesh each, which is the
+  choice the bus makes and for the mirror of the bus's reason: a mesh per
+  material would be 42 draw calls for the most numerous building in the city.
+  The one thing that merge cannot carry is a light, so each model's lit window
+  band is handed to the shared band mesh that every other building already
+  wears — the night ramp comes back for nothing. Modelling that rung also
+  retired the hipped roof from the part bank, which had no other wearer.
+- A house has a **front**, which nothing in the city had before: a box is a box
+  at every turn. So it turns to face its street, found by asking `isRoad` about
+  the plot's four neighbours, and a corner plot picks between its two by seed.
+  What it costs is triangles rather than draw calls, and not a little — 49
+  districts of level-1 housing go from 619k triangles to 858k. `npm run
+  lod:calibrate` part 1b is the measurement, and the note on `HouseMeshes` sets
+  out the mesh-for-shadows trade that was deliberately not made.
 - `GrowableInstancedMesh` reallocates and copies instance buffers when the city
   outgrows them, doubling capacity so it stays amortised O(1) per instance.
 - `GrowthSchedule` keeps only the buildings that are *currently animating* in a
@@ -301,8 +322,9 @@ box.
   room for a silhouette each rather than three colours of the same box. Two
   types are still a slab with one thing standing on it — the city hall a clock
   tower, the power plant a lit stack. The other eight are *modelled* rather than
-  massed: the hospital as a ward slab and a lower treatment wing in an L, with a
-  helipad and a painted cross on the roofs the play camera looks down at; the
+  massed, as are the five level-1 houses above: the hospital as a ward slab and
+  a lower treatment wing in an L, with a helipad and a painted cross on the
+  roofs the play camera looks down at; the
   fire station as an appliance hall, a dormitory and a hose tower with a beacon
   on top; the police station as a banded block with a cell wing, a walled yard
   with two patrol cars in it, and a radio mast that goes higher than the fire
@@ -314,7 +336,8 @@ box.
   marked pitch under corner floodlights; and the university as four ranges round
   a planted quad with a campanile on the back corner, which is the shape that
   stops it reading as the city hall at a bigger footprint. All eight are
-  generated from the models in `models/` — see `npm run model:parts`.
+  generated from the models in `models/` — see `npm run model:parts`, which is
+  also where the five houses come from.
 - Two modelled things are not buildings. A **park** is a plot-sized lawn with
   paths, planting, a pond, three trees, benches and a lit lamp, drawn by `Parks`
   rather than `Buildings`; its trees used to be scattered per park by `hash01`,

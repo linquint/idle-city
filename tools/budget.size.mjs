@@ -101,8 +101,23 @@ const BUDGETS = [
     // breached by 757 B (+0.4%) with the gzip half still inside, which is the
     // budget reporting a feature landing rather than a regression — so it is
     // re-measured and re-based rather than argued with.
-    raw: 242_300,
-    gzip: 79_200,
+    //
+    // Re-based again on modelling housing's first rung: 216,357 -> 249,400 raw
+    // and 70,715 -> 76,594 gzip. `houseModels.ts` and `houses.ts` are 27.7 kB
+    // of source between them, and the larger of the two is a hundred rows of
+    // generated part table — five models at 18 to 24 boxes each.
+    //
+    // The same shape as last time, and it is the shape a part table always
+    // makes: the raw half breached by 7,100 B (+2.9%) while the gzip half
+    // stayed 2,600 B *inside*. A table of `{ shape: 'box', at: [...], size:
+    // [...], mtl: '...', colour: PALETTE.x }` repeated a hundred times is the
+    // most compressible thing this codebase produces, so raw is the honest
+    // measure of the source and gzip is the honest measure of what a player
+    // downloads. Trimming the table to fit would mean hand-shortening generated
+    // output, which is the one thing `civicModels.ts` and `houseModels.ts` both
+    // say never to do — so it is re-measured and re-based.
+    raw: 279_300,
+    gzip: 85_800,
   },
   {
     name: 'assets/sim.worker-*.js',

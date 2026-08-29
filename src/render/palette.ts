@@ -22,6 +22,11 @@ export const PALETTE = {
   shallow: 0x6ba8ad,
   concrete: 0xc9d1da,
   tile: 0x8b5c42,
+  // A house's front door, and the only place this brown is used. Darker and
+  // redder than the tile above it, because a door has to read against the wall
+  // it is set into at the one zoom a house is ever more than a silhouette —
+  // and a door that borrowed the roof's colour would read as a hole.
+  door: 0x6b4632,
   parapet: 0x2e3e55,
   shop: 0x27364c,
   // Shopfront dressing: a canvas canopy at street level or a sign fin above the
