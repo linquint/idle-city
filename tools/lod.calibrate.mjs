@@ -211,8 +211,8 @@ const big = stand(MAX_DISTRICTS, LEVELS - 1);
   console.log(`  BUILDING_MESH_BUDGET is ${BUILDING_MESH_BUDGET}: the three zone ladders, the shared`);
   console.log('  part bank and the construction cage. A massed style is a parameter set');
   console.log('  rather than a mesh and the detail parts are shared across every zone and');
-  console.log('  level, so what is left massed — 18 looks across six rungs — costs six');
-  console.log('  bodies and eight parts, against 45 meshes for the nine modelled rungs.');
+  console.log('  level, so what is left massed — 15 looks across five rungs — costs five');
+  console.log('  bodies and eight parts, against 50 meshes for the ten modelled rungs.');
   console.log('');
   console.log('  the ten largest, by triangles submitted\n');
   console.log('    mesh                     instances     triangles   shadow');
@@ -611,6 +611,51 @@ console.log("what commerce's merge costs, and what it pays back\n");
   console.log(`  merge halves the count: ${nB.toLocaleString('en-GB')} high streets become ${nA.toLocaleString('en-GB')} retail`);
   console.log(`  parks. Net, the rung costs ${fixed(ratio, 1, 2)}x what the one below it does —`);
   console.log(`  ${thou(tA - tB, 1)} triangles.`);
+}
+console.log('');
+
+// ------------------------------------------------------- part 1i
+
+/**
+ * What commerce's rung *above* its merge costs, on part 1e's terms.
+ *
+ * Both rungs stand on the same parcels, so the count is pinned and the reading
+ * is the two models and nothing else — the question part 1e answered for
+ * housing, asked again where the answer might differ. It does: housing's fourth
+ * rung came back *negative* because an arcology is simpler than a tower, and
+ * that is a fact about those two models rather than about merged rungs. Whether
+ * a rung above a merge is free depends entirely on which way the models go.
+ */
+console.log("what commerce's rung above the merge costs\n");
+{
+  const parks = stand(MAX_DISTRICTS, 2);
+  const exchanges = stand(MAX_DISTRICTS, 3);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:shop:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(parks.root, 2);
+  const after = rows(exchanges.root, 3);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+  const wholeB = totals(submitted(parks.root)).tris;
+  const wholeA = totals(submitted(exchanges.root)).tris;
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce alone climbing`);
+  console.log('');
+  console.log('    commerce              buildings     triangles      each');
+  console.log(
+    `    ${'level 3, retail parks'.padEnd(22)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 4, exchanges'.padEnd(22)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log(`  Same ${nA.toLocaleString('en-GB')} parcels either way — both rungs merge — so this is the models`);
+  console.log(`  and nothing else: ${thou(tA - tB, 1)} triangles, ${fixed((100 * tA) / Math.max(1, tB) - 100, 1, 1)}% on the commerce and`);
+  console.log(`  ${fixed((100 * wholeA) / Math.max(1, wholeB) - 100, 1, 1)}% on the whole scene, ${thou(wholeB, 1)} to ${thou(wholeA, 1)}.`);
 }
 console.log('');
 

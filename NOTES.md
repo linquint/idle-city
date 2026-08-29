@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 6, +8 shared parts, +45 models = 59 (asserted, plus the cage) | 10, +8, +50 = **68**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 5, +8 shared parts, +50 models = 63 (asserted, plus the cage) | 9, +8, +55 = **72**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -170,6 +170,35 @@ clothes.
 > ever assumed and the *draw calls* the whole of the cost, which is precisely
 > the part a fourth zone would pay in full: four bodies and five models, none of
 > it recoverable by a merge, on a rung nobody has seen.
+>
+> A tenth, after commerce's *fourth*: five bodies and fifty models, 60 -> 64,
+> floor for a fourth zone now 72. **The entry above is wrong and is corrected
+> here rather than edited, because being able to see a wrong call is the point
+> of keeping this row.** It said both arguments were spent and that nothing
+> further could be built without a new one. There were three, not two: the
+> far-side-of-a-promotion test, the merge, and the *measurement* — which carried
+> housing's fourth and fifth and which that entry failed to count while
+> declaring the shelf bare. Commerce's fourth is the measurement applied where
+> it always applied, so no new argument was needed and none was found.
+>
+> The measurement itself came back worse than it ever has, and that is the part
+> that matters for Option A rather than the correction. Housing's fourth rung
+> was -14,304 triangles; commerce's is **+50,832**, +11.9% on the commercial
+> geometry and +3.9% on the whole scene (`lod:calibrate` part 1i). An arcology
+> is simpler than a tower and an exchange is not simpler than a retail park, so
+> "a rung above the merge is free" was one outcome rather than a rule. What the
+> pinned parcel count actually guarantees is that a rung costs the difference
+> between two models — and the difference has a sign. Applied three times the
+> argument has returned -14,304, -429,876 and +50,832; the sign has now turned
+> once, which is the whole of what this correction adds.
+>
+> That leaves this row saying something sharper than it did four entries ago.
+> The measurement is the only one of the three arguments still live, it now
+> *prices* a rung rather than licensing one, and it does not reach Option A at
+> all: a fourth zone's first rung has no rung below it to differ from, so the
+> whole of its five models is new geometry on land the city has never drawn.
+> Against 72, and still owing a generator change and a fifth frontage number the
+> sampler has never been measured for.
 
 ### Option B — a second building type on the commercial frontage
 

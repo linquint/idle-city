@@ -30,6 +30,13 @@ import {
   RETAILPARK_STORE_PARTS,
 } from './retailParkModels.ts';
 import {
+  EXCHANGE_ATRIUM_PARTS,
+  EXCHANGE_CURTAIN_PARTS,
+  EXCHANGE_ORDER_PARTS,
+  EXCHANGE_PODIUM_PARTS,
+  EXCHANGE_SLAB_PARTS,
+} from './exchangeModels.ts';
+import {
   INDUSTRY_DOCK_PARTS,
   INDUSTRY_MILL_PARTS,
   INDUSTRY_SHED_PARTS,
@@ -72,8 +79,8 @@ import type { ZoneKind } from '../sim/state.ts';
  * The modelled rungs of the three ladders, and the meshes that draw them.
  *
  * The first rung of housing, of commerce and of industry, plus housing's second
- * through fifth and commerce's second and third: the rungs the city is mostly
- * *made* of.
+ * through fifth and commerce's second through fourth: the rungs the city is
+ * mostly *made* of.
  * Every plot a player buys starts on a first rung, a district that has not been
  * pushed up the ladder is nothing but them, and they are what a new player
  * spends their first hour looking at. They were a box with a cone on it, a box
@@ -85,7 +92,7 @@ import type { ZoneKind } from '../sim/state.ts';
  * along a kerb in the order the seed put them in. What it costs is five meshes
  * a rung, and most of this file is about keeping it to five.
  *
- * **Housing is modelled at every rung and commerce at its first three, and both
+ * **Housing is modelled at every rung and commerce at its first four, and both
  * are where the cliffs were rather than a step toward modelling everything.** A
  * player's first promotion turned a street of five house silhouettes into
  * twenty-four copies of one 2.6 x 4.6 box, and the second turned *that* into
@@ -96,13 +103,17 @@ import type { ZoneKind } from '../sim/state.ts';
  *
  * Commerce's second is the same cliff one zone over: a shopping street of five
  * silhouettes became copies of one 3.0 x 3.2 box, in the hour after the one the
- * shops were built for. Its third is the same *merge* one zone over, and the
- * two arguments are worth keeping apart because they are the only two this file
- * has: a second rung is earned by being the far side of a promotion the player
- * watches happen, and a third only by being the merge — where two plots become
- * one building and the massed answer is the rung below stretched to twice the
- * width. Both zones that merge into a modelled rung have now done it, so
- * commerce stops at three for the same reason housing did not stop at two.
+ * shops were built for. Its third is the same *merge* one zone over, and its
+ * fourth the same *measurement*. The three arguments are worth keeping apart,
+ * because they are the only three this file has and each reaches exactly one
+ * rung further than the last: a second rung is earned by being the far side of
+ * a promotion the player watches happen; a third only by being the merge, where
+ * two plots become one building and the massed answer is the rung below
+ * stretched to twice the width; and a fourth only on the measurement, because
+ * above a merge the parcel count is pinned and a rung is worth no more than the
+ * difference between two models. That last one prices a rung rather than
+ * licensing it — commerce's fourth came in at +50,832 triangles where housing's
+ * came in at -14,304 — so it is the argument to check rather than to cite.
  * Industry is modelled at its first rung only.
  *
  * Nothing in housing is massed now. What finished it was the measurement rather
@@ -207,6 +218,13 @@ const MODELS: Readonly<Record<ModelledKind, readonly (readonly (readonly ModelPa
       RETAILPARK_STORE_PARTS,
       RETAILPARK_HALL_PARTS,
       RETAILPARK_STAIR_PARTS,
+    ],
+    [
+      EXCHANGE_CURTAIN_PARTS,
+      EXCHANGE_ATRIUM_PARTS,
+      EXCHANGE_PODIUM_PARTS,
+      EXCHANGE_ORDER_PARTS,
+      EXCHANGE_SLAB_PARTS,
     ],
   ],
   industry: [

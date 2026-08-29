@@ -628,15 +628,22 @@ describe('what the ladder costs to draw', () => {
     const buildings = new Buildings(root, new CityLayout());
     // Six merged shops against six single-plot works. The comparison has to be
     // between two *massed* bodies to mean anything — a model is never stretched
-    // to a parcel — and it can no longer be made within one zone: every rung
-    // that stands on a single plot is `LEVEL_FOOTPRINT`'s first two, and
-    // commerce now models both of them. Industry models only its first, so its
-    // second is the last massed body in the game standing on one plot, and that
-    // is what the merged shops are measured against.
+    // to a parcel — and neither arm can be drawn from the zone the other comes
+    // from any more. Commerce models its first four rungs, so its *top* one is
+    // the only massed commercial body left and it is the merged arm; every rung
+    // standing on a single plot is `LEVEL_FOOTPRINT`'s first two, and commerce
+    // models both, so the single arm comes from industry's second — the last
+    // massed body in the game on one plot.
+    //
+    // Both arms are now the last of their kind, which is worth saying plainly:
+    // modelling either `shop:4` or `industry:1` retires this test rather than
+    // moving it, and the thing it checks — that a merged body is stretched
+    // along its parcel and an unmerged one is not — would need asserting
+    // against `bodyExtent` instead of against drawn instances.
     buildings.sync(
       state({
         shops: 6,
-        shopLevels: mix(0, 0, 0, 6),
+        shopLevels: mix(0, 0, 0, 0, 6),
         mergedC: 6,
         industry: 6,
         industryLevels: mix(0, 6),
@@ -654,7 +661,7 @@ describe('what the ladder costs to draw', () => {
       matrix.decompose(position, quaternion, scale);
       return Math.max(scale.x, scale.z) / Math.min(scale.x, scale.z);
     };
-    const merged = meshes(root, 'shop:3')[0];
+    const merged = meshes(root, 'shop:4')[0];
     const single = meshes(root, 'industry:1')[0];
     // A merged shop is oblong by roughly the parcel's two plots against one
     // shop's width; a single-plot works is square to within its own jitter and
