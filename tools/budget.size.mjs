@@ -43,7 +43,8 @@ const DIST = 'dist';
  *
  *   index.html                27,672 raw    6,593 gzip
  *   assets/index-*.css        20,186 raw    4,584 gzip
- *   assets/index-*.js        200,853 raw   66,360 gzip
+ *   assets/index-*.js        206,775 raw   68,048 gzip
+ *   assets/sim.worker-*.js    60,003 raw   20,641 gzip
  *   assets/*.woff2            22,716 raw   22,808 gzip
  *   manifest + icons + sw     11,450 raw    3,702 gzip
  *   assets/three-*.js        484,553 raw  121,164 gzip
@@ -95,6 +96,26 @@ const BUDGETS = [
     // That is the right place for the conversation to happen.
     raw: 215_600,
     gzip: 71_200,
+  },
+  {
+    name: 'assets/sim.worker-*.js',
+    match: /^assets\/sim\.worker-[\w-]+\.js$/,
+    // +12%, the same headroom the game chunk gets and for the same reason: this
+    // *is* the game, compiled a second time for the thread that runs it.
+    //
+    // Measured at 60,003 B raw / 20,641 B gzip, and the duplication is the
+    // point rather than an accident. The renderer calls pure functions over
+    // `GameState` — `congestion`, `landmarkCoverage`, `residents`, `covered`,
+    // `levelAt` — and the HUD imports 113 named things from `economy.ts`, so
+    // that module is in both threads. The alternative is the worker
+    // precomputing every derived number the two of them want and shipping it
+    // in the state message: a payload that grows with the *readouts* rather
+    // than with the city, regenerated ten times a second, and one more thing
+    // to remember whenever anyone adds a row to a panel. Twenty kilobytes of
+    // duplicated pure functions, fetched once and precached forever, is the
+    // cheaper half of that trade by a wide margin.
+    raw: 67_200,
+    gzip: 23_100,
   },
   {
     name: 'assets/*.woff2',

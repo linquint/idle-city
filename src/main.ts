@@ -2,10 +2,10 @@ import './style.css';
 
 import { SettingsStore } from './core/settings';
 import { registerServiceWorker } from './pwa';
-import { Game } from './sim/game';
 import { CityLayout } from './sim/layout';
 import { load, save, secondsAway } from './sim/save';
 import { createState } from './sim/state';
+import { createSimulation } from './worker/client';
 import { View } from './render/view';
 import { FpsMeter } from './ui/fps';
 import { Hud } from './ui/hud';
@@ -18,8 +18,21 @@ const canvas = document.getElementById('stage');
 if (!(canvas instanceof HTMLCanvasElement)) throw new Error('Missing #stage canvas');
 
 const layout = new CityLayout();
+
+// Loaded here and *only* here. `save.ts` reaches for `globalThis.localStorage`,
+// which does not exist in a Worker — and it is wrapped in a `try` that returns
+// null, so a worker that saved would silently stop saving with no error
+// anywhere. So persistence stays on this side of the boundary in its entirety:
+// this module loads, hands the state to the simulation, takes it back with
+// every reply, writes it, and tells the simulation what timestamp it used.
+// tools/worker.test.mjs walks the worker's import graph and fails if `save.ts`
+// is ever reachable from it.
 const saved = load();
-const game = new Game(saved ?? createState());
+
+// A worker if the browser will have one, and this thread if not. The two are
+// the same interface and run the same `applyCommand`; what differs is that one
+// of them answers a tenth of a second later. See src/worker/client.ts.
+const game = createSimulation(saved ?? createState());
 
 // Read before the view is built, because the view's construction depends on it
 // — the motion preference decides how long a growth animation runs and whether
@@ -49,12 +62,22 @@ function applySettings(): void {
 settings.onChange = () => applySettings();
 applySettings();
 
+/**
+ * Whether the save is owed a write as soon as the simulation answers.
+ *
+ * A `reset` and an ascension both throw the city away, and both are commands
+ * now — so on the worker path the state that matters does not exist yet when
+ * the button's handler runs. Persisting there would write the *old* city, and a
+ * player who closed the tab in the tenth of a second before the reply would
+ * find it still there. So the write waits for the state that caused it.
+ */
+let saveOnNextState = false;
+
 const hud = new Hud(game, layout, {
-  onReset: () => persist(),
-  onSkip: (seconds) => {
-    hud.showAway(game.catchUp(seconds));
-    hud.paint();
-  },
+  onReset: () => void (saveOnNextState = true),
+  // Dev-only time travel. The report comes back through `onAway`, which is the
+  // same path the real absence takes.
+  onSkip: (seconds) => game.catchUp(seconds),
   // Dismissing the card is the same act as clearing the selection, so the
   // outline in the world goes with it rather than being left behind.
   onDeselect: () => view.select(null),
@@ -91,16 +114,38 @@ view.onSelect = (ref) => hud.inspect(ref);
  * catch-up must be followed by one, or the same absence gets credited twice.
  */
 function persist(): void {
-  game.markSaved(save(game.state));
+  // The state written is the last one the simulation sent, which on the worker
+  // path is at most one tick — a tenth of a second — behind what it holds. A
+  // reload therefore loses at most that, against a save that is written every
+  // ten seconds anyway.
+  game.send({ kind: 'markSaved', at: save(game.state) });
 }
+
+/**
+ * An absence, credited and then written down.
+ *
+ * A hook rather than a return value, because a `catchUp` across a thread
+ * boundary cannot be one — and the ordering is what matters rather than the
+ * shape: every catch-up has to be followed by a `persist`, or the same absence
+ * is credited twice on the next load. Doing it here means that holds on both
+ * paths, since the local simulation calls this synchronously from inside
+ * `catchUp` and the worker calls it when the reply lands.
+ */
+game.onState = () => {
+  if (!saveOnNextState) return;
+  saveOnNextState = false;
+  persist();
+};
+
+game.onAway = (report) => {
+  persist();
+  if (report.seconds >= REPORT_THRESHOLD_SECONDS) hud.showAway(report);
+  hud.paint();
+};
 
 // Time away is credited before the first frame, so the city the player returns
 // to is already the one their absence earned.
-if (saved) {
-  const report = game.catchUp(secondsAway(saved));
-  persist();
-  if (report.seconds >= REPORT_THRESHOLD_SECONDS) hud.showAway(report);
-}
+if (saved) game.catchUp(secondsAway(saved));
 
 let sinceSave = 0;
 let last = performance.now();
@@ -145,10 +190,9 @@ document.addEventListener('visibilitychange', () => {
   const away = secondsAway(game.state);
   last = performance.now();
   if (away < 2) return;
-  const report = game.catchUp(away);
-  persist();
-  if (report.seconds >= REPORT_THRESHOLD_SECONDS) hud.showAway(report);
-  hud.paint();
+  // The report, the persist and the repaint all happen in `onAway` above, so
+  // the ordering is the same whichever thread ran the catch-up.
+  game.catchUp(away);
 });
 
 window.addEventListener('pagehide', () => persist());

@@ -184,7 +184,8 @@ import {
 import { ESTATE_CELLS } from '../sim/estates';
 import type { BuildingRef } from '../render/buildings';
 import { ZONE_MODES, type ZoneMode } from '../render/zones';
-import type { AwayReport, Game } from '../sim/game';
+import type { AwayReport } from '../sim/game';
+import type { Command, GameFacade } from '../sim/commands';
 import {
   createPlacement,
   districtOfPlot,
@@ -831,50 +832,50 @@ export class Hud {
   private graphsShown = '';
 
   constructor(
-    private readonly game: Game,
+    private readonly game: GameFacade,
     private readonly layout: CityLayout,
     private readonly hooks: HudHooks,
   ) {
     const n = this.nodes;
-    n.home.addEventListener('click', () => this.act(() => this.game.buildHome()));
-    n.shop.addEventListener('click', () => this.act(() => this.game.buildShop()));
-    n.industry.addEventListener('click', () => this.act(() => this.game.buildIndustry()));
-    n.park.addEventListener('click', () => this.act(() => this.game.buildPark()));
-    n.plant.addEventListener('click', () => this.act(() => this.game.buildPlant()));
+    n.home.addEventListener('click', () => this.act({ kind: 'home' }, n.home));
+    n.shop.addEventListener('click', () => this.act({ kind: 'shop' }, n.shop));
+    n.industry.addEventListener('click', () => this.act({ kind: 'industry' }, n.industry));
+    n.park.addEventListener('click', () => this.act({ kind: 'park' }, n.park));
+    n.plant.addEventListener('click', () => this.act({ kind: 'plant' }, n.plant));
     for (const row of this.landmarkNodes) {
       row.button.addEventListener('click', () =>
-        this.act(() => this.game.buildLandmark(row.landmark)),
+        this.act({ kind: 'landmark', key: row.landmark.key }, row.button),
       );
     }
     for (const row of this.terminalNodes) {
       row.button.addEventListener('click', () =>
-        this.act(() => this.game.buildTerminal(row.terminal)),
+        this.act({ kind: 'terminal', key: row.terminal.key }, row.button),
       );
     }
-    n.airport.addEventListener('click', () => this.act(() => this.game.buildAirport()));
-    n.highway.addEventListener('click', () => this.act(() => this.game.buildHighway()));
-    n.estate.addEventListener('click', () => this.act(() => this.game.buildEstate()));
-    n.annex.addEventListener('click', () => this.act(() => this.game.annex()));
+    n.airport.addEventListener('click', () => this.act({ kind: 'airport' }, n.airport));
+    n.highway.addEventListener('click', () => this.act({ kind: 'highway' }, n.highway));
+    n.estate.addEventListener('click', () => this.act({ kind: 'estate' }, n.estate));
+    n.annex.addEventListener('click', () => this.act({ kind: 'annex' }, n.annex));
 
     for (const { service, button } of this.serviceNodes) {
-      button.addEventListener('click', () => this.act(() => this.game.buildService(service)));
+      button.addEventListener('click', () =>
+        this.act({ kind: 'service', key: service.key }, button),
+      );
     }
 
-    n.cityHall.addEventListener('click', () => this.act(() => this.game.buildCityHall()));
+    n.cityHall.addEventListener('click', () => this.act({ kind: 'cityHall' }, n.cityHall));
 
     n.freeTransport.addEventListener('click', () => {
-      this.game.setFreeTransport(!this.game.state.freeTransport);
-      this.paint();
+      this.act({ kind: 'freeTransport', on: !this.game.state.freeTransport });
     });
 
     n.auto.addEventListener('click', () => {
-      this.game.setAutoDevelop(!this.game.state.autoDevelop);
-      this.paint();
+      this.act({ kind: 'autoDevelop', on: !this.game.state.autoDevelop });
     });
 
     n.reset.addEventListener('click', () => {
       if (!confirm('Clear the city and start over? This cannot be undone.')) return;
-      this.game.reset();
+      this.act({ kind: 'reset' });
       // The ticker is the one part of the HUD that holds anything across a
       // paint, so it is the one part a reset has to be told about.
       this.ticker.clear();
@@ -898,7 +899,7 @@ export class Hud {
       ) {
         return;
       }
-      this.game.ascend();
+      this.act({ kind: 'ascend' });
       // The ticker is the one part of the HUD that holds anything across a
       // paint, so it is the one part a founding has to be told about — same as
       // a reset, because underneath it is one.
@@ -931,10 +932,7 @@ export class Hud {
       button.className = 'step';
       button.setAttribute('role', 'radio');
       button.textContent = step.label;
-      button.addEventListener('click', () => {
-        this.game.setTaxRate(i);
-        this.paint();
-      });
+      button.addEventListener('click', () => this.act({ kind: 'taxRate', step: i }));
       this.taxButtons.push(button);
       n.taxSteps.append(button);
     }
@@ -948,17 +946,13 @@ export class Hud {
       button.className = 'step';
       button.setAttribute('role', 'radio');
       button.textContent = trade.label;
-      button.addEventListener('click', () => {
-        this.game.setPowerTrade(i);
-        this.paint();
-      });
+      button.addEventListener('click', () => this.act({ kind: 'powerTrade', step: i }));
       this.powerButtons.push(button);
       n.powerSteps.append(button);
     }
 
     n.goodsTrade.addEventListener('click', () => {
-      this.game.setGoodsTrade(!this.game.state.goodsTrade);
-      this.paint();
+      this.act({ kind: 'goodsTrade', on: !this.game.state.goodsTrade });
     });
 
     this.wireSheet();
@@ -983,8 +977,35 @@ export class Hud {
     this.paint();
   }
 
-  private act(run: () => boolean): void {
-    if (run()) this.paint();
+  /**
+   * Sends one command, and acknowledges the click at once.
+   *
+   * The whole of the answer to a simulation that is a message away. `send` is
+   * fire-and-forget — the worker applies the command and the next state reply
+   * carries the result, which is at most one tick behind — so without this a
+   * button would sit there for up to a tenth of a second having visibly done
+   * nothing, which is exactly how a broken button feels.
+   *
+   * What it does *not* do is guess. There is no optimistic mutation of the
+   * state: a second write path on this side would be a second implementation of
+   * `Game.buildHome`, and the two would drift the first time a cost curve
+   * moved. The acknowledgement is a class on the button and nothing more, and
+   * the numbers change when the simulation says they changed.
+   *
+   * So what happens when the worker refuses a purchase the player just clicked?
+   * Nothing visible. The button flashes, no state arrives that spent the money,
+   * and the panel goes on saying what it said — which is precisely what the
+   * game already did when a click landed on a button the last paint had
+   * disabled. The refusal has never been reported and does not start being.
+   */
+  private act(command: Command, button?: HTMLElement): void {
+    this.game.send(command);
+    if (!button) return;
+    // Restarted rather than added: a second click inside the animation would
+    // otherwise do nothing at all, which is the failure this exists to fix.
+    button.classList.remove('acted');
+    void button.offsetWidth;
+    button.classList.add('acted');
   }
 
   /** Opens one tab. Nothing about the data moves; only which nodes are visible. */
