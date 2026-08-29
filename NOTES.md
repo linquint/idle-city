@@ -447,3 +447,296 @@ barely taught one and LEVEL_UP_SECONDS keeps its meaning as the *fastest* wave
 rather than the only one. That bounds the change to something a pacing run can
 measure, and it is the only version worth putting through
 `tools/economy.calibrate.mjs`.
+
+---
+
+# Phase 6 design notes
+
+Three write-ups. One is a decision Prompt D2 deliberately deferred rather than
+took; the other two are the blocked memos, and both of them turn out to rest on
+numbers that have moved since the brief was written — so each opens by
+re-measuring the thing it is about.
+
+Every number below is measured against this build.
+
+---
+
+## D2's third option — making the fire's plot the plot that empties
+
+The demolition animation shipped as option 2: a building falls down where the
+flames were, and the plot that actually empties is the newest one in the zone.
+Option 3 — making them the same plot — was written up as its own item, and this
+is it.
+
+### What the lie is worth measuring first
+
+At 20 districts, the plot a fire is on and the plot the count drops at:
+
+| fire on slot | flames at | distance to the plot that empties |
+| --- | --- | --- |
+| 12 | (20, 28) | 388 |
+| 412 | (148, 40) | 486 |
+| 800 | (-224, 72) | 217 |
+| 276 | (140, -92) | 558 |
+
+World units, on a map about 700 across. So the building that silently vanishes
+is typically most of a city away from the fire, which is why option 1 —
+animating the collapse where the count drops — was never viable: it is a
+building falling over on the far side of the map from the flames.
+
+### The save cost is not the blocker
+
+Recording which plots are gone, as a hole list per zone:
+
+| holes recorded | save (JSON) | delta |
+| --- | --- | --- |
+| 0 | 1,505 B | — |
+| 1 | 1,518 B | +13 |
+| 10 | 1,544 B | +39 |
+| 100 | 1,899 B | +394 |
+| 1,000 | 6,356 B | +4,851 |
+
+Bounded above by the plot count — 4,018 at 49 districts — so even the
+pathological case is about twenty kilobytes. It would be a fourth save
+exception and it would grow with *buildings* rather than with a table or with
+districts, which is the line `LevelCohort` draws. But it is not what stops this.
+
+### What stops it is that slot order *is* build order
+
+`levelAt(levels, slot)` walks the cohort from the top level down and answers
+"this slot holds level l". That is correct only because the oldest buildings
+hold the highest levels and the oldest buildings are the lowest slots. The whole
+cohort representation is that one identity.
+
+Punch a hole at slot k and two things can happen, and both are worse than the
+lie:
+
+- **the hole is refilled.** The next house built lands on slot k, which is an
+  *old* slot, and inherits whatever level the cohort walk says stands there. A
+  building bought this second appears as a tower. Avoiding that needs a
+  separate age-to-slot permutation in the save, which is per-building state by
+  another name;
+- **the hole is never refilled.** Then fire loss is permanent and `homeCapacity`
+  falls with every fire — which contradicts the position `abandonedR`'s own
+  comment already takes ("permanent loss is the fastest way to make someone
+  close an idle game for good"), and is a balance change rather than an
+  animation.
+
+### And the downstream cost, for completeness
+
+| what | today | with holes |
+| --- | --- | --- |
+| `place(zone, slot, merged, z)` | binary search over parcels, O(log n) | the k-th *non-hole* plot: a second structure and a rank query |
+| `housingCentralityMean(n, z)` | one prefix-sum read, on `income`'s 10 Hz path | prefix sum less the holes below n; `landValue` becomes a function of the hole set |
+| `pairs(districts)` | a running total, precomputed | must exclude every pair containing a hole |
+| `ZoneLayer` | "a level is a contiguous run of slots" | false; `SlotRanges.resolve` stops being one addition and the append fast path stops being expressible |
+
+**Verdict: not a parcel-book change.** The brief framed it as "the parcel book
+supporting removal of an arbitrary index", and the parcel book is the easy part.
+What it actually asks for is a different representation of what a building is,
+and that is a multi-session rewrite of the middle of the game rather than the
+honest version of an animation.
+
+**What was shipped instead** is option 2 with the dishonesty moved somewhere it
+reads as a story rather than as a bug: the building at the fire's plot collapses
+and is then *rebuilt*, which is a true account of what the simulation did — the
+city really is one building's worth of stock smaller, at the far end of the
+build list. See `src/render/collapse.ts`.
+
+---
+
+## Memo 4 — Library and theatre
+
+### The weights have already moved, and it changes the question
+
+The brief describes four happiness weights — health 0.34, police 0.26, fire
+0.22, recreation 0.18 — summing to exactly 1. That is no longer the model.
+Phase 5's crime work took police out entirely, so today:
+
+| term | weight |
+| --- | --- |
+| health (`hospital`) | 0.46 |
+| fire | 0.30 |
+| recreation (`RECREATION_WEIGHT`) | 0.24 |
+| police | **0** — crime is a quantity now |
+| **sum** | **1.00** |
+
+So the calibration the brief protects is still live and still sums to 1, but it
+is a *three*-term model, and health is 46% of it. A culture weight would be a
+fourth term rather than a fifth, and it would be taking its share from three
+terms rather than four — a bigger re-normalisation than the brief assumed, not
+a smaller one.
+
+### The land wall is unchanged
+
+`FRONTAGE_TARGET.squares` is 9 and every one is spoken for: 6 civic, 1 small
+landmark, 1 city hall, 1 power plant. The four spare plots a district holds are
+courtyard plots with no frontage and they are what parks are built on. A sixth
+`CIVIC_SERVICES` entry moves `siteCapacity`'s divisor and relocates every
+hospital, police station, fire station, school and depot in every existing save.
+Same wall as the prison and the recycling centre in Memo 1, same four options.
+
+### The question that actually decides it
+
+The brief's own escape — culture as a modifier on earned coverage, like
+`LANDMARK_MOOD` — is not an escape from a design question, it is the answer to
+one. `config.ts` already says what a landmark is for:
+
+> Landmarks buy happiness *early*, standing in for services not yet built, and
+> stop mattering once the city is properly served.
+
+That is, precisely and completely, what a cheap library and theatre would do.
+`LANDMARK_MOOD` is 0.12, deliberately less than the cheapest service weight so
+that a landmark cannot be a way to skip the hospital, and it stops paying at
+full coverage. A "small happiness weight" for culture that worked any
+differently would be a second answer to a question the game has already
+answered.
+
+**So: culture is a cheaper tier of landmark, and the feature is two rows in
+`LANDMARKS`.** Not a new system, not a fourth weight, not a sixth civic type.
+
+### What those two rows cost
+
+The existing table, for scale:
+
+| | base | growth | span | reach |
+| --- | --- | --- | --- | --- |
+| museum | 4,000 | 1.6 | 2 | 24 |
+| stadium | 12,000 | 1.7 | 3 | 38 |
+
+A library and a theatre would sit under the museum — call it 900 and 2,200,
+growth 1.5, reach 14 and 18. And there is exactly one thing to resolve before
+writing them, which the brief does not mention:
+
+**`landmarkSiteCapacity` gives one small site per district and one large one.**
+A third span-2 landmark competes for the *same* single small site, so a city
+that builds a library builds it instead of a museum. That is either the feature
+— a real choice between four cheap culture buildings and one expensive one —
+or a bug, and it has to be decided before the rows are written. Three options,
+in increasing cost:
+
+1. **Share the site, and say so.** One small-landmark site a district, four
+   things that can stand on it. Zero land change, zero migration, and it makes
+   the tier a decision rather than a checklist. `landmarkSiteCapacity` becomes
+   one number shared across every span-2 landmark and `canBuildLandmark`
+   compares against the sum.
+2. **A second small site per district**, taken from the two courtyard plots the
+   parks do not use — which are not 2x2 squares, so this does not work without
+   re-cutting the plan. It is the prison's problem again.
+3. **Give culture its own site class**, which is a tenth square and the divisor
+   change the whole memo exists to avoid.
+
+**Recommendation: (1).** It is the only one that costs no land, needs no
+migration, and makes the tier mean something. What it needs measuring first is
+`landmarkPlotsCovered` at four small landmarks a district rather than one — the
+reach geometry is memoised against the counts and this widens the key.
+
+**Still blocked on**: whether sharing the site is acceptable, which is a design
+call rather than a measurement.
+
+---
+
+## Memo 5 — Demographics, cemetery, and health as a stock
+
+### The model, measured
+
+```
+population(s)   = Σ homeLevels[l] × LEVEL_HOUSING[l]     // housing capacity
+residents(s)    = population(s) × occupancyR             // capacity × fill
+occupancyR      → chases occupancyTarget on OCCUPANCY_TAU = 120s
+occupancyTarget = max(FLOOR, min(1, FLOOR + (FULL − FLOOR)×happiness
+                                        + DEMAND×demand)) × powerCap
+                  FLOOR 0.08, FULL 0.92, EMPTY 0.25
+```
+
+There are no people in this simulation. There is housing capacity and a fill
+ratio, and `occupancyR` is already a migration model: an integrated lagged
+quantity that rises when the city is happy, falls when it is not, and has a
+vacancy clock and abandonment underneath it.
+
+What reads it back, which is the size of the thing being proposed for
+replacement: 21 references across `economy.ts`, `game.ts` and `save.ts`, and
+`residents` is called from 14 places including the traffic layer and the HUD.
+Four of those readers are load-bearing rather than incidental —
+`isVacant`/`abandonRate`, `canLevelUp` and `promotionBlocker` (which refuses to
+promote a zone under `LEVEL_UP_OCCUPANCY`), `effectiveOf` (which is what
+`income` multiplies), and every coverage denominator's occupancy-invariance
+argument.
+
+### Health as a stock double-counts, and the weights say so louder than before
+
+Hospitals already reach residents by a calibrated path:
+
+```
+hospitals → coverage → happiness → occupancyTarget → occupancyR → residents
+```
+
+A second path from the same purchase to the same output means a hospital pays
+twice, and the happiness ceiling test will not catch it because the second path
+is outside the happiness bracket entirely.
+
+And the re-normalisation is now worse than the brief thought. Health is 0.46 of
+a three-term model. Take it out and what is left is fire 0.30 and recreation
+0.24, re-normalised to 0.556 and 0.444 — a **two-term** happiness model, where
+half of it is a service most cities buy for the fire *risk* rather than for the
+mood. Phase 5's crime work has already spent the one weight that could afford to
+leave. There is no second one.
+
+**Verdict: do not make health a stock.** Not "not yet" — the seat it would take
+is occupied by the thing that makes the whole model add up.
+
+### The question that decides the other two
+
+> Is `occupancyR` being replaced, or wrapped?
+
+**Wrapped.** The argument is the same one that decided Memo 4, and it is the
+stronger of the two.
+
+A *replacement* — age cohorts with births, deaths and migration producing
+`residents` — is a second migration model beside the one that already exists,
+and the existing one is good: lagged, bounded, legible, and hooked into
+abandonment, ruins, recovery, the vacancy clock, income and every coverage
+denominator. Two models of the same thing either disagree or one of them is
+decoration. Replacing it is a multi-session rewrite of the centre of the game
+and should be planned as one.
+
+A *wrapper* — demographics as a readout **over** the occupancy model, where
+births and deaths are derived flows that *explain* the number rather than
+produce it — is a much smaller feature, and it composes with everything:
+
+- **it needs no new save state at all.** `residents(s)` is already a pure
+  function of counts; an age distribution over it can be too, as long as it is a
+  function of `residents` and `elapsed` rather than an integrated stock. Five
+  city-wide age buckets derived from a static table is a *readout*, and the
+  file that would hold it is a sibling of `achievements.ts` — bounded by the
+  table, delete it and the city is identical;
+- **it cannot double-count**, because it produces nothing. A hospital changes
+  life expectancy in the *readout* and changes residents through the path it
+  already has, and those are the same fact stated twice rather than two
+  effects;
+- **it survives the `LevelCohort` objection cleanly.** That comment names "a
+  per-building age" as the input that would push the save off cohorts and onto
+  instances. Resident age is not per-building — but only while it stays a
+  city-wide distribution. A per-district one would not survive it, and the
+  wrapper form makes that impossible rather than merely discouraged.
+
+What the wrapper cannot do is the thing that would make demographics a
+*mechanic*: a city that ages badly and loses people to it. That is the honest
+cost of the recommendation, and it is worth paying, because the mechanic
+version is `occupancyR` with more steps.
+
+### The cemetery
+
+Blocked on land (Memo 1) and on demographics existing. Under the wrapper reading
+it stays blocked on land and gains nothing to be blocked on — a cemetery whose
+demographics are a readout has nothing to consume, so it would be a civic
+building with a happiness effect, which is a sixth `CIVIC_SERVICES` entry and
+the whole of Memo 1's problem. Nothing to prompt.
+
+### Suggested order, if this is taken up
+
+1. Demographics as a readout over `residents`, in its own file, with the
+   `LevelCohort` argument written into its header the way `achievements.ts`
+   writes its three rules.
+2. Nothing else. Health stays a weight, and the cemetery waits for a land
+   answer that is not this memo's to give.
