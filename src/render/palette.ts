@@ -102,13 +102,17 @@ export const PALETTE = {
   quay: 0x8d939c,
   hull: 0x2b3644,
   container: 0xb4623f,
-  // Transport. The depot is a shed and an apron rather than a civic slab, and
-  // the buses that leave it wear the same colour so the two read as one system.
+  // Transport. The depot is a shed over an apron rather than a civic slab, so
+  // this is the shed and the fuel pump beside it and nothing else.
   depot: 0x3d5a52,
   // Not another teal: the hospital's roof is mint and the two 2x2 sheds would
   // read as the same building from the play camera. A transport livery instead
-  // — the one hue nothing else in the city wears.
+  // — the one hue nothing else in the city wears, and the only one worn by a
+  // building *and* by vehicles: the depot's cap and sign, and a band down each
+  // coach parked under it. See `busDepotSet`.
   depotRoof: 0xc2d24f,
+  // The fleet, on the streets and standing on the depot's own apron. One colour
+  // for both, because they are the same buses.
   bus: 0x5f8f5a,
   // Zoned land nobody will ever build on: the interior of a deep block, and the
   // civic sites still standing empty. Drawn, or the blocks read as holes.

@@ -71,3 +71,39 @@ export const FIRE_STATION_PARTS: readonly ModelPart[] = [
   { shape: 'box', at: [-2.4, 3.525, -2.9], size: [1.3, 0.55, 0.8], mtl: 'plant-grey', colour: PALETTE.stack }, // roof-plant
   { shape: 'box', at: [-0.9, 3.525, -3], size: [0.7, 0.55, 0.6], mtl: 'plant-grey', colour: PALETTE.stack }, // roof-plant
 ];
+
+/** The transit depot: a bus shed, a canopied apron, and the yard it serves. */
+export const BUS_DEPOT_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [0, 1.2, -2.25], size: [7, 2.4, 2.5], mtl: 'depot-teal', colour: PALETTE.depot }, // shed
+  { shape: 'box', at: [0, 1.72, -2.25], size: [7.06, 0.42, 2.56], mtl: 'glazing', colour: PALETTE.parapet }, // shed-glazing
+  { shape: 'box', at: [0, 2.51, -2.25], size: [7.24, 0.24, 2.74], mtl: 'livery-lime', colour: PALETTE.depotRoof }, // shed-cap
+  { shape: 'box', at: [0, 0.03, 1.2], size: [7, 0.06, 4.6], mtl: 'apron-asphalt', colour: PALETTE.runway }, // apron
+  { shape: 'box', at: [-3.3, 0.05, 1.2], size: [0.12, 0.03, 3.7], mtl: 'marking-white', colour: PALETTE.marking }, // apron-markings
+  { shape: 'box', at: [-1.7, 0.05, 1.2], size: [0.12, 0.03, 3.7], mtl: 'marking-white', colour: PALETTE.marking }, // apron-markings
+  { shape: 'box', at: [-0.1, 0.05, 1.2], size: [0.12, 0.03, 3.7], mtl: 'marking-white', colour: PALETTE.marking }, // apron-markings
+  { shape: 'box', at: [1.5, 0.05, 1.2], size: [0.12, 0.03, 3.7], mtl: 'marking-white', colour: PALETTE.marking }, // apron-markings
+  { shape: 'box', at: [-1, 0.05, -0.72], size: [4.8, 0.03, 0.14], mtl: 'marking-white', colour: PALETTE.marking }, // apron-markings
+  { shape: 'box', at: [-2.5, 0.61, 1.05], size: [1.15, 1.1, 3.2], mtl: 'bus-green', colour: PALETTE.bus }, // buses
+  { shape: 'box', at: [-0.9, 0.61, 1.05], size: [1.15, 1.1, 3.2], mtl: 'bus-green', colour: PALETTE.bus }, // buses
+  { shape: 'box', at: [0.7, 0.61, 1.05], size: [1.15, 1.1, 3.2], mtl: 'bus-green', colour: PALETTE.bus }, // buses
+  { shape: 'box', at: [-2.5, 0.91, 1.05], size: [1.19, 0.36, 3.16], mtl: 'glazing', colour: PALETTE.parapet }, // bus-glazing
+  { shape: 'box', at: [-0.9, 0.91, 1.05], size: [1.19, 0.36, 3.16], mtl: 'glazing', colour: PALETTE.parapet }, // bus-glazing
+  { shape: 'box', at: [0.7, 0.91, 1.05], size: [1.19, 0.36, 3.16], mtl: 'glazing', colour: PALETTE.parapet }, // bus-glazing
+  { shape: 'box', at: [-2.5, 0.37, 1.05], size: [1.19, 0.16, 3.16], mtl: 'livery-lime', colour: PALETTE.depotRoof }, // bus-livery
+  { shape: 'box', at: [-0.9, 0.37, 1.05], size: [1.19, 0.16, 3.16], mtl: 'livery-lime', colour: PALETTE.depotRoof }, // bus-livery
+  { shape: 'box', at: [0.7, 0.37, 1.05], size: [1.19, 0.16, 3.16], mtl: 'livery-lime', colour: PALETTE.depotRoof }, // bus-livery
+  { shape: 'box', at: [-0.65, 2.05, 0], size: [5.7, 0.18, 1.7], mtl: 'plant-grey', colour: PALETTE.stack }, // canopy
+  { shape: 'box', at: [-3.2, 1.025, -0.7], size: [0.2, 2.05, 0.2], mtl: 'trim-concrete', colour: PALETTE.concrete }, // columns
+  { shape: 'box', at: [1.9, 1.025, -0.7], size: [0.2, 2.05, 0.2], mtl: 'trim-concrete', colour: PALETTE.concrete }, // columns
+  { shape: 'box', at: [-3.2, 1.025, 0.7], size: [0.2, 2.05, 0.2], mtl: 'trim-concrete', colour: PALETTE.concrete }, // columns
+  { shape: 'box', at: [1.9, 1.025, 0.7], size: [0.2, 2.05, 0.2], mtl: 'trim-concrete', colour: PALETTE.concrete }, // columns
+  { shape: 'box', at: [2.55, 0.95, 1.5], size: [0.16, 1.9, 0.16], mtl: 'trim-concrete', colour: PALETTE.concrete }, // columns
+  { shape: 'box', at: [2.55, 0.95, 3.1], size: [0.16, 1.9, 0.16], mtl: 'trim-concrete', colour: PALETTE.concrete }, // columns
+  { shape: 'box', at: [-0.65, 1.89, 0.76], size: [5.2, 0.1, 0.16], mtl: 'bay-light', colour: PALETTE.sodium }, // bay-lights
+  { shape: 'box', at: [2.9, 0.53, 2.3], size: [0.8, 1, 1.1], mtl: 'depot-teal', colour: PALETTE.depot }, // fuel-pump
+  { shape: 'box', at: [2.75, 1.95, 2.3], size: [1.5, 0.16, 2.2], mtl: 'plant-grey', colour: PALETTE.stack }, // fuel-canopy
+  { shape: 'box', at: [-3.15, 1.65, 3.25], size: [0.26, 3.3, 0.26], mtl: 'trim-concrete', colour: PALETTE.concrete }, // pylon
+  { shape: 'box', at: [-3.15, 3.05, 3.25], size: [1, 0.68, 0.14], mtl: 'livery-lime', colour: PALETTE.depotRoof }, // pylon-sign
+  { shape: 'box', at: [-2.1, 2.9, -3], size: [1.2, 0.56, 0.8], mtl: 'plant-grey', colour: PALETTE.stack }, // roof-plant
+  { shape: 'box', at: [-0.5, 2.9, -2.9], size: [0.7, 0.56, 0.6], mtl: 'plant-grey', colour: PALETTE.stack }, // roof-plant
+];

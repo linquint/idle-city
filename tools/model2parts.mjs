@@ -22,6 +22,7 @@ const PALETTE = {
   0x54637c: 'stack', 0x2a3140: 'runway', 0xf0a64b: 'sodium',
   0xe8ecf2: 'marking', 0xd8453c: 'emergency',
   0x6d2f2c: 'fire', 0xe0574b: 'fireRoof', 0xc9d1da: 'concrete',
+  0x3d5a52: 'depot', 0xc2d24f: 'depotRoof', 0x5f8f5a: 'bus',
 };
 
 /* ---- parsing ------------------------------------------------------------ */

@@ -38,7 +38,7 @@ import { Glow } from './glow.ts';
 import { GrowableInstancedMesh, SlotRanges } from './growable.ts';
 import { GrowthSchedule } from './growth.ts';
 import { PALETTE } from './palette.ts';
-import { HOSPITAL_PARTS, FIRE_STATION_PARTS } from './civicModels.ts';
+import { HOSPITAL_PARTS, FIRE_STATION_PARTS, BUS_DEPOT_PARTS } from './civicModels.ts';
 import { mergeByMaterial, type ModelPart } from './model.ts';
 import type { OverlaySource } from './zones.ts';
 
@@ -1342,13 +1342,13 @@ const PART_AT_SITE = new THREE.Vector3(0, 0, 0);
  * play camera.
  *
  * A set is a list of parts rather than a fixed body-roof-mark triple, because
- * the types have grown apart. Eight of them are a slab with one thing standing
- * on it and say exactly that through `civicTrio`; the hospital and the fire
- * station are modelled — assembled from part tables generated out of `models/`
- * and merged by material, to eight and nine meshes. A list is what both kinds
- * are, and the cost still grows with the *table* rather than with the city:
- * every mesh is built once, in this constructor, and a hundred hospitals are a
- * hundred instances in it rather than a hundred draw calls.
+ * the types have grown apart. Seven of them are a slab with one thing standing
+ * on it and say exactly that through `civicTrio`; the hospital, the fire
+ * station and the depot are modelled — assembled from part tables generated out
+ * of `models/` and merged by material, to eight, nine and nine meshes. A list
+ * is what both kinds are, and the cost still grows with the *table* rather than
+ * with the city: every mesh is built once, in this constructor, and a hundred
+ * hospitals are a hundred instances in it rather than a hundred draw calls.
  */
 class CivicMeshes {
   private readonly meshes: readonly GrowableInstancedMesh[];
@@ -1443,7 +1443,7 @@ class CivicMeshes {
 }
 
 /**
- * A slab, the roof on it, and one thing standing on that: nine of the ten types.
+ * A slab, the roof on it, and one thing standing on that: seven of the ten types.
  *
  * The body rises out of the ground and the other two ride up on it, which is
  * the growth animation every civic building had when there was only one shape
@@ -1582,7 +1582,7 @@ interface Finish {
 /**
  * A civic building assembled from its model: one instanced mesh per material.
  *
- * The two composed types come through here and the eight slabs go through
+ * The three composed types come through here and the seven slabs go through
  * `civicTrio`; the only thing that makes this different is that the geometry
  * came out of a file. Growth is `ride` with no offset throughout, which comes
  * out as the whole assembly scaling about the site's ground centre — the one
@@ -1620,12 +1620,12 @@ function modelSet(
  * The hospital: a ward slab across the back of the site and a low treatment
  * wing across the front of it, in an L around the ambulance bay.
  *
- * It is one of the two civic types that are *composed* rather than massed, and
- * it earns that by being the building the city is told to buy first — the
- * anchor of the service ladder, on the site the player looks at longest. What
- * it has to do from the play camera is read as a hospital rather than as a pale
- * 2x2 shed, and three things do that, in the order they become visible as the
- * camera comes down:
+ * It is the first of the three civic types that are *composed* rather than
+ * massed, and it earns that by being the building the city is told to buy
+ * first — the anchor of the service ladder, on the site the player looks at
+ * longest. What it has to do from the play camera is read as a hospital rather
+ * than as a pale 2x2 shed, and three things do that, in the order they become
+ * visible as the camera comes down:
  *
  *  - The **massing**. Two volumes at two heights, not one: a 3.3-tall ward with
  *    a helipad and plant on its roof, and a 1.65-tall wing in front of it. From
@@ -1678,7 +1678,7 @@ function hospitalSet(scene: THREE.Scene, capacity: number): CivicMeshes {
  * The fire station: an appliance hall on the street, a dormitory block behind
  * it, and a hose tower on the back corner.
  *
- * The other composed type, and it is composed for the opposite reason to the
+ * The second composed type, and it is composed for the opposite reason to the
  * hospital's. The hospital had to stop reading as a pale shed; this one has to
  * stop reading as the *police station*, which is the same dark 2x2 block a
  * player meets in the same first hour. Height is what separates them, and this
@@ -1723,6 +1723,66 @@ function fireStationSet(scene: THREE.Scene, capacity: number): CivicMeshes {
   );
 }
 
+/**
+ * The transit depot: a bus shed across the back of the site and the yard in
+ * front of it, under a canopy, with the fleet parked on it.
+ *
+ * The third composed type, and the one whose subject is not the building. A
+ * depot is what it is because of the *buses*: they are what the player bought,
+ * they are the thing the HUD talks about, and they are what the type shares
+ * with the traffic already running past the site. So the model gives two thirds
+ * of the footprint to an apron, parks three coaches on it in the same green the
+ * streets' buses wear, and keeps the shed itself low — a 2.4-unit box against
+ * the fire station's 5.3-unit tower — so nothing hides them from the play
+ * camera.
+ *
+ * Told apart from the other 2x2 types by what is on the ground rather than by
+ * height, which is a gap the other four services leave: the police station is a
+ * closed block, the school a flat hall, the fire station a tower, and not one of
+ * them has anything standing on the site beside it. Read from overhead this is
+ * the one civic square that is mostly yard — bays painted across the tarmac, a
+ * coach in three of them and the fourth left to the fuel pump, and a lit canopy
+ * across the mouth of the shed.
+ *
+ * The lime is the depot's own livery and is worn three times on purpose: the
+ * shed cap, a band down each bus, and the sign on the pylon. That is what makes
+ * the buses read as *this depot's* buses rather than as three green boxes
+ * parked on a civic site, and it is the only colour in the city that repeats
+ * across a building and its vehicles.
+ *
+ * Thirty-two pieces, nine meshes.
+ */
+function busDepotSet(scene: THREE.Scene, capacity: number): CivicMeshes {
+  // The bay lights strung under the canopy, and the only lit surface here. A
+  // low floor for the reason the fire station's beacon has one: a depot at
+  // night is a lit yard with the fleet in it, and that only reads if the lights
+  // were dim at noon.
+  const bays = new Glow(PALETTE.sodium, 0.3);
+  return modelSet(
+    scene,
+    BUS_DEPOT_PARTS,
+    new Map<string, Finish>([
+      // The shed and the fuel pump standing on the yard's far corner.
+      ['depot-teal', { name: 'transit:walls', tint: true, receiveShadow: true }],
+      // The shed's clerestory band and the coaches' windows: one material,
+      // because at this distance a bus window and a shed window are the same
+      // dark glass. Proud of what they sit on, so never shadow-casting.
+      ['glazing', { name: 'transit:glazing', castShadow: false }],
+      ['livery-lime', { name: 'transit:livery', receiveShadow: true }],
+      ['bus-green', { name: 'transit:buses', receiveShadow: true }],
+      // The yard: made ground, so it receives the shed's shadow and casts none.
+      ['apron-asphalt', { name: 'transit:apron', castShadow: false, receiveShadow: true }],
+      ['marking-white', { name: 'transit:markings', castShadow: false }],
+      // The canopy over the bays, the one over the pump, and the roof plant.
+      ['plant-grey', { name: 'transit:canopies', receiveShadow: true }],
+      // What holds those up, and the sign pylon on the street corner.
+      ['trim-concrete', { name: 'transit:columns' }],
+      ['bay-light', { name: 'transit:lights', glow: bays, castShadow: false }],
+    ]),
+    capacity,
+  );
+}
+
 /** One mesh set per service, in SERVICES order. */
 function civicSet(scene: THREE.Scene, service: Service, capacity: number): CivicMeshes {
   if (service.key === 'hospital') return hospitalSet(scene, capacity);
@@ -1756,23 +1816,7 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
       windows,
     );
   }
-  if (service.key === 'transit') {
-    // A depot is a long shed with a lit apron down one side: the bays the buses
-    // pull out of. Low and open where the police station is low and closed, so
-    // the two are told apart at the same footprint by what is on the ground
-    // rather than by colour.
-    const apron = new Glow(PALETTE.sodium, 0.28);
-    return civicTrio(
-      scene,
-      service.key,
-      { body: PALETTE.depot, roof: PALETTE.depotRoof, height: 1.6 },
-      new THREE.BoxGeometry(CIVIC_W, 0.16, 1.6),
-      apron.material,
-      new THREE.Vector3(0, -1.5, -CIVIC_W / 2 + 0.8),
-      capacity,
-      apron,
-    );
-  }
+  if (service.key === 'transit') return busDepotSet(scene, capacity);
   // The university: three plots a side and a tower off the middle of it, taller
   // than anything else the city builds until it reaches arcologies. It is the
   // one civic building meant to be visible from across the map.
@@ -1853,11 +1897,11 @@ class Outline {
  * separately and are not part of this: they stand on 2x2 and 3x3 sites, have no
  * level ladder, and are told apart by silhouette rather than by style. Ten
  * types — six services, the city hall, the power plant and two landmark sizes
- * — eight of them a slab, a roof and one mark at three meshes each, plus the
- * two modelled ones: the hospital at eight meshes and the fire station at nine.
- * The count grows with the *table* rather than with the city: a mesh is built
- * once per type and every hospital the player opens is another instance in the
- * ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
+ * — seven of them a slab, a roof and one mark at three meshes each, plus the
+ * three modelled ones: the hospital at eight meshes, and the fire station and
+ * the depot at nine each. The count grows with the *table* rather than with the
+ * city: a mesh is built once per type and every hospital the player opens is
+ * another instance in the ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
 export const BUILDING_MESH_BUDGET = 24;

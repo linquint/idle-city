@@ -1,17 +1,17 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { Buildings } from '../src/render/buildings';
-import { FIRE_STATION_PARTS, HOSPITAL_PARTS } from '../src/render/civicModels';
+import { BUS_DEPOT_PARTS, FIRE_STATION_PARTS, HOSPITAL_PARTS } from '../src/render/civicModels';
 import type { ModelPart } from '../src/render/model';
 import { CELL } from '../src/sim/config';
 import { CityLayout, worldX, worldZ } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
 
 /**
- * The two civic buildings that come out of a model, checked as a black box.
+ * The three civic buildings that come out of a model, checked as a black box.
  *
- * The other eight are a slab with one thing standing on them, and bounds checks
- * on those would only restate `civicTrio`. These two are assembled from part
+ * The other seven are a slab with one thing standing on them, and bounds checks
+ * on those would only restate `civicTrio`. These three are assembled from part
  * tables generated out of `models/`, and three things can go wrong with that
  * which cannot go wrong with a slab:
  *
@@ -70,7 +70,7 @@ function expected(parts: readonly ModelPart[]): Map<string, { min: number[]; max
 interface Modelled {
   readonly label: string;
   readonly parts: readonly ModelPart[];
-  /** Position in the civic interleave — hospitals 0, police 1, fire 2. */
+  /** Position in the civic interleave — hospitals 0, police 1, fire 2, depot 4. */
   readonly slot: number;
   readonly count: (n: number) => Partial<GameState>;
   /** Which mesh each of the model's materials is drawn into. */
@@ -110,6 +110,25 @@ const MODELLED: readonly Modelled[] = [
       ['apron-asphalt', 'fire:apron'],
       ['marking-white', 'fire:markings'],
       ['plant-grey', 'fire:plant'],
+    ]),
+  },
+  {
+    label: 'bus depot',
+    parts: BUS_DEPOT_PARTS,
+    slot: 4,
+    count: (n) => ({ depots: n }),
+    meshes: new Map([
+      ['depot-teal', 'transit:walls'],
+      ['glazing', 'transit:glazing'],
+      // The shed cap, the band down each bus and the sign on the pylon: one
+      // livery worn by the building and by the vehicles parked in front of it.
+      ['livery-lime', 'transit:livery'],
+      ['apron-asphalt', 'transit:apron'],
+      ['marking-white', 'transit:markings'],
+      ['bus-green', 'transit:buses'],
+      ['plant-grey', 'transit:canopies'],
+      ['trim-concrete', 'transit:columns'],
+      ['bay-light', 'transit:lights'],
     ]),
   },
 ];
