@@ -758,6 +758,23 @@ Every number below is measured against this build —
 
 ## 11. The civic land question, and what it costs at every divisor
 
+> **Since this was written**, the reviewer took option A and the waste depot
+> shipped as the sixth 2x2 type: `siteCapacity` divides by six, every civic
+> `plots` re-derived to the 24 anchor, and `migrate` refunds the buildings the
+> new interleave has no site for rather than deleting them. The eleventh square
+> shipped too, on the second attempt — see section 16, which records the first
+> one failing and section 17, which records what made it work. Two things this
+> memo got wrong are worth naming rather than leaving to be re-derived:
+>
+> - **not every `plots` figure comes off the anchor.** Schools and transit are
+>   held by something else — LEVEL_EDUCATION's window and "one depot, one
+>   district" — and taking the anchor would have put schools at 18, which is
+>   exactly the university's 18. A university reaching no further than a school
+>   is a school at forty times the price;
+> - **the relocation is worse than the table below says, and the refund is the
+>   answer to it.** 49 of the 54 buildings a 12-district city keeps stand on a
+>   different square, and 150,771 is handed back for the 18 it sheds.
+
 ### Why this is one memo and not four
 
 Four of Phase 7's eight features want a new 2x2 civic type: a library, a
@@ -893,6 +910,15 @@ currently has.
 
 ## 12. The waste depot and the recycling centre
 
+> **Since this was written**, this shipped exactly as recommended: the bus kept
+> the bins, `GARBAGE_COLLECTORS` is still `['transit']`, and the waste depot
+> lowers `garbageRate` at source through WASTE_RECYCLING instead of joining the
+> collectors. One new civic type rather than two, which is the difference
+> between six types and seven. Measured on the build, at 12 districts and the
+> top of the ladder with half of each built: 0.970 with nothing, 0.485 with half
+> the buses, 0.854 with half the depots, **0.427 with half of both** — the pair
+> is the product of two factors, which is the whole argument.
+
 Blocked on section 11, and worth writing down anyway because the measurement
 answers the brief's own question about the bus.
 
@@ -968,6 +994,24 @@ would paint the same number on every plot.
 ---
 
 ## 13. Library and theatre
+
+> **Since this was written**, both shipped — on a site class of their own rather
+> than by sharing the museum's, because the eleventh square arrived (section
+> 17). Two of this memo's conclusions held and one did not:
+>
+> - the fourth-weight and bracket-modifier readings were both re-costed against
+>   the build and both still fail, for exactly the reasons below;
+> - **the education split does not work.** A library feeding
+>   `educationCoverage` has to clear no rung alone *and* leave schools-plus-
+>   library under the 0.85 top rung, and schools already reach 62.5-78%. The
+>   library's whole budget is 0.07 of coverage — three plots of reach, which is
+>   a building that does nothing. The pool was too full to take a third
+>   contributor;
+> - so the two got different *existing quantities* instead, which is the brief's
+>   own preferred route: a **library** answers the idleness half of
+>   `crimePressure` (somewhere to go) and a **theatre** lands an audience on
+>   `berthsLanding` (a reason to come). Neither carries mood, so the ceiling is
+>   untouched by construction rather than by measurement.
 
 ### Both readings, costed
 
@@ -1327,3 +1371,103 @@ affordable, and neither is this cycle's:
 Until one of those happens, **culture shares the small-landmark site** — section
 13's recommendation, which costs no land, needs no migration, and is the only
 form the measurement leaves standing.
+
+
+---
+
+## 17. What made the eleventh square affordable
+
+Section 16 recorded the eleventh square being built, measured and reverted:
+four industrial plots is 13% of a district's job supply, and residential demand
+pinned at −1 for 1,244 minutes of a 48-hour run. The reviewer's answer was to
+re-solve `ZONE_SHARE` at 24/45/9 and take the square, and that is what shipped.
+
+### `ZONE_SHARE` itself does not move, and could not
+
+This is the part worth writing down, because "re-solve `ZONE_SHARE`" is the
+natural way to say it and is not what the fix turns out to be. `ZONE_SHARE` is
+the **sampler's input**; the frontage tuple 24/45/9 is its **output**. Changing
+the shares changes the tuple they produce, so the thing that was supposed to be
+fixed moves out from under the fix. Once the land is fixed, the only free
+variable left is **density**.
+
+So the equilibrium is re-solved in the per-plot figures, each by 13/9:
+
+| constant | was | is | what it restores |
+| --- | --- | --- | --- |
+| `JOBS_PER_INDUSTRIAL` | 20 | **29** | a district supplies **621** jobs, against 620 |
+| `INDUSTRIAL_OUTPUT` | 9 | **13** | a district supplies **117** goods, against 117 |
+| `INDUSTRY_BASE` | 120 | **173** | filling a district costs **3,724**, against 3,852 |
+| `INDUSTRY_GROWTH` | 1.14 | **1.208** | `ZONE_FILL_MULTIPLE` **5.48**, against 5.49 |
+
+The growth had to move with the base, or a district's industry would have got
+cheaper for having less of it: `ZONE_FILL_MULTIPLE.industry` is
+`INDUSTRY_GROWTH ** FRONTAGE_TARGET.industrial`, so the exponent shrank with the
+land and the base had to compensate.
+
+Measured, `npm run economy:calibrate` at three horizons after the whole cycle:
+
+| policy | 12h | 24h | 48h |
+| --- | --- | --- | --- |
+| auto-develop | R/C/I 0.0m | 0.0m | 0.0m |
+| discount-chasing | 0.0m | 0.0m | 0.0m |
+| disciplined | 0.0m | 0.0m | 0.0m |
+| disciplined + network | 0.0m | 0.0m | 0.0m |
+
+Nothing pins anywhere, against the 25.8 and 1,244 minutes the first attempt
+recorded.
+
+### The square went to a class of its own, not to the landmarks
+
+`landmarkSmallSites: 2` was the obvious way to spend it and is wrong. Two small
+sites a district doubles the **museum's** allowance, and a museum is an
+area-of-effect: measured, museums alone would have covered 83% of a
+one-district city and 64% of a full map against the 46% and 47% the reach was
+set to. `LANDMARK_MOOD` is deliberately worth less than the cheapest service
+weight so that a landmark cannot be a way to skip the hospital, and a museum
+covering two thirds of the map is exactly that.
+
+So culture took `cultureSites: 1`, and the museum kept its reach of 24
+untouched.
+
+**One landmark constant did have to move anyway.** The re-cut changes which plan
+every district accepts, so every site in the city sits somewhere new, and at the
+stadium's old reach of 38 it covered 97% of a 25-district city on its own —
+which makes the museum pointless once the dear one exists, the opposite of what
+`LANDMARKS` is for. 34 puts the worst reading back at 85%:
+
+| | 1d | 4d | 10d | 25d | 49d |
+| --- | --- | --- | --- | --- | --- |
+| museums only | 38% | 55% | 42% | 43% | 40% |
+| stadiums only | 42% | 68% | 76% | 85% | 75% |
+| both | 42% | 86% | 87% | 91% | 85% |
+
+### What it cost the test suite, and what that was worth
+
+Six fixtures moved, and every one of them was a real consequence rather than a
+loosened standard — worth listing, because the next land change will hit the
+same six:
+
+- the plot-book sums gained the culture square. `tools/citygen.test.mjs` read
+  140 of 144 until `cultures` joined the accounting, which is exactly the guard
+  working;
+- the overlay's plot count is derived from `SELLABLE_PER_DISTRICT` rather than
+  typed as 4,018;
+- the parcel invariant counts `MERGE_LEVEL` and above, because a richer city
+  merges and climbs inside one catch-up step;
+- the commercial-cluster bound went from 0.6 to 0.7 of a span, on a measured
+  9.39 against a diagonal of 21.2;
+- the happiness-lag test asserts the *share of the gap closed* rather than an
+  equality, because with six civic types stretched twelve ways the target is at
+  its clamp and still moving when the lag is measured;
+- the response fixture is a served city, because an unserved one collapses
+  before the calls it is measuring can fire.
+
+### And one bug the refund introduced
+
+Worth recording because it was invisible until a test took 266 seconds: the
+first version of the v15 refund walked from what the city keeps to whatever
+number the save file said. A doctored save claiming a billion hospitals ran a
+billion-iteration loop **on the load path**. It is bounded by every civic square
+there is — generous to every divisor this game has ever had, and still at most
+six a district.
