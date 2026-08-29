@@ -46,6 +46,7 @@ import {
   MUSEUM_PARTS,
   STADIUM_PARTS,
   SCHOOL_PARTS,
+  CAMPUS_PARTS,
 } from './civicModels.ts';
 import { mergeByMaterial, type ModelPart } from './model.ts';
 import type { OverlaySource } from './zones.ts';
@@ -1252,9 +1253,6 @@ export function roofline(kind: ZoneKind, slot: number, level: number): number {
  */
 const CIVIC_W = 2 * CELL - 1;
 
-/** A university straddles three plots on each axis, less the same gutter. */
-const UNIVERSITY_W = 3 * CELL - 1;
-
 interface CivicStyle {
   readonly body: number;
   readonly roof: number;
@@ -1315,13 +1313,14 @@ const PART_AT_SITE = new THREE.Vector3(0, 0, 0);
  * play camera.
  *
  * A set is a list of parts rather than a fixed body-roof-mark triple, because
- * the types have grown apart. Three of them are a slab with one thing standing
- * on it and say exactly that through `civicTrio`; the other seven are modelled
- * — assembled from part tables generated out of `models/` and merged by
- * material, to between five meshes and nine. A list is what both kinds are, and
- * the cost still grows with the *table* rather than with the city: every mesh
- * is built once, in this constructor, and a hundred hospitals are a hundred
- * instances in it rather than a hundred draw calls.
+ * the types have grown apart. Two of them are a slab with one thing standing on
+ * it and say exactly that through `civicTrio` — the city hall and the power
+ * plant, and nothing else is left; the other eight are modelled, assembled from
+ * part tables generated out of `models/` and merged by material, to between
+ * five meshes and nine. A list is what both kinds are, and the cost still grows
+ * with the *table* rather than with the city: every mesh is built once, in this
+ * constructor, and a hundred hospitals are a hundred instances in it rather
+ * than a hundred draw calls.
  */
 class CivicMeshes {
   private readonly meshes: readonly GrowableInstancedMesh[];
@@ -1416,7 +1415,7 @@ class CivicMeshes {
 }
 
 /**
- * A slab, the roof on it, and one thing standing on that: three of the ten types.
+ * A slab, the roof on it, and one thing standing on that: two of the ten types.
  *
  * The body rises out of the ground and the other two ride up on it, which is
  * the growth animation every civic building had when there was only one shape
@@ -1469,8 +1468,6 @@ function civicTrio(
     offset,
   );
 }
-const UNIVERSITY_TOWER_H = 9.5;
-
 /** How tall the city hall's clock tower stands above its slab. */
 const HALL_TOWER_H = 8.5;
 
@@ -1555,7 +1552,7 @@ interface Finish {
 /**
  * A civic building assembled from its model: one instanced mesh per material.
  *
- * The seven composed types come through here and the three slabs go through
+ * The eight composed types come through here and the two slabs go through
  * `civicTrio`; the only thing that makes this different is that the geometry
  * came out of a file. Growth is `ride` with no offset throughout, which comes
  * out as the whole assembly scaling about the site's ground centre — the one
@@ -1595,7 +1592,7 @@ function modelSet(
  * The hospital: a ward slab across the back of the site and a low treatment
  * wing across the front of it, in an L around the ambulance bay.
  *
- * It is the first of the seven types that are *composed* rather than
+ * It is the first of the eight types that are *composed* rather than
  * massed, and it earns that by being the building the city is told to buy
  * first — the anchor of the service ladder, on the site the player looks at
  * longest. What it has to do from the play camera is read as a hospital rather
@@ -1973,6 +1970,60 @@ function schoolSet(scene: THREE.Scene, capacity: number): CivicMeshes {
   );
 }
 
+/**
+ * The university: four ranges around a planted quad, with a campanile standing
+ * on the back corner.
+ *
+ * The eighth composed type, the second on a 3x3 square, and the tallest thing
+ * the city builds — 10.7 units to the top of the campanile's finial, against
+ * the city hall's clock tower at 10.9, which is deliberate: the hall stays the
+ * one building nothing else out-tops, and this comes as close as anything is
+ * allowed to.
+ *
+ * As a slab it was a pale block with a tower off the middle of it, which is the
+ * city hall's own silhouette at a bigger footprint — the two buildings on the
+ * map most easily confused, and the confusion was between the one a player
+ * builds once and the one they build every district. The quad settles it. A
+ * range on each side and a green in the middle is a shape nothing else in the
+ * city has, and it reads from directly overhead, where a tower reads as a dot.
+ *
+ * The campanile is off the corner rather than centred for the same reason the
+ * power plant's stack is: dead centre is the city hall's, and it has to stay
+ * the city hall's. Its belfry is the lit surface — two crossed openings, so the
+ * light shows from any bearing rather than only from two.
+ *
+ * Thirty-five pieces, nine meshes.
+ */
+function universitySet(scene: THREE.Scene, capacity: number): CivicMeshes {
+  // The belfry. The same floor the landmarks' lit fittings carry: this is the
+  // highest light in the city and it has to be visible across it after dark.
+  const belfry = new Glow(PALETTE.sodium, 0.44);
+  return modelSet(
+    scene,
+    CAMPUS_PARTS,
+    new Map<string, Finish>([
+      // The terrace the whole campus stands on, which is made ground.
+      ['trim-grey', { name: 'university:terrace', castShadow: false, receiveShadow: true }],
+      ['quad-lawn', { name: 'university:lawn', castShadow: false, receiveShadow: true }],
+      ['quad-path', { name: 'university:paths', castShadow: false, receiveShadow: true }],
+      // The four ranges, the colonnade along the front one, and the campanile.
+      ['campus-stone', { name: 'university:walls', tint: true, receiveShadow: true }],
+      // Banded storeys on all four ranges, and the gateway glass under the
+      // pediment, which reads as one material with them.
+      ['glazing', { name: 'university:glazing', castShadow: false }],
+      ['campus-roof', { name: 'university:caps', receiveShadow: true }],
+      ['belfry-light', { name: 'university:belfry', glow: belfry, castShadow: false }],
+      // The two trees on the quad. The same trunk and canopy the parks wear,
+      // because they are the same thing: planting the city maintains.
+      ['tree-trunk', { name: 'university:trunks' }],
+      ['tree-canopy', { name: 'university:canopies' }],
+    ]),
+    capacity,
+    // A 3x3 site, like the stadium's.
+    CELL,
+  );
+}
+
 /** One mesh set per service, in SERVICES order. */
 function civicSet(scene: THREE.Scene, service: Service, capacity: number): CivicMeshes {
   if (service.key === 'hospital') return hospitalSet(scene, capacity);
@@ -1980,21 +2031,7 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
   if (service.key === 'fire') return fireStationSet(scene, capacity);
   if (service.key === 'school') return schoolSet(scene, capacity);
   if (service.key === 'transit') return busDepotSet(scene, capacity);
-  // The university: three plots a side and a tower off the middle of it, taller
-  // than anything else the city builds until it reaches arcologies. It is the
-  // one civic building meant to be visible from across the map.
-  return civicTrio(
-    scene,
-    'university',
-    { body: PALETTE.university, roof: PALETTE.universityRoof, height: 3.2 },
-    new THREE.BoxGeometry(3.0, UNIVERSITY_TOWER_H, 3.0),
-    new THREE.MeshLambertMaterial({ color: PALETTE.universityRoof }),
-    new THREE.Vector3(0, UNIVERSITY_TOWER_H / 2, 0),
-    capacity,
-    null,
-    UNIVERSITY_W,
-    CELL,
-  );
+  return universitySet(scene, capacity);
 }
 
 /**
@@ -2060,13 +2097,13 @@ class Outline {
  * separately and are not part of this: they stand on 2x2 and 3x3 sites, have no
  * level ladder, and are told apart by silhouette rather than by style. Ten
  * types — six services, the city hall, the power plant and two landmark sizes
- * — three of them a slab, a roof and one mark at three meshes each (the
- * university, the city hall and the power plant), plus the seven modelled ones:
- * the museum at five meshes, the hospital, the school and the stadium at eight,
- * and the police station, the fire station and the depot at nine each. The
- * count grows with the *table* rather than with the city: a mesh is built once
- * per type and every hospital the player opens is another instance in the ones
- * that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
+ * — two of them a slab, a roof and one mark at three meshes each (the city hall
+ * and the power plant, which are all that is left of that shape), plus the
+ * eight modelled ones: the museum at five meshes, the hospital, the school and
+ * the stadium at eight, and the police station, the fire station, the depot and
+ * the university at nine each. The count grows with the *table* rather than
+ * with the city: a mesh is built once per type and every hospital the player
+ * opens is another instance in the ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
 export const BUILDING_MESH_BUDGET = 24;

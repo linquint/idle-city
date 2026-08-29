@@ -4,9 +4,10 @@ import type { ModelPart } from './model.ts';
 /**
  * Everything in the city that is modelled rather than massed, as part tables.
  *
- * Seven of the eight are buildings on a reserved square and are drawn by
- * `buildings.ts`; the eighth is the park, which is a single plot with no
- * building on it at all and is drawn by `Parks` in `zones.ts`. They are in one
+ * Eight of the ten are buildings on a reserved square and are drawn by
+ * `buildings.ts`. The other two are not buildings: the park, a single plot with
+ * nothing standing on it, drawn by `Parks` in `zones.ts`; and the bus, which is
+ * drawn by `cars.ts` and is the only one of these that moves. They are in one
  * file because what they are is one thing — the output of the converter — and
  * what draws them is not.
  *
@@ -273,4 +274,68 @@ export const PARK_PARTS: readonly ModelPart[] = [
   { shape: 'box', at: [0.62, 0.21, 0.52], size: [0.6, 0.14, 0.1], mtl: 'bench-grey', colour: PALETTE.kerb }, // benches
   { shape: 'box', at: [1.42, 0.75, -1.42], size: [0.1, 1.3, 0.1], mtl: 'bench-grey', colour: PALETTE.kerb }, // lamp-post
   { shape: 'box', at: [1.42, 1.45, -1.42], size: [0.24, 0.14, 0.24], mtl: 'lamp-light', colour: PALETTE.sodium }, // lamp-head
+];
+
+/** The university: four ranges round a quad, with a campanile on one corner. */
+export const CAMPUS_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [0, 0.15, 0], size: [11.4, 0.3, 11.4], mtl: 'trim-grey', colour: PALETTE.kerb }, // terrace
+  { shape: 'box', at: [0, 0.36, 0.1], size: [6.6, 0.12, 6.8], mtl: 'quad-lawn', colour: PALETTE.park }, // quad-lawn
+  { shape: 'box', at: [0, 0.44, 0.1], size: [6.6, 0.08, 0.8], mtl: 'quad-path', colour: PALETTE.sand }, // quad-paths
+  { shape: 'box', at: [0, 0.44, 0.1], size: [0.8, 0.08, 6.8], mtl: 'quad-path', colour: PALETTE.sand }, // quad-paths
+  { shape: 'box', at: [0, 2, -4.4], size: [11, 3.4, 2.2], mtl: 'campus-stone', colour: PALETTE.university }, // range-back
+  { shape: 'box', at: [0, 1.8, 4.5], size: [11, 3, 2], mtl: 'campus-stone', colour: PALETTE.university }, // range-front
+  { shape: 'box', at: [-4.4, 1.8, 0.1], size: [2.2, 3, 6.8], mtl: 'campus-stone', colour: PALETTE.university }, // range-west
+  { shape: 'box', at: [4.4, 1.8, 0.1], size: [2.2, 3, 6.8], mtl: 'campus-stone', colour: PALETTE.university }, // range-east
+  { shape: 'box', at: [0, 1.5, -4.4], size: [11.06, 0.5, 2.26], mtl: 'glazing', colour: PALETTE.parapet }, // range-glazing
+  { shape: 'box', at: [0, 2.6, -4.4], size: [11.06, 0.5, 2.26], mtl: 'glazing', colour: PALETTE.parapet }, // range-glazing
+  { shape: 'box', at: [0, 1.5, 4.5], size: [11.06, 0.5, 2.06], mtl: 'glazing', colour: PALETTE.parapet }, // range-glazing
+  { shape: 'box', at: [-4.4, 1.5, 0.1], size: [2.26, 0.5, 6.86], mtl: 'glazing', colour: PALETTE.parapet }, // range-glazing
+  { shape: 'box', at: [4.4, 1.5, 0.1], size: [2.26, 0.5, 6.86], mtl: 'glazing', colour: PALETTE.parapet }, // range-glazing
+  { shape: 'box', at: [0, 3.8, -4.4], size: [11.12, 0.2, 2.32], mtl: 'campus-roof', colour: PALETTE.universityRoof }, // range-caps
+  { shape: 'box', at: [0, 3.4, 4.5], size: [11.12, 0.2, 2.12], mtl: 'campus-roof', colour: PALETTE.universityRoof }, // range-caps
+  { shape: 'box', at: [-4.4, 3.4, 0.1], size: [2.32, 0.2, 6.92], mtl: 'campus-roof', colour: PALETTE.universityRoof }, // range-caps
+  { shape: 'box', at: [4.4, 3.4, 0.1], size: [2.32, 0.2, 6.92], mtl: 'campus-roof', colour: PALETTE.universityRoof }, // range-caps
+  { shape: 'box', at: [-3.6, 1.35, 3.3], size: [0.34, 2.1, 0.34], mtl: 'campus-stone', colour: PALETTE.university }, // colonnade
+  { shape: 'box', at: [-2.16, 1.35, 3.3], size: [0.34, 2.1, 0.34], mtl: 'campus-stone', colour: PALETTE.university }, // colonnade
+  { shape: 'box', at: [-0.72, 1.35, 3.3], size: [0.34, 2.1, 0.34], mtl: 'campus-stone', colour: PALETTE.university }, // colonnade
+  { shape: 'box', at: [0.72, 1.35, 3.3], size: [0.34, 2.1, 0.34], mtl: 'campus-stone', colour: PALETTE.university }, // colonnade
+  { shape: 'box', at: [2.16, 1.35, 3.3], size: [0.34, 2.1, 0.34], mtl: 'campus-stone', colour: PALETTE.university }, // colonnade
+  { shape: 'box', at: [3.6, 1.35, 3.3], size: [0.34, 2.1, 0.34], mtl: 'campus-stone', colour: PALETTE.university }, // colonnade
+  { shape: 'box', at: [0, 2.48, 3.3], size: [8, 0.16, 0.62], mtl: 'campus-stone', colour: PALETTE.university }, // colonnade-cap
+  { shape: 'box', at: [0, 1.35, 5.44], size: [1.8, 2.1, 0.14], mtl: 'glazing', colour: PALETTE.parapet }, // gateway
+  { shape: 'box', at: [0, 2.7, 5.42], size: [2.6, 0.3, 0.24], mtl: 'campus-roof', colour: PALETTE.universityRoof }, // gateway-pediment
+  { shape: 'box', at: [-4.15, 5.05, -4.15], size: [2.6, 9.5, 2.6], mtl: 'campus-stone', colour: PALETTE.university }, // campanile
+  { shape: 'box', at: [-4.15, 8.7, -4.15], size: [1.5, 0.9, 2.68], mtl: 'belfry-light', colour: PALETTE.sodium }, // belfry
+  { shape: 'box', at: [-4.15, 8.7, -4.15], size: [2.68, 0.9, 1.5], mtl: 'belfry-light', colour: PALETTE.sodium }, // belfry
+  { shape: 'box', at: [-4.15, 9.95, -4.15], size: [3, 0.3, 3], mtl: 'campus-roof', colour: PALETTE.universityRoof }, // campanile-cap
+  { shape: 'box', at: [-4.15, 10.4, -4.15], size: [1.6, 0.6, 1.6], mtl: 'campus-roof', colour: PALETTE.universityRoof }, // campanile-cap
+  { shape: 'box', at: [-1.4, 0.77, 1.4], size: [0.2, 0.7, 0.2], mtl: 'tree-trunk', colour: PALETTE.trunk }, // tree-trunks
+  { shape: 'box', at: [1.5, 0.77, -1.2], size: [0.2, 0.7, 0.2], mtl: 'tree-trunk', colour: PALETTE.trunk }, // tree-trunks
+  { shape: 'box', at: [-1.4, 1.72, 1.4], size: [1.5, 1.2, 1.5], mtl: 'tree-canopy', colour: PALETTE.canopy }, // tree-canopies
+  { shape: 'box', at: [1.5, 1.72, -1.2], size: [1.5, 1.2, 1.5], mtl: 'tree-canopy', colour: PALETTE.canopy }, // tree-canopies
+];
+
+/**
+ * The bus, which is the one modelled thing in the city that moves.
+ *
+ * Drawn by `cars.ts` rather than by anything in `buildings.ts`, and merged
+ * differently for that reason — see `mergeColoured`. Its lime is the depot's
+ * livery, so a bus on a street and a bus parked in its depot are the same bus.
+ */
+export const BUS_PARTS: readonly ModelPart[] = [
+  { shape: 'box', at: [0, 0.57, 0], size: [3.4, 0.7, 0.95], mtl: 'bus-green', colour: PALETTE.bus }, // body
+  { shape: 'box', at: [0, 0.73, 0], size: [3.42, 0.22, 0.97], mtl: 'bus-glazing', colour: PALETTE.parapet }, // glazing
+  { shape: 'box', at: [0, 0.31, 0], size: [3.42, 0.1, 0.97], mtl: 'livery-lime', colour: PALETTE.depotRoof }, // livery
+  { shape: 'box', at: [0, 0.15, 0], size: [3.24, 0.16, 0.9], mtl: 'chassis-dark', colour: PALETTE.hull }, // skirt
+  { shape: 'box', at: [-1.05, 0.13, -0.46], size: [0.5, 0.26, 0.16], mtl: 'chassis-dark', colour: PALETTE.hull }, // wheels
+  { shape: 'box', at: [-1.05, 0.13, 0.46], size: [0.5, 0.26, 0.16], mtl: 'chassis-dark', colour: PALETTE.hull }, // wheels
+  { shape: 'box', at: [1.05, 0.13, -0.46], size: [0.5, 0.26, 0.16], mtl: 'chassis-dark', colour: PALETTE.hull }, // wheels
+  { shape: 'box', at: [1.05, 0.13, 0.46], size: [0.5, 0.26, 0.16], mtl: 'chassis-dark', colour: PALETTE.hull }, // wheels
+  { shape: 'box', at: [-0.9, 0.935, 0], size: [0.7, 0.06, 0.5], mtl: 'roof-grey', colour: PALETTE.kerb }, // roof-vents
+  { shape: 'box', at: [0.7, 0.935, 0], size: [0.4, 0.06, 0.4], mtl: 'roof-grey', colour: PALETTE.kerb }, // roof-vents
+  { shape: 'box', at: [-0.45, 0.51, 0.48], size: [0.46, 0.56, 0.04], mtl: 'bus-glazing', colour: PALETTE.parapet }, // doors
+  { shape: 'box', at: [0.95, 0.51, 0.48], size: [0.46, 0.56, 0.04], mtl: 'bus-glazing', colour: PALETTE.parapet }, // doors
+  { shape: 'box', at: [1.67, 0.77, 0], size: [0.06, 0.16, 0.62], mtl: 'destination-blind', colour: PALETTE.sodium }, // blind
+  { shape: 'box', at: [1.67, 0.28, -0.3], size: [0.06, 0.12, 0.2], mtl: 'headlight', colour: PALETTE.headlight }, // headlights
+  { shape: 'box', at: [1.67, 0.28, 0.3], size: [0.06, 0.12, 0.2], mtl: 'headlight', colour: PALETTE.headlight }, // headlights
 ];

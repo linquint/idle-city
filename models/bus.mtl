@@ -1,0 +1,43 @@
+# Exported by three-d-stage
+newmtl bus-green
+Kd 0.1144 0.2747 0.1022
+Ks 0.2000 0.2000 0.2000
+Ns 80
+d 1.0000
+
+newmtl bus-glazing
+Kd 0.0273 0.0482 0.0908
+Ks 0.2000 0.2000 0.2000
+Ns 156
+d 1.0000
+
+newmtl livery-lime
+Kd 0.5395 0.6445 0.0782
+Ks 0.2000 0.2000 0.2000
+Ns 80
+d 1.0000
+
+newmtl chassis-dark
+Kd 0.0242 0.0369 0.0578
+Ks 0.2000 0.2000 0.2000
+Ns 30
+d 1.0000
+
+newmtl roof-grey
+Kd 0.3419 0.3564 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 44
+d 1.0000
+
+newmtl destination-blind
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+
+newmtl headlight
+Kd 1.0000 0.7913 0.4342
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+

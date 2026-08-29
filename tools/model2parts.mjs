@@ -32,6 +32,8 @@ const PALETTE = {
   0xb9ab8e: 'school', 0x8d7f63: 'schoolRoof', 0x4a4f57: 'asphalt', 0x4a7a4e: 'hedge',
   0xc3b489: 'sand', 0x5b7f57: 'courtyard', 0x2f6076: 'water',
   0x4a3524: 'trunk', 0x53a86a: 'canopy',
+  0xd6c9a8: 'university', 0x9a7f4e: 'universityRoof',
+  0x2b3644: 'hull', 0xffe6b0: 'headlight',
 };
 
 /* ---- parsing ------------------------------------------------------------ */

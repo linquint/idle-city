@@ -1,9 +1,13 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { Buildings } from '../src/render/buildings';
+import { Cars } from '../src/render/cars';
+import { ROAD_H } from '../src/render/ground';
 import { Parks } from '../src/render/zones';
 import {
   BUS_DEPOT_PARTS,
+  BUS_PARTS,
+  CAMPUS_PARTS,
   FIRE_STATION_PARTS,
   HOSPITAL_PARTS,
   MUSEUM_PARTS,
@@ -18,12 +22,12 @@ import { CityLayout, worldX, worldZ, type Coord } from '../src/sim/layout';
 import { createState, type GameState } from '../src/sim/state';
 
 /**
- * The seven buildings on a reserved square that come out of a model, checked as
- * a black box. The park, which is modelled too and is not a building, is at the
- * bottom of this file.
+ * The eight buildings on a reserved square that come out of a model, checked as
+ * a black box. The park and the bus, which are modelled too and are not
+ * buildings, are at the bottom of this file.
  *
- * The other three are a slab with one thing standing on them, and bounds checks
- * on those would only restate `civicTrio`. These seven are assembled from part
+ * The other two are a slab with one thing standing on them, and bounds checks
+ * on those would only restate `civicTrio`. These eight are assembled from part
  * tables generated out of `models/`, and three things can go wrong with that
  * which cannot go wrong with a slab:
  *
@@ -187,6 +191,26 @@ const MODELLED: readonly Modelled[] = [
       ['plant-grey', 'transit:canopies'],
       ['trim-concrete', 'transit:columns'],
       ['bay-light', 'transit:lights'],
+    ]),
+  },
+  {
+    label: 'university',
+    parts: CAMPUS_PARTS,
+    // The university has a 3x3 list of its own and never touches the civic
+    // interleave, which is what keeps the five 2x2 types where they are.
+    site: (layout, i) => layout.universitySiteCell(i),
+    span: 3,
+    count: (n) => ({ universities: n }),
+    meshes: new Map([
+      ['trim-grey', 'university:terrace'],
+      ['quad-lawn', 'university:lawn'],
+      ['quad-path', 'university:paths'],
+      ['campus-stone', 'university:walls'],
+      ['glazing', 'university:glazing'],
+      ['campus-roof', 'university:caps'],
+      ['belfry-light', 'university:belfry'],
+      ['tree-trunk', 'university:trunks'],
+      ['tree-canopy', 'university:canopies'],
     ]),
   },
   {
@@ -523,6 +547,150 @@ describe('the park', () => {
           box.max.map(round),
         );
       }
+    }
+  });
+});
+
+
+/**
+ * The bus, which is modelled like everything above and drawn like none of it.
+ *
+ * It is the one model that moves, so it is the one merged by `mergeColoured`
+ * rather than by material: a vehicle's transform is rewritten every frame, and
+ * a mesh per material would multiply the hottest loop in the renderer by seven.
+ * What that buys has to be checked differently — there is no mesh per material
+ * to look for — and it puts two things at risk that a building never had:
+ *
+ *  - The **colours**, which are now an attribute on the geometry rather than a
+ *    material each. Drop the attribute and every bus in the city is white.
+ *  - The **height**. A box is centred on its own middle and a model stands on
+ *    its wheels, so the two want different y for the same vehicle on the same
+ *    road. Get it wrong and every bus is buried to the windows.
+ */
+describe('the bus', () => {
+  const LIT = new Set(['destination-blind', 'headlight']);
+
+  /** The meshes a bus is drawn in, and which of the model's parts each carries. */
+  const MESHES: ReadonlyArray<[string, (part: ModelPart) => boolean]> = [
+    ['traffic:bus', (part) => !LIT.has(part.mtl)],
+    ['traffic:bus:blind', (part) => part.mtl === 'destination-blind'],
+    ['traffic:bus:lamps', (part) => part.mtl === 'headlight'],
+  ];
+
+  /** A city with buses on its streets, driven far enough to have routed them. */
+  const running = (night = 1): { root: THREE.Scene; cars: Cars } => {
+    const root = new THREE.Scene();
+    const cars = new Cars(root, new CityLayout(), true);
+    cars.sync(state({ districts: 4, depots: 2, depotStaff: 1 }));
+    for (let i = 0; i < 30; i++) cars.update(1 / 60, new THREE.Vector3(0, 0, 0), night);
+    return { root, cars };
+  };
+
+  const meshNamed = (root: THREE.Object3D, name: string): THREE.InstancedMesh | null => {
+    let found: THREE.InstancedMesh | null = null;
+    root.traverse((object) => {
+      if (object instanceof THREE.InstancedMesh && object.name === name) found = object;
+    });
+    return found;
+  };
+
+  it('is the model, in three meshes, each covering its own parts', () => {
+    const { root } = running();
+    for (const [name, holds] of MESHES) {
+      const mesh = meshNamed(root, name);
+      expect(mesh, name).not.toBeNull();
+      if (!mesh) continue;
+      mesh.geometry.computeBoundingBox();
+      const got = mesh.geometry.boundingBox;
+      expect(got, name).toBeDefined();
+      if (!got) continue;
+
+      // What the table says this mesh's parts cover, worked out by hand.
+      const parts = BUS_PARTS.filter(holds);
+      expect(parts.length, `${name} draws something`).toBeGreaterThan(0);
+      const want = parts.map(extent).reduce((box, one) => ({
+        min: box.min.map((v, a) => Math.min(v, one.min[a] as number)),
+        max: box.max.map((v, a) => Math.max(v, one.max[a] as number)),
+      }));
+      expect([got.min.x, got.min.y, got.min.z].map(round), `${name} min`).toEqual(
+        want.min.map(round),
+      );
+      expect([got.max.x, got.max.y, got.max.z].map(round), `${name} max`).toEqual(
+        want.max.map(round),
+      );
+    }
+  });
+
+  it('carries its colours on the body geometry, not on the material', () => {
+    const { root } = running();
+    const body = meshNamed(root, 'traffic:bus');
+    expect(body).not.toBeNull();
+    if (!body) return;
+    const colours = body.geometry.getAttribute('color');
+    expect(colours, 'the body is vertex-coloured').toBeDefined();
+    expect(colours.count).toBe(body.geometry.getAttribute('position').count);
+    // Every unlit material in the model, in the values a material of its own
+    // would have been given. Anything less means a colour was dropped in the
+    // merge and some part of every bus is wearing another part's paint.
+    const seen = new Set<string>();
+    for (let i = 0; i < colours.count; i++) {
+      seen.add([colours.getX(i), colours.getY(i), colours.getZ(i)].map(round).join(','));
+    }
+    const want = new Set(
+      BUS_PARTS.filter((part) => !LIT.has(part.mtl)).map((part) => {
+        const colour = new THREE.Color().setHex(part.colour);
+        return [colour.r, colour.g, colour.b].map(round).join(',');
+      }),
+    );
+    expect(seen).toEqual(want);
+  });
+
+  it('draws its blind and its lamps once each, and its lamps only at night', () => {
+    const at = (root: THREE.Object3D, name: string): THREE.InstancedMesh =>
+      meshNamed(root, name) as THREE.InstancedMesh;
+
+    const dark = running(1).root;
+    const body = at(dark, 'traffic:bus');
+    expect(body.count, 'a staffed depot puts buses on the street').toBeGreaterThan(0);
+    // The blind and the lamps are parts of the bus, so one of each per bus and
+    // on the bus's own transform. A count that drifted would leave the last bus
+    // in the fleet wearing the first one's face.
+    const matrix = new THREE.Matrix4();
+    const other = new THREE.Matrix4();
+    for (const name of ['traffic:bus:blind', 'traffic:bus:lamps']) {
+      const mesh = at(dark, name);
+      expect(mesh.count, name).toBe(body.count);
+      expect(mesh.visible, name).toBe(true);
+      for (let i = 0; i < body.count; i++) {
+        body.getMatrixAt(i, matrix);
+        mesh.getMatrixAt(i, other);
+        expect(other.elements, `${name} ${i} rides the bus`).toEqual(matrix.elements);
+      }
+    }
+
+    // By day the headlights are off, exactly as every other vehicle's are —
+    // but the blind is a display and stays drawn, dimmed by its own floor.
+    const day = running(0).root;
+    expect(at(day, 'traffic:bus:lamps').visible).toBe(false);
+    expect(at(day, 'traffic:bus:blind').count).toBe(at(day, 'traffic:bus').count);
+  });
+
+  it('stands on the road rather than sunk into it', () => {
+    const { root } = running();
+    const body = meshNamed(root, 'traffic:bus');
+    expect(body).not.toBeNull();
+    if (!body) return;
+    expect(body.count, 'a staffed depot puts buses on the street').toBeGreaterThan(0);
+
+    const matrix = new THREE.Matrix4();
+    body.geometry.computeBoundingBox();
+    const local = body.geometry.boundingBox as THREE.Box3;
+    for (let i = 0; i < body.count; i++) {
+      body.getMatrixAt(i, matrix);
+      const box = local.clone().applyMatrix4(matrix);
+      // The model's own wheels are at y = 0, so a bus's bottom is the road
+      // surface exactly. A box body would sit half its height lower.
+      expect(box.min.y, `bus ${i} on the tarmac`).toBeCloseTo(ROAD_H, 5);
     }
   });
 });

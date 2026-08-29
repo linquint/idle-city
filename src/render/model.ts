@@ -81,6 +81,45 @@ function geometryOf(part: ModelPart): THREE.BufferGeometry {
 }
 
 /**
+ * The model's primitives merged into a *single* geometry, with each part's
+ * colour baked onto its vertices.
+ *
+ * The other merge for the other kind of thing. `mergeByMaterial` is right for a
+ * building, which is written once when it is bought and then stands still: a
+ * mesh per material costs one draw call each and buys a material per surface,
+ * so a roof can glow and a wall cannot.
+ *
+ * A vehicle is the opposite case. Its transform is rewritten *every frame*, for
+ * every one of it on screen, so the per-mesh cost is not one draw call — it is
+ * a matrix write and a buffer upload a frame, times however many meshes the
+ * model was split into. A bus of seven materials would be seven times the
+ * hottest loop in the renderer for a vehicle two units long. Vertex colours
+ * collapse that back to one of everything, at the cost of the only thing a
+ * material could have given the parts that any of them needed: the night ramp.
+ * So the lit parts of a vehicle are merged separately, by their material, and
+ * everything that is merely a colour comes through here.
+ *
+ * Colours go through `THREE.Color` exactly as a material's would, so a part
+ * baked here lands on the same value it would have had as `color:` on a
+ * material of its own — whatever the renderer's colour management is doing.
+ */
+export function mergeColoured(parts: readonly ModelPart[]): THREE.BufferGeometry {
+  const colour = new THREE.Color();
+  const geometries = parts.map((part) => {
+    const geometry = geometryOf(part);
+    const count = geometry.getAttribute('position').count;
+    const colours = new Float32Array(count * 3);
+    colour.setHex(part.colour);
+    for (let i = 0; i < count; i++) colour.toArray(colours, i * 3);
+    geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+    return geometry;
+  });
+  return geometries.length === 1
+    ? (geometries[0] as THREE.BufferGeometry)
+    : mergeGeometries(geometries);
+}
+
+/**
  * The model's primitives merged into one geometry per material, in the order
  * the materials first appear.
  *
