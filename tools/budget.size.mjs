@@ -41,10 +41,12 @@ const DIST = 'dist';
  *
  * Measured (`vite build`, gzip level 9):
  *
- *   index.html                25,977 raw    5,922 gzip
- *   assets/index-*.css        18,883 raw    4,319 gzip
- *   assets/index-*.js        192,473 raw   63,576 gzip
- *   assets/three-*.js        484,540 raw  121,158 gzip
+ *   index.html                27,672 raw    6,593 gzip
+ *   assets/index-*.css        20,186 raw    4,584 gzip
+ *   assets/index-*.js        200,853 raw   66,360 gzip
+ *   assets/*.woff2            22,716 raw   22,808 gzip
+ *   manifest + icons + sw     11,450 raw    3,702 gzip
+ *   assets/three-*.js        484,553 raw  121,164 gzip
  *
  * A build is deterministic for a fixed input, so there is no measurement noise
  * for the headroom to absorb — the only thing it is for is how often the number
@@ -61,8 +63,17 @@ const BUDGETS = [
     // and their rows are all in here. 10% is about one more panel, so a feature
     // that adds one lands inside the budget and a feature that adds three does
     // not, which is the granularity worth being told about.
-    raw: 28_600,
-    gzip: 6_520,
+    //
+    // Raised once, deliberately, and this is the note the mechanism asks for:
+    // 25,977 -> 27,672 raw and 5,922 -> 6,593 gzip, when the display panel and
+    // the PWA metadata landed. The gzip half breached by 73 B (+1.1%) and was
+    // *not* trimmed to fit: what pushed it is the manifest link, four Apple
+    // meta tags and the comment saying why nothing is fetched from another
+    // origin any more, and this file's markup is commented at length on purpose
+    // — trimming prose to fit a number would be the budget deciding the house
+    // style. Re-measured and re-based at +10% of the new figures instead.
+    raw: 30_440,
+    gzip: 7_250,
   },
   {
     name: 'assets/index-*.css',
@@ -84,6 +95,35 @@ const BUDGETS = [
     // That is the right place for the conversation to happen.
     raw: 215_600,
     gzip: 71_200,
+  },
+  {
+    name: 'assets/*.woff2',
+    match: /^assets\/[\w-]+\.woff2$/,
+    // +10%, and the number is the whole four-face set rather than one face,
+    // because they are bought and precached together. Measured at 22,716 B for
+    // Archivo 600/800 and IBM Plex Mono 400/500, subset to the 106 characters
+    // the game can put on screen — against 57,832 for the same four at Google's
+    // own full Latin subset, which is what a `<link>` to fonts.googleapis.com
+    // was fetching. 10% is about six more characters' worth of outlines across
+    // four faces, so an added glyph lands inside it and a fifth face does not.
+    //
+    // No gzip headroom worth the name: woff2 is Brotli-compressed already, so
+    // the gzip column is a couple of dozen bytes *larger* than the raw one and
+    // is here only to make that visible rather than to be argued with.
+    raw: 25_000,
+    gzip: 25_100,
+  },
+  {
+    name: 'manifest + icons + sw',
+    match: /^(manifest\.webmanifest|icon-[\w-]+\.png|sw\.js)$/,
+    // +25%, and loose on purpose: this is five small files that move for
+    // structural reasons rather than incremental ones — a fourth icon size, a
+    // third rule in the worker. Measured at 11,450 B raw / 3,702 B gzip: three
+    // PNGs drawn from the favicon's own mark (6,423), the worker (4,380) and
+    // the manifest (647). 25% of a base this small is 2.9 kB, which is one more
+    // icon and change, and there is no useful tighter number.
+    raw: 14_400,
+    gzip: 4_700,
   },
   {
     name: 'assets/three-*.js',

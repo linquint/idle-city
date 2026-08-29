@@ -1,0 +1,11 @@
+Archivo — Copyright 2019 The Archivo Project Authors
+  https://github.com/Omnibus-Type/Archivo
+
+IBM Plex Mono — Copyright 2017 IBM Corp.
+  https://github.com/IBM/plex
+
+Both are licensed under the SIL Open Font License, Version 1.1.
+  https://openfontlicense.org
+
+These copies have been subset to the characters this application renders, which
+the licence permits. They remain under the same licence.

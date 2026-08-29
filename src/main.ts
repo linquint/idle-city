@@ -1,6 +1,7 @@
 import './style.css';
 
 import { SettingsStore } from './core/settings';
+import { registerServiceWorker } from './pwa';
 import { Game } from './sim/game';
 import { CityLayout } from './sim/layout';
 import { load, save, secondsAway } from './sim/save';
@@ -103,6 +104,12 @@ let running = true;
 function frame(now: number): void {
   if (!running) return;
   requestAnimationFrame(frame);
+
+// Last, and after the first frame is already scheduled. Everything about
+// offline play was true before this — no server, a `localStorage` save, twelve
+// hours of `catchUp` — except that a cold load still needed the network for the
+// document itself. See src/pwa.ts.
+registerServiceWorker();
 
   // A backgrounded tab can hand back an enormous delta. Clamping here keeps the
   // simulation honest; the real catch-up happens on visibilitychange.

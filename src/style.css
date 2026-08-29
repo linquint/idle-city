@@ -1,3 +1,7 @@
+/* The two families, self-hosted and precached. Generated — see tools/fonts.mjs.
+   First, because an @import has to precede every rule in the sheet. */
+@import './fonts.css';
+
 /* Kept in step with PALETTE in src/render/palette.ts. The panel colours are a
    shade lighter than the world behind them now that the world is daylit — a
    near-black HUD over a blue sky reads as a hole punched in the scene. */

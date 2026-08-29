@@ -7,9 +7,24 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230B111B'/%3E%3Crect x='2' y='7' width='3' height='7' fill='%23C9D1DA'/%3E%3Crect x='6.5' y='3' width='3' height='11' fill='%23C9D1DA'/%3E%3Crect x='11' y='9' width='3' height='5' fill='%23F0A64B'/%3E%3C/svg%3E">
 <meta name="description" content="An idle city builder where every purchase is a building and the world expands district by district.">
 <title>District — an idle city</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Both `preconnect` hints and the Google Fonts stylesheet are gone, and their
+     absence is the feature: nothing here is fetched from another origin at all
+     any more. Archivo and IBM Plex Mono are self-hosted, subset to the 106
+     characters this game can put on screen, and precached with the shell — see
+     tools/fonts.mjs. Offline, a first cold load now has its typography instead
+     of reflowing into the fallback stack.
+
+     The `@font-face` rules arrive with the rest of the CSS, through
+     `src/fonts.css`, which `src/style.css` imports. A hint to warm a connection
+     nobody opens would be a round trip spent on nothing. -->
+<link rel="manifest" href="./manifest.webmanifest">
+<!-- iOS reads neither the manifest's icons nor its display mode, so the two it
+     does read are stated here. Same PNG the manifest points at, from the same
+     mark — see tools/icons.mjs. -->
+<link rel="apple-touch-icon" href="./icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="District">
 </head>
 <body>
 
