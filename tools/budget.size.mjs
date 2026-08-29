@@ -101,7 +101,15 @@ const BUDGETS = [
     // breached by 757 B (+0.4%) with the gzip half still inside, which is the
     // budget reporting a feature landing rather than a regression — so it is
     // re-measured and re-based rather than argued with.
-    raw: 242_300,
+    //
+    // Re-based again on the rail and tram network: 244,885 raw and 76,460 gzip,
+    // so the raw half breached by 2,585 B (+1.1%) with the gzip half still
+    // 3.5% inside. Same reading as last time and the same answer. What landed
+    // is a table, a geometry, three economy readings, a HUD block and two more
+    // fleets in `cars.ts` — one substantial feature, which is exactly what this
+    // budget's +12% was sized to hold once. The next one in a row has to be
+    // argued for rather than re-based, which is the point of writing this down.
+    raw: 249_000,
     gzip: 79_200,
   },
   {

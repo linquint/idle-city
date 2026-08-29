@@ -29,6 +29,8 @@ interface PooledCar {
   routed: boolean;
   bus: boolean;
   truck: boolean;
+  tram: boolean;
+  train: boolean;
   legsLeft: number;
   district: number;
   line: number;
@@ -61,7 +63,10 @@ describe('the router', () => {
     const { cars } = drive({});
     expect(cars.length).toBeGreaterThan(0);
     for (const car of cars) {
-      if (car.truck) continue;
+      // The four that are not on a district street: two on the highway and two
+      // on the network, which runs between district centres rather than along
+      // the grid. See `routeHighway` and `routeLine`.
+      if (car.truck || car.tram || car.train) continue;
       expect(car.routed).toBe(true);
       // The street it is on and both junctions it runs between are grid
       // coordinates the generator laid down, not arbitrary world positions.
@@ -205,5 +210,85 @@ describe('congestion drives the speed', () => {
       return trucks.reduce((sum, car) => sum + car.speed, 0) / trucks.length;
     };
     expect(speedOf(jammed.cars)).toBeCloseTo(speedOf(clear.cars), 6);
+  });
+});
+
+describe('the network fleet', () => {
+  /**
+   * A tram and a train are a readout of two counts, exactly as a bus is a
+   * readout of `depots`. Nothing here reaches `GameState` and nothing here is
+   * stored: where a line runs comes back out of `linePairAt`, which is the same
+   * pure function the simulation costed the line against.
+   */
+  const wired = (patch: Partial<GameState>) =>
+    drive({ districts: 12, depots: 0, depotStaff: 0, ...patch });
+
+  it('runs nothing at all with no line laid', () => {
+    const { cars } = wired({});
+    expect(cars.some((car) => car.tram || car.train)).toBe(false);
+  });
+
+  it('puts vehicles on the network the city has bought', () => {
+    const { cars } = wired({ tramLines: 4, railLines: 4 });
+    expect(cars.filter((car) => car.tram).length).toBeGreaterThan(0);
+    expect(cars.filter((car) => car.train).length).toBeGreaterThan(0);
+    // And they are never the same vehicle, whatever else they share.
+    for (const car of cars) expect(car.tram && car.train).toBe(false);
+  });
+
+  it('runs both between the centres of the districts their line joins', () => {
+    const { cars } = wired({ tramLines: 6, railLines: 6 });
+    const layout = new CityLayout();
+    layout.ensure(state({ districts: 12 }));
+    const centres = new Set<string>();
+    for (let i = 0; i < 12; i++) {
+      const d = layout.districts[i]!;
+      centres.add(`x${d.centreX.toFixed(4)}`);
+      centres.add(`z${d.centreZ.toFixed(4)}`);
+    }
+    for (const car of cars) {
+      if (!car.tram && !car.train) continue;
+      expect(car.length).toBeGreaterThan(0);
+      // Each leg of the L starts and ends on a district centre coordinate. A
+      // tram is offset half a lane off it because it is on a street; a train is
+      // on its own deck and runs down the middle.
+      const end = car.from + car.dir * car.length;
+      expect(centres.has(`${car.alongX ? 'x' : 'z'}${car.from.toFixed(4)}`)).toBe(true);
+      expect(centres.has(`${car.alongX ? 'x' : 'z'}${end.toFixed(4)}`)).toBe(true);
+    }
+  });
+
+  it('runs a train faster than a tram, and neither backwards', () => {
+    const { cars } = wired({ tramLines: 6, railLines: 6 });
+    const trams = cars.filter((car) => car.tram);
+    const trains = cars.filter((car) => car.train);
+    const mean = (xs: PooledCar[]) => xs.reduce((a, b) => a + b.speed, 0) / Math.max(1, xs.length);
+    expect(mean(trains)).toBeGreaterThan(mean(trams));
+    for (const car of [...trams, ...trains]) expect(Math.abs(car.dir)).toBe(1);
+  });
+
+  it('lays a deck under every leg of every rail line and none under a tram', () => {
+    const root = new THREE.Scene();
+    const cars = new Cars(root, new CityLayout(), true);
+    cars.sync(state({ ...housed(96, 1), ...served(), districts: 12, railLines: 5 }));
+    cars.update(1 / 60, new THREE.Vector3(0, 0, 0), 1);
+    const deck = root.getObjectByName('traffic:viaduct') as THREE.InstancedMesh | undefined;
+    expect(deck).toBeDefined();
+    const withRail = deck!.count;
+    expect(withRail).toBeGreaterThan(0);
+    expect(withRail).toBeLessThanOrEqual(2 * 5);
+
+    const trams = new Cars(new THREE.Scene(), new CityLayout(), true);
+    const tramRoot = (trams as unknown as { decks: { mesh: THREE.InstancedMesh } }).decks;
+    trams.sync(state({ ...housed(96, 1), ...served(), districts: 12, tramLines: 8 }));
+    trams.update(1 / 60, new THREE.Vector3(0, 0, 0), 1);
+    expect(tramRoot.mesh.count).toBe(0);
+  });
+
+  it('keeps the network out of the save, like every other vehicle', () => {
+    const { state: s } = wired({ tramLines: 4, railLines: 4 });
+    // The fleet is a function of the counts and nothing writes back to them.
+    expect(s.tramLines).toBe(4);
+    expect(s.railLines).toBe(4);
   });
 });
