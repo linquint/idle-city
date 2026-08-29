@@ -4,7 +4,6 @@ import {
   ANNEX_MIN_OCCUPANCY,
   AUTO_ANNEX_RESERVE,
   BASE_IGNITION_PER_BUILDING_HOUR,
-  BURN_OUT_SECONDS,
   AIRPORT_BASE,
   AIRPORT_EXPORT_LIFT,
   AIRPORT_PAYROLL,
@@ -65,8 +64,11 @@ import {
   ESTATE_YIELD,
   EXPORT_BASE,
   EXPORT_PER_DISTRICT,
-  EXTINGUISH_MAX,
-  EXTINGUISH_MIN,
+  FIRE_RESPONSE,
+  POLICE_RESPONSE,
+  BASE_CALL_PER_BUILDING_HOUR,
+  UNANSWERED_CRIME,
+  type EmergencyResponse,
   FARE_PER_RIDER,
   FREE_TRANSPORT_MOOD,
   FREE_TRANSPORT_REACH,
@@ -1327,7 +1329,16 @@ export const crimePressure = (s: GameState): number =>
  */
 export const crime = (s: GameState): number => {
   if (!POLICE) return 0;
-  return Math.max(0, crimePressure(s) * (1 - coverage(s, POLICE)));
+  // Two halves of one quantity: the level the police do not reach, and the
+  // calls they do not answer in time. The second is `crime`'s rather than a
+  // seventh modifier in the happiness bracket, because a modifier would charge
+  // police coverage twice — once as this level and once as that rate — which is
+  // exactly what the police re-calibration refused in writing. See
+  // UNANSWERED_CRIME.
+  return Math.max(
+    0,
+    Math.min(1, crimePressure(s) * (1 - coverage(s, POLICE)) + unansweredCrime(s)),
+  );
 };
 
 /** What crime costs the happiness target, in points. Never positive. */
@@ -2186,14 +2197,59 @@ export const ignitionRate = (s: GameState): number =>
   3600;
 
 /**
+ * Share of the city's housing land one response's service reaches.
+ *
+ * Walked rather than looked up, for the reason `fireCoverage` gives: a table
+ * built without that service in it should mean nothing to fail rather than a
+ * crash.
+ */
+const responseCoverage = (s: GameState, row: EmergencyResponse): number => {
+  for (const service of SERVICES) if (service.key === row.service) return coverage(s, service);
+  return 1;
+};
+
+/**
+ * Seconds from the thing happening to it being over, at the city's coverage.
+ *
+ * The generalised form of what fire has always done, and the three functions
+ * below it are the rest. Read fresh every tick rather than stamped on the fire
+ * or the call, so a station that opens while something is burning actually
+ * shortens the fire it was too late to prevent — and so does one that opens
+ * while a call is waiting.
+ */
+export const responseSeconds = (s: GameState, row: EmergencyResponse): number =>
+  row.slow + (row.fast - row.slow) * responseCoverage(s, row);
+
+/** Whether a thing starting now would go unanswered: the threshold. */
+export const missesDeadline = (s: GameState, row: EmergencyResponse): boolean =>
+  responseSeconds(s, row) > row.deadline;
+
+/** When it resolves, one way or the other. */
+export const responseResolvesAt = (s: GameState, row: EmergencyResponse): number =>
+  Math.min(responseSeconds(s, row), row.deadline);
+
+/**
+ * The coverage the threshold sits at, in [0, 1].
+ *
+ * Derived rather than typed, so the figure three comments and a test quote —
+ * fire's 21.4% — cannot drift from the constants it is made of. Solves
+ * `slow + (fast - slow) x c = deadline` for c.
+ */
+export const responseThreshold = (row: EmergencyResponse): number => {
+  const span = row.slow - row.fast;
+  if (span <= 0) return 0;
+  return Math.max(0, Math.min(1, (row.slow - row.deadline) / span));
+};
+
+/**
  * Seconds from ignition to the fire being out, at the city's current coverage.
  *
- * Read fresh every tick rather than stamped on the fire, so a station that
- * opens while something is burning actually shortens the fire it was too late
- * to prevent.
+ * The fire row of the shared model, kept as its own name because three
+ * comments, a test and the HUD all say `extinguishSeconds`. Every fire constant
+ * is exactly where it was — see RESPONSES, which is the table they now sit in.
  */
 export const extinguishSeconds = (s: GameState): number =>
-  EXTINGUISH_MAX + (EXTINGUISH_MIN - EXTINGUISH_MAX) * fireCoverage(s);
+  responseSeconds(s, FIRE_RESPONSE);
 
 /**
  * Whether a fire started now would take the building with it.
@@ -2201,11 +2257,47 @@ export const extinguishSeconds = (s: GameState): number =>
  * The threshold the whole mechanic turns on: the response has to arrive inside
  * BURN_OUT_SECONDS or there is nothing left to save.
  */
-export const wouldBurnOut = (s: GameState): boolean => extinguishSeconds(s) > BURN_OUT_SECONDS;
+export const wouldBurnOut = (s: GameState): boolean => missesDeadline(s, FIRE_RESPONSE);
 
 /** When a fire resolves, one way or the other. */
-export const resolvesAt = (s: GameState): number =>
-  Math.min(extinguishSeconds(s), BURN_OUT_SECONDS);
+export const resolvesAt = (s: GameState): number => responseResolvesAt(s, FIRE_RESPONSE);
+
+// ----------------------------------------------------------------- the calls
+
+/**
+ * Calls coming in per second, over the whole city.
+ *
+ * `ignitionRate`'s shape with the suppression term the other way round, and the
+ * difference is the whole of what separates the two services. A fire station
+ * stops fires *starting*, so FIRE_SUPPRESSION multiplies the rate; a police
+ * station does not stop crime happening, so what multiplies this is
+ * `crimePressure` — the crowding and the idleness the city has made for itself
+ * — and nothing the police do reaches it at all. What police coverage buys is
+ * the answer, which is `responseSeconds`.
+ */
+export const callRate = (s: GameState): number =>
+  (BASE_CALL_PER_BUILDING_HOUR * burnableBuildings(s) * crimePressure(s)) / 3600;
+
+/**
+ * How much of the crime slate is calls nobody is coming to, in [0, 1].
+ *
+ * Zero unless the response misses the deadline, which is what keeps the
+ * happiness ceiling exactly where it was: a fully covered city answers every
+ * call in ANSWER_MIN, so this reads 0 however many calls are open and `crime`
+ * comes out identical to the number it read before this existed.
+ *
+ * A share of the *cap* rather than of the calls open, because the cap is the
+ * only denominator that does not move: a share of the open calls would read 1
+ * for a single unanswered call and 1 again for eight of them.
+ */
+export const unansweredCalls = (s: GameState): number => {
+  if (!missesDeadline(s, POLICE_RESPONSE)) return 0;
+  return Math.min(1, s.calls.length / POLICE_RESPONSE.active);
+};
+
+/** What those calls add to the crime slate. See UNANSWERED_CRIME. */
+export const unansweredCrime = (s: GameState): number =>
+  UNANSWERED_CRIME * unansweredCalls(s);
 
 /** Fires burning in one kind of building right now. */
 export const burningOf = (s: GameState, kind: ZoneKind): number => {

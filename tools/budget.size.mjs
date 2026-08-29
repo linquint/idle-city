@@ -73,8 +73,15 @@ const BUDGETS = [
     // origin any more, and this file's markup is commented at length on purpose
     // — trimming prose to fit a number would be the budget deciding the house
     // style. Re-measured and re-based at +10% of the new figures instead.
-    raw: 30_440,
-    gzip: 7_250,
+    //
+    // Raised a second time, on the same terms: 30,463 raw and 7,238 gzip, which
+    // breaches the raw half by 23 B (+0.1%) with the gzip half 0.2% inside.
+    // What landed is two blocks — the network's two build buttons and three
+    // readouts, and the two response rows under Crime and Fire — so the +10%
+    // held one panel's worth and this is the second, exactly as the note above
+    // says the granularity is meant to work. Re-measured at +10% again.
+    raw: 33_500,
+    gzip: 7_960,
   },
   {
     name: 'assets/index-*.css',

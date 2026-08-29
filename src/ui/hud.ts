@@ -66,6 +66,8 @@ import {
   TERMINALS,
   TRANSIT_LINES,
   NETWORK_EXPORT_LIFT,
+  FIRE_RESPONSE,
+  POLICE_RESPONSE,
   RAIL_VISITORS,
   type PowerTrade,
 } from '../sim/config';
@@ -94,6 +96,9 @@ import {
   canBuildTerminal,
   canBuildLine,
   lineBlocker,
+  missesDeadline,
+  responseSeconds,
+  responseThreshold,
   networkCapacity,
   networkReach,
   networkService,
@@ -636,6 +641,10 @@ export class Hud {
     transitCongestion: el('transit-congestion'),
     crimeRate: el('crime-rate'),
     crimeMood: el('crime-mood'),
+    callResponse: el('call-response'),
+    callOutcome: el('call-outcome'),
+    fireResponse: el('fire-response'),
+    fireOutcome: el('fire-outcome'),
     garbageRate: el('garbage-rate'),
     garbageMood: el('garbage-mood'),
     network: el('network'),
@@ -1192,6 +1201,15 @@ export class Hud {
       case 'fire-lost':
         return {
           text: `${many(event.count)} ${zonePlural(event.zone, event.count)} lost to fire`,
+          tone: 'bad',
+        };
+      case 'call-missed':
+        // Nothing is lost, so this is the one `bad` line in the log that names
+        // no casualty. What it costs is on the crime bar — see UNANSWERED_CRIME.
+        return {
+          text: event.count > 1
+            ? `${many(event.count)} calls in the ${ZONE_LABEL[event.zone].toLowerCase()} zone went unanswered`
+            : `A call in the ${ZONE_LABEL[event.zone].toLowerCase()} zone went unanswered`,
           tone: 'bad',
         };
       case 'blocked':
@@ -2050,6 +2068,29 @@ export class Hud {
       `Crime ${Math.round(crimeAt * 100)} percent` +
         (crimeAt > 0 ? `, costing ${(CRIME_MOOD * crimeAt * 100).toFixed(1)} points of mood` : ''),
     );
+
+    // The two emergency responses, in one shape because they are one model.
+    // Both say the same three things: how long the answer takes, whether that
+    // beats the deadline, and what is open right now. See RESPONSES.
+    for (const [row, seconds, outcome, open, lost] of [
+      [POLICE_RESPONSE, n.callResponse, n.callOutcome, s.calls.length, 'goes unanswered'],
+      [FIRE_RESPONSE, n.fireResponse, n.fireOutcome, s.fires.length, 'takes the building'],
+    ] as const) {
+      const answer = responseSeconds(s, row);
+      const misses = missesDeadline(s, row);
+      seconds.textContent = `${answer.toFixed(0)}s`;
+      const at = `${Math.round(responseThreshold(row) * 100)}%`;
+      outcome.textContent =
+        open > 0
+          ? `${fmtInt(open)} open, ${misses ? `each ${lost}` : 'all answered in time'}`
+          : misses
+            ? `too slow — ${at} coverage answers in time`
+            : 'inside the deadline';
+      spoken.push(
+        `${row.key === 'fire' ? 'Fire' : 'Police'} response ${answer.toFixed(0)} seconds, ` +
+          `${misses ? 'past' : 'inside'} the ${row.deadline} second deadline.`,
+      );
+    }
     n.services.setAttribute('aria-label', `Services: ${spoken.join('; ')}`);
 
     // Power gets a block of its own because it is the one thing the city can run

@@ -88,6 +88,23 @@ export interface Fire {
   readonly startedAt: number;
 }
 
+/**
+ * One thing the police have been called to and have not yet finished with.
+ *
+ * The same three fields a `Fire` carries and for the same reasons — an
+ * *ordinal* rather than a coordinate, and an age rather than a deadline, so a
+ * station opened while the call is open still shortens it. A separate type
+ * rather than a `kind` on `Fire`, because the two lists are resolved by
+ * different rules against different services and a shared type would have to be
+ * narrowed at every use.
+ */
+export interface Call {
+  readonly kind: ZoneKind;
+  readonly index: number;
+  /** Value of `elapsed` when it came in. */
+  readonly startedAt: number;
+}
+
 export const SAVE_VERSION = 15;
 
 /**
@@ -349,6 +366,31 @@ export interface GameState {
    * thresholds gives the same answer at any step size the loop is run at.
    */
   fireHazard: number;
+  /**
+   * Calls the police have open, capped at MAX_ACTIVE_CALLS.
+   *
+   * The second emergency, in the same shape as `fires` and on the same terms:
+   * a bounded list of *ordinals* rather than positions, so it stays on the
+   * right side of the line `LevelCohort` draws. It grows with the cap and never
+   * with the city — eight entries at most, whatever a save has been left
+   * running for — which is the property that makes it the same exception
+   * `fires` already is rather than a new one.
+   *
+   * What it feeds is `crime`, not a happiness weight of its own. See
+   * UNANSWERED_CRIME for why that is the whole of the design.
+   */
+  calls: Call[];
+  /**
+   * How many random draws the call process has taken, and the pressure banked
+   * toward the next one.
+   *
+   * Exactly `fireCursor` and `fireHazard`, on their own stream. Without the
+   * cursor a reload would rearrange the calls; without the hazard a 60-second
+   * catch-up step and 600 tenth-second ticks would be different distributions
+   * and the away report would be a lie about a city the player never had.
+   */
+  callCursor: number;
+  callHazard: number;
   /** Districts annexed. Always at least 1. */
   districts: number;
   /**
@@ -539,6 +581,9 @@ export function createState(now = Date.now()): GameState {
     fires: [],
     fireCursor: 0,
     fireHazard: 0,
+    calls: [],
+    callCursor: 0,
+    callHazard: 0,
     districts: 1,
     // A fresh district opens on exactly the split every district sold before
     // zoning floated, so the opening minute, RENT, HOME_BASE and every pacing

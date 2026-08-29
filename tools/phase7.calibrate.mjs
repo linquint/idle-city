@@ -22,7 +22,17 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  ANSWER_MAX,
+  ANSWER_MIN,
+  BASE_CALL_PER_BUILDING_HOUR,
+  BASE_IGNITION_PER_BUILDING_HOUR,
   BURN_OUT_SECONDS,
+  CRIME_MOOD,
+  MAX_ACTIVE_CALLS,
+  MAX_ACTIVE_FIRES,
+  RESPONSES,
+  UNANSWERED_CRIME,
+  UNANSWERED_SECONDS,
   NETWORK_EXPORT_LIFT,
   NETWORK_ROAD_SHARE,
   NETWORK_WORKFORCE,
@@ -62,7 +72,16 @@ import {
 } from '../src/sim/config.ts';
 import {
   activeOf,
+  burnableBuildings,
+  callRate,
   cityRank,
+  crime,
+  ignitionRate,
+  missesDeadline,
+  responseResolvesAt,
+  responseSeconds,
+  responseThreshold,
+  unansweredCrime,
   lineAllowed,
   lineCost,
   lineRoute,
@@ -883,5 +902,110 @@ console.log('the shoppers, and what the whole network is worth to the ledger\n')
   console.log('  holds because congestion holds. A played run agrees: 100% happiness at 6h');
   console.log('  with the network against 98% without (tools/economy.calibrate.mjs,');
   console.log('  "disciplined + network"), for a district\'s worth of capital.');
+  console.log('');
+}
+
+// ==================================================================== 3
+
+console.log('='.repeat(78));
+console.log("3   the emergency response, generalised past fire");
+console.log('='.repeat(78));
+console.log('');
+
+console.log('the two rows of the shared model\n');
+{
+  console.log('  key      service   slow   fast   deadline   threshold   open at once');
+  for (const row of RESPONSES) {
+    console.log(
+      `  ${pad(row.key, 7)}${pad(row.service, 10)}${pad(row.slow, 7)}${pad(row.fast, 7)}` +
+        `${pad(row.deadline, 11)}${pct(responseThreshold(row), 12, 1)}${pad(row.active, 15)}`,
+    );
+  }
+  console.log('');
+  console.log("  Fire's numbers are exactly where they were: EXTINGUISH_MAX, EXTINGUISH_MIN");
+  console.log('  and BURN_OUT_SECONDS are the row, and 21.4% is now *derived* from them by');
+  console.log('  `responseThreshold` rather than quoted in four places.');
+  console.log('');
+  console.log('  response time against coverage');
+  console.log('  coverage      fire   outcome        police   outcome');
+  for (const c of [0, 0.1, 0.214, 0.3, 0.4, 0.5, 1]) {
+    const cells = RESPONSES.map((row) => {
+      const t = row.slow + (row.fast - row.slow) * c;
+      return `${fixed(t, 8, 1)}s  ${pad(t > row.deadline ? 'missed' : 'in time', 8)}`;
+    });
+    console.log(`  ${pct(c, 8, 1)}${cells.join('  ')}`);
+  }
+  console.log('');
+}
+
+console.log('how often each is called, and how many are open at once\n');
+{
+  console.log(`  BASE_IGNITION_PER_BUILDING_HOUR ${BASE_IGNITION_PER_BUILDING_HOUR}` +
+    ` (x suppression), BASE_CALL_PER_BUILDING_HOUR ${BASE_CALL_PER_BUILDING_HOUR} (x pressure)`);
+  console.log('');
+  console.log('  districts   level   served   buildings   pressure   fires/h   calls/h   open calls');
+  for (const d of [1, 4, 12, MAX_DISTRICTS]) {
+    for (const serve of [0, 0.5, 1]) {
+      const s = city(d, 2, serve);
+      const open = Math.min(MAX_ACTIVE_CALLS, callRate(s) * responseResolvesAt(s, RESPONSES[1]));
+      console.log(
+        `  ${pad(d, 9)}${pad(2, 8)}${pct(serve, 9, 0)}${pad(burnableBuildings(s), 12)}` +
+          `${fixed(crimePressure(s), 11, 3)}${fixed(ignitionRate(s) * 3600, 10, 1)}` +
+          `${fixed(callRate(s) * 3600, 10, 1)}${fixed(open, 13, 2)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  "open calls" is the rate times how long each one sits, capped at');
+  console.log(`  MAX_ACTIVE_CALLS ${MAX_ACTIVE_CALLS} — Little's law, which is what the cap has to be`);
+  console.log('  read against: a cap the ordinary case sits on is a cap the player is looking');
+  console.log('  at rather than a guard against an absence.');
+  console.log('');
+}
+
+console.log('what an unanswered call is worth, and what it cannot do\n');
+{
+  console.log(`  UNANSWERED_CRIME ${UNANSWERED_CRIME} against CRIME_MOOD ${CRIME_MOOD}`);
+  console.log('');
+  console.log('  A 12-district city at level 2, at a police coverage set exactly rather than');
+  console.log("  by a station count, so the rows either side of the threshold are the rows");
+  console.log('  either side of the threshold. Two call loads: the one the rate and the');
+  console.log("  response time actually produce, and a full slate, which is the worst case.");
+  console.log('');
+  const police = SERVICES.find((x) => x.key === 'police');
+  const base = city(12, 2, 0);
+  console.log('  coverage   answered?   level   open   + calls   crime   mood      worst   mood');
+  for (const cov of [0, 0.2, 0.399, 0.401, 0.6, 1]) {
+    const at = (calls) => ({
+      ...base,
+      police: 1,
+      policeStaff: (cov * housingPlots(base)) / police.plots,
+      calls: Array.from({ length: calls }, () => ({ kind: 'home', index: 0, startedAt: 0 })),
+    });
+    const bare = at(0);
+    const open = Math.min(
+      MAX_ACTIVE_CALLS,
+      callRate(bare) * responseResolvesAt(bare, RESPONSES[1]),
+    );
+    const live = at(Math.round(open));
+    const worst = at(MAX_ACTIVE_CALLS);
+    console.log(
+      `  ${pct(cov, 8, 1)}${pad(missesDeadline(bare, RESPONSES[1]) ? 'no' : 'yes', 12)}` +
+        `${fixed(crime(bare), 8, 3)}${fixed(open, 7, 2)}${fixed(unansweredCrime(live), 10, 3)}` +
+        `${fixed(crime(live), 8, 3)}${fixed(-CRIME_MOOD * crime(live), 7, 3)}` +
+        `${fixed(crime(worst), 11, 3)}${fixed(-CRIME_MOOD * crime(worst), 7, 3)}`,
+    );
+  }
+  console.log('');
+  console.log('  The bottom row is the guard, and it holds by construction rather than by');
+  console.log('  measurement: a fully covered city answers every call inside ANSWER_MIN, so');
+  console.log('  `unansweredCrime` is 0 however many are open and `crime` reads exactly what');
+  console.log('  it read before this existed. The happiness ceiling cannot move.');
+  console.log('');
+  console.log('  The worst case does pin `crime` at its bound under the threshold, and that');
+  console.log('  is the clamp working rather than the term being too large: the crime *level*');
+  console.log('  alone is already 0.75 on an uncovered city of this size, so anything added');
+  console.log('  to it saturates. What the term actually moves is the middle — a city at 20%');
+  console.log('  coverage, which is over fire\'s threshold and under this one.');
   console.log('');
 }

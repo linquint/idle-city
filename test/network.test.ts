@@ -399,13 +399,20 @@ describe('the network under a catch-up step', () => {
   });
 
   it('is never written by the simulation, at any step size', () => {
-    for (const [dt, steps] of [[60, 1], [0.1, 600]] as const) {
-      const game = new Game(city(12, 1, { cash: 0, railLines: 6, tramLines: 4 }));
-      for (let i = 0; i < steps; i++) game.advance(dt);
+    // `catchUp` and not `advance`: `advance` clamps its own argument to a
+    // quarter of a second, so `advance(60)` is a quarter-second of simulation
+    // and a test built on it would be comparing nothing to an hour. The
+    // catch-up path is the one that steps CATCHUP_STEP_SECONDS at a time, which
+    // is the coarse step this invariant is about.
+    const away = new Game(city(12, 1, { cash: 0, railLines: 6, tramLines: 4 }));
+    away.catchUp(3600);
+    const watched = new Game(city(12, 1, { cash: 0, railLines: 6, tramLines: 4 }));
+    for (let i = 0; i < 3600; i++) watched.catchUp(1);
+    for (const game of [away, watched]) {
       expect(game.state.railLines).toBe(6);
       expect(game.state.tramLines).toBe(4);
-      expect(networkService(game.state)).toBe(networkService(city(12, 1, { railLines: 6, tramLines: 4 })));
     }
+    expect(networkService(away.state)).toBe(networkService(watched.state));
   });
 
   /**
@@ -416,11 +423,13 @@ describe('the network under a catch-up step', () => {
    * `residents`, which is occupancy, so mood and occupancy are a coupled pair
    * and a coarse step lands somewhere slightly different. Measured here at the
    * top of the ladder with nothing to promote and nothing to buy, the gap in
-   * happiness is 3.2e-2 with no network and 5.8e-3 with one: the network moves
-   * congestion *toward* zero, so it damps the loop rather than tightening it.
+   * happiness over an hour is smaller with a network than without: the network
+   * moves congestion *toward* zero, so it damps the loop rather than tightening
+   * it. The comparison is a difference of differences on purpose — the absolute
+   * gap belongs to the coupling and not to this file.
    */
   it('does not widen the gap the coupled mood loop already opens', () => {
-    const run = (lines: boolean, dt: number, steps: number): GameState => {
+    const run = (lines: boolean, coarse: boolean): GameState => {
       const game = new Game(
         city(12, LEVELS - 1, {
           cash: 0,
@@ -430,11 +439,12 @@ describe('the network under a catch-up step', () => {
           tramLines: lines ? 4 : 0,
         }),
       );
-      for (let i = 0; i < steps; i++) game.advance(dt);
+      if (coarse) game.catchUp(3600);
+      else for (let i = 0; i < 3600; i++) game.catchUp(1);
       return game.state;
     };
-    const bare = Math.abs(run(false, 60, 1).happiness - run(false, 0.1, 600).happiness);
-    const wired = Math.abs(run(true, 60, 1).happiness - run(true, 0.1, 600).happiness);
+    const bare = Math.abs(run(false, true).happiness - run(false, false).happiness);
+    const wired = Math.abs(run(true, true).happiness - run(true, false).happiness);
     expect(wired).toBeLessThanOrEqual(bare);
   });
 });

@@ -3734,3 +3734,167 @@ export const CATCHUP_MAX_LOSSES = 1;
  * play.
  */
 export const IGNITION_HAZARD_CAP = 64;
+
+// ------------------------------------------------------- emergency response
+
+/**
+ * One thing the city answers, and how long it has to answer it.
+ *
+ * The shape fire has had since it was built, lifted out so a second emergency
+ * can have it rather than a copy of it. Three numbers and a service: coverage
+ * sets a response time between `slow` and `fast`, the response time races
+ * `deadline`, and the crossing point is a threshold the player can feel.
+ *
+ * The whole of what makes it a mechanic rather than a curve is that `deadline`
+ * sits *between* the two response times. Outside them it is decoration: a
+ * deadline under `fast` means nothing is ever answered in time however much the
+ * city spends, and one over `slow` means everything is, and in both cases the
+ * service is buying a number nobody can see.
+ *
+ * Read fresh every tick rather than stamped when the thing started, which is
+ * the property fire's own comment defends: a station that opens while something
+ * is burning genuinely shortens the fire it was too late to prevent.
+ */
+export interface EmergencyResponse {
+  readonly key: 'fire' | 'police';
+  /** Whose coverage decides how fast the answer comes. */
+  readonly service: Service['key'];
+  /** Seconds to answer at zero coverage, and at full coverage. */
+  readonly slow: number;
+  readonly fast: number;
+  /** Seconds before it is too late. Always strictly between `fast` and `slow`. */
+  readonly deadline: number;
+  /** The most that may be open at once, so every loop over them is bounded. */
+  readonly active: number;
+}
+
+/**
+ * Seconds to answer a call, at zero coverage and at full coverage.
+ *
+ * Quicker than a fire at both ends, and that is the one thing about these
+ * numbers that is not free: a car arrives faster than a fire goes out, so a
+ * police response that took EXTINGUISH_MAX to arrive would be saying something
+ * about distance that the fire numbers already say better.
+ *
+ * 100 and 25 against fire's 90 and 20 look like the opposite of that, and are
+ * not: what these measure is arrival *and* resolution — the call closes when
+ * the police are done with it — where a fire's clock is the truck's arrival plus
+ * however long the hose runs. What matters is the spread, and it is chosen with
+ * UNANSWERED_SECONDS below to put the threshold somewhere fire's is not.
+ */
+export const ANSWER_MAX = 100;
+export const ANSWER_MIN = 25;
+
+/**
+ * How long a call stays worth answering.
+ *
+ * The threshold, and it is the number this whole feature is: response is
+ * ANSWER_MAX + (ANSWER_MIN - ANSWER_MAX) x coverage, so it drops under 70
+ * seconds at exactly 40% police coverage. Below that every call goes
+ * unanswered and the crime it carries is real; above it, none do.
+ *
+ * 40% rather than fire's 21.4%, and deliberately a *different* number rather
+ * than a rounder version of the same one. Two thresholds a player has to learn
+ * separately are two mechanics; two thresholds at the same coverage are one
+ * mechanic with two names. It is also the harder of the two on purpose — a
+ * police station carries no happiness weight at all (see SERVICES), so the
+ * only thing that ever makes one worth buying is `crime`, and a threshold this
+ * one cleared at a fifth of its allowance would have been cleared by accident.
+ *
+ * Measured in tools/phase7.calibrate.mjs: what coverage a city sits at through
+ * a played run, and how many calls a neglected one carries at once.
+ */
+export const UNANSWERED_SECONDS = 70;
+
+/**
+ * Calls open at once, at most.
+ *
+ * A cap on the *simulation* in the way MAX_ACTIVE_FIRES is, and for the same
+ * two reasons: it bounds every loop that walks the list, and it stops a
+ * twelve-hour absence returning a city buried in them. Eight rather than fire's
+ * six, because a call is the smaller event and a city should be able to have
+ * several going without the cap being what it is looking at.
+ */
+export const MAX_ACTIVE_CALLS = 8;
+
+/**
+ * Chance a single building reports something, per building per hour, at
+ * maximum crime pressure.
+ *
+ * Fire's BASE_IGNITION_PER_BUILDING_HOUR with the suppression the other way
+ * round, and the difference is the whole design of the pair. A fire station
+ * stops fires *starting* — FIRE_SUPPRESSION takes 94% of the rate away — where
+ * a police station does not stop crime happening. What police coverage buys is
+ * the answer, which is why this is multiplied by `crimePressure` and not by
+ * anything the police do.
+ *
+ * 0.1 against fire's 0.05, so a call is twice a fire at equal pressure — and
+ * pressure is rarely 1. Measured in tools/phase7.calibrate.mjs: a played city
+ * runs 0.40 pressure at one district and 0.97 at forty-nine, so a neglected
+ * four-district town of 164 buildings reports eight calls an hour against its
+ * three fires, and a full uncovered map reports 194 against 100.
+ *
+ * 0.4 was tried first and is wrong for a reason worth writing down: it put 777
+ * calls an hour on a full map, which parks the open list on MAX_ACTIVE_CALLS
+ * and leaves it there *even at full coverage*. A cap the ordinary case sits on
+ * is a cap the player is looking at rather than a guard against an absence, and
+ * `unansweredCalls` divides by it — so the term would have read 1 at every city
+ * size and stopped being a quantity.
+ */
+export const BASE_CALL_PER_BUILDING_HOUR = 0.1;
+
+/**
+ * What a full slate of unanswered calls adds to `crime`.
+ *
+ * It lands on `crime` rather than in the happiness bracket, and that is the one
+ * structural decision here. The bracket already carries six modifiers against
+ * three weights that sum to exactly 1, and a seventh for police would be the
+ * thing the police re-calibration refused in writing: police coverage would be
+ * charged twice, once as the level `crime` reads and once as the rate this one
+ * does. Landing on `crime` makes the two halves of one quantity, which is what
+ * they are.
+ *
+ * The ceiling survives it by construction rather than by measurement, which is
+ * why this shape was chosen over a modifier: an unanswered call is one the
+ * response missed the deadline on, a fully covered city answers every call in
+ * ANSWER_MIN, and `crime` is already exactly zero at full coverage. So a city
+ * that has bought everything reads the same number it read before this existed.
+ * See test/services.test.ts, and `unansweredCrime`.
+ *
+ * 0.4, and it is sized against the bracket it eventually reaches rather than
+ * against `crime`: a full slate of eight unanswered calls adds 0.4 to the crime
+ * slate, which is 0.104 of mood through CRIME_MOOD — about what a completely
+ * uncollected city loses to GARBAGE_MOOD's 0.10, under the 0.14 a jammed one
+ * loses, and well under the 0.26 the crime *level* can take on its own. So one
+ * call is 0.013 of mood against the 0.05 a fire costs while it burns, which is
+ * the right order: a fire is on screen and may take a building with it.
+ *
+ * The obvious alternative was to make one call worth exactly one fire, and it
+ * does not fit: 0.05 of mood a call over eight slots needs 1.54 here, and
+ * anything over 1 lets the calls alone pin `crime` at its bound with no crime
+ * level under them at all.
+ */
+export const UNANSWERED_CRIME = 0.4;
+
+export const RESPONSES: readonly EmergencyResponse[] = [
+  {
+    key: 'fire',
+    service: 'fire',
+    slow: EXTINGUISH_MAX,
+    fast: EXTINGUISH_MIN,
+    deadline: BURN_OUT_SECONDS,
+    active: MAX_ACTIVE_FIRES,
+  },
+  {
+    key: 'police',
+    service: 'police',
+    slow: ANSWER_MAX,
+    fast: ANSWER_MIN,
+    deadline: UNANSWERED_SECONDS,
+    active: MAX_ACTIVE_CALLS,
+  },
+];
+
+/** The two rows, by name, so a reader of `resolvesAt` has one thing to look up. */
+export const FIRE_RESPONSE = RESPONSES[0] as EmergencyResponse;
+export const POLICE_RESPONSE = RESPONSES[1] as EmergencyResponse;

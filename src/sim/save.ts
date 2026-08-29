@@ -2,6 +2,7 @@ import { ACHIEVEMENTS } from './achievements';
 import { emptyHistory, migrateHistory } from './history';
 import {
   LEVELS,
+  MAX_ACTIVE_CALLS,
   MAX_ACTIVE_FIRES,
   MAX_DISTRICTS,
   MERGE_LEVEL,
@@ -37,6 +38,7 @@ import {
   cohortOf,
   createState,
   SAVE_VERSION,
+  type Call,
   type Fire,
   type FireKind,
   type GameState,
@@ -177,6 +179,35 @@ function migrateFires(raw: unknown, state: GameState): Fire[] {
     fires.push({ kind, index, startedAt: Math.min(state.elapsed, Math.max(0, num(e['startedAt'], 0))) });
   }
   return fires;
+}
+
+/**
+ * The same, for the calls the police have open.
+ *
+ * A near-copy of `migrateFires` rather than a shared generic, and the reason is
+ * the two things that differ: the cap is MAX_ACTIVE_CALLS and two calls to the
+ * same building are legal — a street where something happens twice is a street
+ * with a problem, where two fires in one house is a bug in the ignition draw.
+ * A generic with two flags would have been longer than both.
+ */
+function migrateCalls(raw: unknown, state: GameState): Call[] {
+  if (!Array.isArray(raw)) return [];
+  const calls: Call[] = [];
+  for (const entry of raw) {
+    if (calls.length >= MAX_ACTIVE_CALLS) break;
+    if (typeof entry !== 'object' || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    const kind = FIRE_KINDS.find((k) => k === e['kind']);
+    if (kind === undefined) continue;
+    const index = Math.floor(num(e['index'], -1));
+    if (index < 0 || index >= burnableOf(state, kind)) continue;
+    calls.push({
+      kind,
+      index,
+      startedAt: Math.min(state.elapsed, Math.max(0, num(e['startedAt'], 0))),
+    });
+  }
+  return calls;
 }
 
 /**
@@ -431,6 +462,13 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // owe the city a fire it never has to pay.
     fireCursor: Math.max(0, Math.floor(num(r['fireCursor'], 0))),
     fireHazard: Math.max(0, num(r['fireHazard'], 0)),
+    // A save older than v15 has no calls, which is the state a city nobody has
+    // rung the police about is in. Same defaults and the same reasons as the
+    // three above it: a negative cursor would index the hash stream backwards
+    // and a negative hazard would owe the city a call it never has to pay.
+    calls: [],
+    callCursor: Math.max(0, Math.floor(num(r['callCursor'], 0))),
+    callHazard: Math.max(0, num(r['callHazard'], 0)),
     districts,
     // Filled in below, once the district count is legal — the arrays are one
     // entry per district and there is no reading them before that is settled.
@@ -629,6 +667,7 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // After the building counts are legal, because a fire is only legal if the
   // building it is burning still exists.
   state.fires = migrateFires(r['fires'], state);
+  state.calls = migrateCalls(r['calls'], state);
 
   // Happiness defaults to the coverage the city actually has rather than to a
   // fixed number: handing a returning player the fresh-city 1 would be ninety
