@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 13, +8 shared parts, +10 models = 31 (asserted, plus the cage) | 18, +8, +10 = **36**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 12, +8 shared parts, +15 models = 35 (asserted, plus the cage) | 16, +8, +20 = **44**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -65,15 +65,17 @@ The rest of the cost, for completeness:
 **Verdict: not viable this cycle.** It is a generator change wearing a feature's
 clothes.
 
-> Re-measured after the first rungs of housing and commerce were modelled, which
-> moved the mesh row above: the ladder is now thirteen bodies rather than fifteen
-> (neither modelled rung has a body mesh), eight shared parts rather than nine
-> (the hipped roof had no other wearer) and ten models. The conclusion is
-> unchanged and firmer each time — a fourth zone would want five more bodies
-> *and* a fifth frontage number, against a budget that has twice spent its
-> headroom on the rungs the city is actually made of. A modelled first rung for
-> offices, which is what they would need to not read as shops, would be five
-> more on top of that.
+> Re-measured after every zone's first rung was modelled, which moved the mesh
+> row above: the ladder is now twelve bodies rather than fifteen (no modelled
+> rung has a body mesh), eight shared parts rather than nine (the hipped roof
+> had no other wearer) and fifteen models. The conclusion is unchanged and
+> firmer each time. A fourth zone now costs *four* bodies **and** five models,
+> because a first rung with no models of its own is the one thing the renderer
+> no longer knows how to draw — offices sharing the shops' five would be exactly
+> the outcome the split exists to avoid, an office that reads as a shop. Against
+> a budget that has three times spent its headroom on the rungs the city is
+> actually made of, and a fifth frontage number the sampler has never been
+> measured for.
 
 ### Option B — a second building type on the commercial frontage
 

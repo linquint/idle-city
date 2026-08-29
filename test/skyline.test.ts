@@ -192,21 +192,24 @@ describe('the skyline the renderer draws', () => {
     expect(towers.get('part:parapet') ?? 0).toBeGreaterThan(0);
   });
 
-  it('builds a street out of all five models, in both modelled zones', () => {
+  it('builds a street out of all five models, in every zone', () => {
     const { buildings, counts } = scene();
-    // Two districts of first-rung housing and commerce, which is the state a
-    // city spends its first hour in. Every model has to actually turn up in it,
-    // or the variety is a table nobody sees.
-    buildings.sync(state({ ...housed(48), ...trading(60), districts: 2 }), 0);
+    // Two districts built out at the first rung, which is the state a city
+    // spends its first hour in. Every model has to actually turn up in it, or
+    // the variety is a table nobody sees.
+    buildings.sync(
+      state({ ...housed(48), ...trading(60), ...making(26), districts: 2 }),
+      0,
+    );
     const seen = counts();
     expect(modelTotal(seen, 'home')).toBe(48);
     expect(modelTotal(seen, 'shop')).toBe(60);
+    expect(modelTotal(seen, 'industry')).toBe(26);
     for (const kind of MODELLED_KINDS) {
       for (const name of modelMeshes(kind)) expect(seen.get(name) ?? 0).toBeGreaterThan(0);
     }
-    // Industry is not modelled and must not have grown a bank by accident.
-    expect(modelMeshes('home' as ModelledKind).length).toBe(MODEL_STYLES.home);
-    expect([...seen.keys()].filter((n) => n.startsWith('model:industry'))).toHaveLength(0);
+    // Every zone is modelled at this rung now, so nothing draws a level-1 body.
+    for (const kind of MODELLED_KINDS) expect(seen.get(`${kind}:0`) ?? 0).toBe(0);
   });
 
   it('gives every zone five silhouettes, all inside the plot', () => {
@@ -305,10 +308,8 @@ describe('what the ladder costs to draw', () => {
     expect(full.length).toBeLessThanOrEqual(BUILDING_MESH_BUDGET);
     // One body per (zone, level), and no duplicates anywhere.
     expect(new Set(full).size).toBe(full.length);
-    // Industry is massed all the way down, so it keeps a body per rung.
-    expect(full.filter((name) => name.startsWith('industry:'))).toHaveLength(LEVELS);
-    // The modelled zones are one short: their first rung has no body mesh — and
-    // the five models replacing it are five meshes, not five per rung.
+    // Every zone is one body short: its first rung has no body mesh — and the
+    // five models replacing it are five meshes, not five per rung.
     for (const kind of MODELLED_KINDS) {
       expect(full.filter((name) => name.startsWith(`${kind}:`))).toHaveLength(LEVELS - 1);
       expect(full.filter((name) => name.startsWith(`model:${kind}:`))).toHaveLength(
@@ -348,27 +349,45 @@ describe('what the ladder costs to draw', () => {
     expect(aspect(top)).toBeLessThan(6);
     // Commerce stays well under housing from the rung housing becomes a block
     // of flats: height is housing's signal, and a shop that competed on it
-    // would read as a stunted apartment block. Level 0 is the exception and
-    // always has been — a shopfront under a fascia really is taller than a
-    // bungalow. Industry is under commerce everywhere: it is the anti-tower.
-    for (let level = 0; level < LEVELS; level++) {
-      if (level > 0) {
-        expect(bodyExtent('shop', level).height).toBeLessThan(bodyExtent('home', level).height);
-      }
+    // would read as a stunted apartment block. Industry is under commerce: it
+    // is the anti-tower.
+    //
+    // Both orderings are about the *massed* rungs, and level 0 is not one — it
+    // is modelled in all three zones, and what `bodyExtent` reports there is a
+    // model's whole silhouette, chimney and fin sign and all. That is a
+    // different quantity from a massed body, which has never counted the stack
+    // standing on it: a level-1 industrial shed is 1.3 tall and carries a stack
+    // 1.35 times that, and this has always reported 1.93 rather than 3.05. So
+    // comparing model heights to each other here would be comparing silhouettes
+    // to bodies, and it would say a works with a 6-unit flue is "taller" than a
+    // shop in a sense the massed numbers never meant. Level 0 was already the
+    // exception for commerce against housing, for a smaller version of the same
+    // reason; it is now the exception for both orderings.
+    for (let level = 1; level < LEVELS; level++) {
+      expect(bodyExtent('shop', level).height).toBeLessThan(bodyExtent('home', level).height);
       expect(bodyExtent('industry', level).height).toBeLessThan(bodyExtent('shop', level).height);
     }
+
+    // What *is* true at the modelled rung, and is the whole of how the three
+    // zones read from the play camera: industry is the widest thing standing on
+    // a plot, and housing the narrowest. Footprint carries the type there,
+    // exactly as the massed ladder intends it to.
+    const span = (kind: ZoneKind): number => bodyExtent(kind, 0).width;
+    expect(span('industry')).toBeGreaterThan(span('shop'));
+    expect(span('shop')).toBeGreaterThan(span('home'));
   });
 
   it('gives every building its dressing, and every zone the same bank', () => {
     const { buildings, counts } = scene();
     buildings.sync(state({ ...housed(8), ...trading(12), ...making(5) }), 0);
     const seen = counts();
-    // One roof each out of the one shared bank, for every building the ladder
-    // masses. The homes and the shops are at their modelled rungs and carry
-    // their own, so only the five workshops draw from it.
-    expect(roofTotal(seen)).toBe(5);
+    // Nothing draws a roof out of the shared bank at all: every building here
+    // is at its zone's modelled rung and carries its own. The bank's roofs are
+    // for the rungs above, which this city has not climbed to.
+    expect(roofTotal(seen)).toBe(0);
     expect(modelTotal(seen, 'home')).toBe(8);
     expect(modelTotal(seen, 'shop')).toBe(12);
+    expect(modelTotal(seen, 'industry')).toBe(5);
     // And the bank is genuinely shared: no zone has a part mesh of its own.
     expect(meshes(new THREE.Scene(), 'shop:front')).toHaveLength(0);
   });

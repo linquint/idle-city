@@ -234,50 +234,61 @@ were away says nothing; anything still wrong when you look says so once.
 looks in all — and a style is a parameter set rather than a mesh: proportions, a
 colour band, how many lit window bands, and which of the shared unit-geometry
 detail parts it wears. Which one a building gets is `hash(slot, SEED)`, so it is
-stable forever, identical on every device, and nowhere in the save. The **first
-rung of housing and of commerce are the exception**, and they are a different
-kind of variety: each is drawn from five *models* rather than massed, and the
-same hash picks which. Those two rungs are what the city is mostly made of and
-what a new player looks at longest, so each gets five silhouettes instead of
-three parameter sets on a box — housing a cottage, a terrace with a bay, a
-veranda house with a dormer, a semi under a shared chimney and a flat-roofed
-modern with a carport; commerce a glazed parade shop under an awning, a corner
-unit with a projecting fin sign, an arcade on columns, a market shop with a
-striped canopy and crates on the pavement, and a cafe with a forecourt of tables
-and planters. Same contract: pure function of the slot and the seed, nothing
-stored. Industry stays massed — it is read from above as a footprint rather than
-a facade, and there are a third as many of them.
+stable forever, identical on every device, and nowhere in the save. **Every
+zone's first rung is the exception**, and it is a different kind of variety:
+each is drawn from five *models* rather than massed, and the same hash picks
+which. Those three rungs are what the city is mostly made of and what a new
+player looks at longest, so each gets five silhouettes instead of three
+parameter sets on a box — housing a cottage, a terrace with a bay, a veranda
+house with a dormer, a semi under a shared chimney and a flat-roofed modern with
+a carport; commerce a glazed parade shop under an awning, a corner unit with a
+projecting fin sign, an arcade on columns, a market shop with a striped canopy
+and crates on the pavement, and a cafe with a forecourt of tables and planters;
+industry a ribbed shed with roller doors, a works with silos and flues under the
+tallest stack, a loading dock with pallets on a marked apron, a tank farm behind
+a bund wall, and a mill under a sawtooth of north lights. Same contract: pure
+function of the slot and the seed, nothing stored. Everything above the first
+rung is still massed, which is the shape the ladder should have: the rung the
+game is played on gets the geometry, and the rungs a settled city has climbed to
+get proportions and dressing.
 
 ### Rendering notes
 
-The city is a handful of `InstancedMesh` draw calls — 13 bodies, one per (zone,
-level) except the two modelled first rungs, 8 shared detail parts and 10 models,
-plus roads, kerbs and land tiles — so a city of four thousand buildings costs
-about the same as a city of forty. The 32 is a budget rather than an accident,
-and `test/skyline.test.ts` asserts it: the naive version of the same variety is
-45 draw calls for what is fundamentally the same box.
+The city is a handful of `InstancedMesh` draw calls — 12 bodies, one per (zone,
+level) above the modelled first rung, 8 shared detail parts and 15 models, plus
+roads, kerbs and land tiles — so a city of four thousand buildings costs about
+the same as a city of forty. The 36 is a budget rather than an accident, and
+`test/skyline.test.ts` asserts it: the naive version of the same variety is 45
+draw calls for what is fundamentally the same box.
 
-- The ten models are merged by **vertex colour**, one mesh each, which is the
-  choice the bus makes and for the mirror of the bus's reason: a mesh per
-  material would be 42 draw calls for the houses and 44 for the shops, on the
-  two most numerous buildings in the city. The one thing that merge cannot carry
-  is a light, so each model's lit pieces — a house's window band, a shop's
-  shopfront and sign — are handed to the shared band mesh that every other
-  building already wears, and the night ramp comes back for nothing. Modelling
-  housing's rung also retired the hipped roof from the part bank, which had no
-  other wearer.
+- The fifteen models are merged by **vertex colour**, one mesh each, which is
+  the choice the bus makes and for the mirror of the bus's reason: a mesh per
+  material would be 42, 44 and 43 draw calls for the three most numerous
+  buildings in the city. The one thing that merge cannot carry is a light, so
+  each model's lit pieces — a house's window band, a shop's shopfront and sign,
+  a works's bay lights and its sawtooth of north lights — are handed to the
+  shared band mesh that every other building already wears, and the night ramp
+  comes back for nothing. Modelling housing's rung also retired the hipped roof
+  from the part bank, which had no other wearer.
 - A modelled building has a **front**, which nothing in the city had before: a
   box is a box at every turn. So it turns to face its street, found by asking
   `isRoad` about the plot's four neighbours, and a corner plot picks between its
-  two by seed. A shopfront needs this more than a front door does.
+  two by seed. A shopfront needs this more than a front door does, and a loading
+  bay more than either.
+- Its footprint jitter is **bounded by the plot rather than by taste**. The
+  massed bodies take ±12% and a model takes whatever fits: a house is 3.1 across
+  and could afford twice that, but a works is 3.56 on a 4-unit plot, so the cap
+  binds there and holds every industrial model to 3.8. It is a no-op for the
+  other two zones.
 - What it costs is **triangles rather than draw calls, and it is the largest
   single cost in the renderer**: 49 districts of nothing but first-rung
-  buildings go from 602k triangles to 1.35M, of which 1.1M is also in the shadow
-  pass. Commerce is most of it, because a district carries 45 commercial plots
-  against 24 residential. `npm run lod:calibrate` part 1b is the measurement,
-  and the note on `ModelMeshes` sets out the two optimisations — a casting/flat
-  split, and a silhouette geometry driven by `DetailMask` — that are
-  deliberately not made until a GPU says which is needed.
+  buildings go from 597k triangles to 1.49M, of which 1.2M is also in the shadow
+  pass. Commerce is most of it and industry the least — that is the plot count
+  rather than the models, 45 commercial against 24 residential and 13
+  industrial. `npm run lod:calibrate` part 1b is the measurement, and the note
+  on `ModelMeshes` sets out the two optimisations — a casting/flat split, and a
+  silhouette geometry driven by `DetailMask` — that are deliberately not made
+  until a GPU says which is needed.
 - `GrowableInstancedMesh` reallocates and copies instance buffers when the city
   outgrows them, doubling capacity so it stays amortised O(1) per instance.
 - `GrowthSchedule` keeps only the buildings that are *currently animating* in a
@@ -330,7 +341,13 @@ and `test/skyline.test.ts` asserts it: the naive version of the same variety is
   plan so it needs no rotation, and it is 2.3 shadow-map texels across so it
   stays out of the depth pass.
 - Industry is the anti-tower — wide, low and flat, with one stack. Height is how
-  the housing tiers say "bigger", so industry competes on footprint instead.
+  the housing tiers say "bigger", so industry competes on footprint instead, and
+  it is still the widest thing on a plot at every rung. The one place that reads
+  differently is its modelled first rung, where the works's flue stands 6 units
+  clear: a stack has never counted toward the massed heights the ladder is
+  ordered by, and `bodyExtent` reports a model's whole silhouette, so the two
+  are not comparable at that rung. See the ordering test in
+  `test/skyline.test.ts`, which says so and asserts footprint there instead.
 - Civic buildings get 2x2 plots and landmarks a square of their own, which is
   room for a silhouette each rather than three colours of the same box. Two
   types are still a slab with one thing standing on it — the city hall a clock
@@ -368,7 +385,8 @@ and `test/skyline.test.ts` asserts it: the naive version of the same variety is
   instruction, not a licence to write the geometry by hand: change the model and
   re-run. Every refusal so far has been that ring — the police station's yard
   wall, the stadium's stands and its seating tiers, an L of two house wings, a
-  stepped shopfront — and the fix each time is a group per segment, which leaves
+  stepped shopfront, a stack of pallets — and the fix each time is a group per
+  segment, which leaves
   the geometry untouched. `npm run model:solids` does exactly that split and
   only where it is provably free, so re-exporting a model does not mean redoing
   it by hand: it cuts a welded lump apart only when the lump is consecutive runs

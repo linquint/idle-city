@@ -15,32 +15,47 @@ import {
   SHOP_MARKET_PARTS,
   SHOP_PARADE_PARTS,
 } from './shopModels.ts';
+import {
+  INDUSTRY_DOCK_PARTS,
+  INDUSTRY_MILL_PARTS,
+  INDUSTRY_SHED_PARTS,
+  INDUSTRY_TANKS_PARTS,
+  INDUSTRY_WORKS_PARTS,
+} from './industryModels.ts';
+import { CELL } from '../sim/config.ts';
 import { cellX, cellZ, isRoad } from '../sim/layout.ts';
 import type { ZoneKind } from '../sim/state.ts';
 
 /**
- * The rungs of the ladder that are drawn from models, and the meshes that draw
+ * The first rung of every ladder, drawn from models, and the meshes that draw
  * them.
  *
- * Level 1 of housing and level 1 of commerce: the two rungs the city is mostly
- * *made* of. Every plot a player buys starts on one of them, a district that
- * has not been pushed up the ladder is nothing but them, and they are what a
- * new player spends their first hour looking at. They were a box with a cone on
- * it and a box with a canopy on it, which is the right answer for a rung the
- * camera flies past and the wrong one for the rung it lives at.
+ * Level 1 of housing, of commerce and of industry: the three rungs the city is
+ * mostly *made* of. Every plot a player buys starts on one of them, a district
+ * that has not been pushed up the ladder is nothing but them, and they are what
+ * a new player spends their first hour looking at. They were a box with a cone
+ * on it, a box with a canopy on it and a box with a stack on it, which is the
+ * right answer for a rung the camera flies past and the wrong one for the rung
+ * it lives at.
  *
  * So each is modelled, five times over, and a plot gets one of the five. What
  * that buys is a *street*: five silhouettes a zone, each with a front, standing
  * along a kerb in the order the seed put them in. What it costs is five meshes
  * a zone, and most of this file is about keeping it to five.
  *
- * Industry is deliberately not here. It is the anti-tower — wide, low, and read
- * from above as a footprint rather than a facade — so what would show is a roof
- * the massed version already draws, and there are a third as many of them.
+ * Everything above the first rung is still massed, and that is the shape the
+ * ladder should have: the rung the game is played on gets the geometry, and the
+ * rungs a settled city has climbed to get proportions and dressing.
  */
 
-/** The zones whose first rung is modelled. Industry's is not. */
-export type ModelledKind = Extract<ZoneKind, 'home' | 'shop'>;
+/**
+ * The zones whose first rung is modelled, which is now all of them.
+ *
+ * Kept as an alias rather than collapsed into `ZoneKind` at every use, because
+ * what it *means* is "a zone this file has models for" — and the type is what
+ * would catch a fourth zone arriving without any.
+ */
+export type ModelledKind = ZoneKind;
 
 /** The five of each, in the order `modelStyleOf` indexes them. */
 const MODELS: Readonly<Record<ModelledKind, readonly (readonly ModelPart[])[]>> = {
@@ -58,6 +73,13 @@ const MODELS: Readonly<Record<ModelledKind, readonly (readonly ModelPart[])[]>> 
     SHOP_MARKET_PARTS,
     SHOP_CAFE_PARTS,
   ],
+  industry: [
+    INDUSTRY_SHED_PARTS,
+    INDUSTRY_WORKS_PARTS,
+    INDUSTRY_DOCK_PARTS,
+    INDUSTRY_TANKS_PARTS,
+    INDUSTRY_MILL_PARTS,
+  ],
 };
 
 export const MODELLED_KINDS = Object.keys(MODELS) as readonly ModelledKind[];
@@ -66,17 +88,19 @@ export const MODELLED_KINDS = Object.keys(MODELS) as readonly ModelledKind[];
 export const MODEL_STYLES: Readonly<Record<ModelledKind, number>> = {
   home: MODELS.home.length,
   shop: MODELS.shop.length,
+  industry: MODELS.industry.length,
 };
 
 /**
  * The materials that are lights rather than colours.
  *
- * A house has one, a shop has two: a shopfront glows and so does its sign, and
- * they are separate materials in the model even though the modeller gave them
- * the same sodium — which is the right way round, because what makes them two
- * things is what they *are*, not what colour they came out.
+ * A house has one, a shop has two — a shopfront glows and so does its sign —
+ * and the mill has seven, five of them a sawtooth of north lights. They are
+ * separate materials in the models even where the modeller gave them the same
+ * sodium, which is the right way round: what makes them different things is
+ * what they *are*, not what colour they came out.
  */
-const LIT = new Set(['window-light', 'shopfront-light', 'shop-sign']);
+const LIT = new Set(['window-light', 'shopfront-light', 'shop-sign', 'bay-light']);
 
 /** One lit box of a model, in the model's own coordinates. */
 export interface LitBox {
@@ -99,6 +123,7 @@ export interface LitBox {
 export const MODEL_LIT: Readonly<Record<ModelledKind, readonly (readonly LitBox[])[]>> = {
   home: MODELS.home.map((parts) => litOf(parts, 'home')),
   shop: MODELS.shop.map((parts) => litOf(parts, 'shop')),
+  industry: MODELS.industry.map((parts) => litOf(parts, 'industry')),
 };
 
 function litOf(parts: readonly ModelPart[], kind: ModelledKind): readonly LitBox[] {
@@ -152,6 +177,7 @@ export interface ModelExtent {
 export const MODEL_EXTENT: Readonly<Record<ModelledKind, readonly ModelExtent[]>> = {
   home: MODELS.home.map(extentOf),
   shop: MODELS.shop.map(extentOf),
+  industry: MODELS.industry.map(extentOf),
 };
 
 function extentOf(parts: readonly ModelPart[]): ModelExtent {
@@ -167,6 +193,41 @@ function extentOf(parts: readonly ModelPart[]): ModelExtent {
     height = Math.max(height, y + h / 2);
   }
   return { width, depth, height };
+}
+
+/**
+ * The widest a modelled building may come out, once its jitter is applied.
+ *
+ * The plot less the same kerb gutter a massed body leaves. `ZONE_SHAPES` sets
+ * the massed widths against exactly this bound — industry holds 3.5 against a
+ * style bound of 1.00 and a jitter of 1.12, so 3.92 — and a model has to answer
+ * to it too, because a building wider than its plot renders through the kerb
+ * and into the street.
+ */
+const MODEL_SPAN_MAX = CELL - 0.2;
+
+/**
+ * The most a model's footprint may be jittered, per zone and style.
+ *
+ * Bounded by the plot rather than by taste, which is the only thing that makes
+ * the jitter safe to apply to a *model*: a house is 3.06 across at its widest
+ * and could take twice the jitter it is given, but a works is 3.56 and 12% of
+ * that is 3.99 on a 4-unit plot — a building touching both its kerbs. So the
+ * cap is whatever fits, and it bites on exactly the zone where it has to.
+ *
+ * Applied to both axes against the same limit, because a modelled building
+ * turns to face its street: whichever of its width and depth the quarter turn
+ * puts across the frontage is the one that has to clear the kerb, and which one
+ * that is depends on the plot.
+ */
+export const MODEL_JITTER_MAX: Readonly<Record<ModelledKind, readonly number[]>> = {
+  home: MODEL_EXTENT.home.map(jitterCap),
+  shop: MODEL_EXTENT.shop.map(jitterCap),
+  industry: MODEL_EXTENT.industry.map(jitterCap),
+};
+
+function jitterCap(extent: ModelExtent): number {
+  return MODEL_SPAN_MAX / Math.max(extent.width, extent.depth);
 }
 
 /**
@@ -229,11 +290,11 @@ export function modelFacing(x: number, z: number, pick: number): number {
  * reason. A vehicle merges by colour because a mesh per material multiplies the
  * renderer's hottest per-frame loop; these merge by colour because a mesh per
  * material multiplies the most numerous buildings in the city. Nine materials
- * across five houses and ten across five shops is 42 and 44 draw calls for the
- * two rungs a district is made of. Vertex colours collapse each to five, and
- * the one thing a material could have given that any of these parts needed —
- * the night ramp on the lit pieces — is bought back through the shared band
- * mesh instead. See `MODEL_LIT`.
+ * across the houses, ten across the shops and nine across the works is 42, 44
+ * and 43 draw calls for the three rungs a district is made of. Vertex colours
+ * collapse each set to five, and the one thing a material could have given that
+ * any of these parts needed — the night ramp on the lit pieces — is bought back
+ * through the shared band mesh instead. See `MODEL_LIT`.
  *
  * Packed per style rather than per level, so an instance index here has nothing
  * to do with a slot index — this class keeps the map both ways, exactly as
@@ -247,19 +308,22 @@ export function modelFacing(x: number, z: number, pick: number): number {
  *
  *     1,176 houses   266,904 triangles     (227 each)
  *     2,205 shops    564,024 triangles     (256 each)
- *     massed, the same 3,381 would be 81,144 — a box and a roof each
+ *       637 works    153,348 triangles     (241 each)
+ *     massed, the same 4,018 would be 96,432 — a box and a roof each
  *
- * so the scene goes from 601,980 triangles to 1,351,764. It is 2.2x, 61% of
- * everything that city submits, and 1.1M of it is also in the shadow pass.
- * There are twice as many shops as houses because a district carries 45
- * commercial plots against 24 residential, so commerce is most of this.
+ * so the scene goes from 597,300 triangles to 1,485,144. It is 2.5x, 66% of
+ * everything that city submits, and 1.2M of it is also in the shadow pass.
+ * Commerce is most of it and industry is the least, and that is the *plot*
+ * count rather than the models: a district carries 45 commercial plots against
+ * 24 residential and 13 industrial, so the zone with the fewest buildings costs
+ * the least however elaborate its models are.
  *
- * That is a real number and it is deliberately not hidden: the two rungs the
- * game is played on are now the two most expensive things in it. Whether it
+ * That is a real number and it is deliberately not hidden: the three rungs the
+ * game is played on are now the most expensive thing in it. Whether it
  * *matters* is a frame-time question this harness cannot answer — Node has no
- * GPU — and 1.35M triangles is not obviously too many for one. What it does
- * mean is that the next optimisation the renderer needs is almost certainly
- * here rather than anywhere else.
+ * GPU — and 1.5M triangles is not obviously too many for one. What it does mean
+ * is that the next optimisation the renderer needs is almost certainly here
+ * rather than anywhere else.
  *
  * Two moves are available and neither is made, so the reasoning survives:
  *
@@ -267,13 +331,15 @@ export function modelFacing(x: number, z: number, pick: number): number {
  *     second out of the depth pass the way `setDressingShadows` already does
  *     for awnings and roof vents. Most of these triangles throw no shadow
  *     anybody can see — a window 6cm proud of a wall, a forecourt 6cm off the
- *     ground. It costs a second mesh per style: twenty instead of ten, which is
- *     the whole of the saving the vertex-colour merge just bought.
+ *     ground, a hazard marking painted on an apron. It costs a second mesh per
+ *     style: thirty instead of fifteen, which is the whole of the saving the
+ *     vertex-colour merge just bought.
  *   - **Give each style a silhouette geometry and let `DetailMask` choose**,
- *     dropping the street furniture — a shop's crates, tables and bollards are
- *     a fifth of a metre across and sub-pixel from the orbit camera. This is
- *     the bigger win and the bigger change: it is a second mesh per style
- *     *and* instances moving between the two on every repack.
+ *     dropping the street furniture — a shop's crates, tables and bollards and
+ *     a works's pallets and tank bands are a fifth of a metre across and
+ *     sub-pixel from the orbit camera. This is the bigger win and the bigger
+ *     change: it is a second mesh per style *and* instances moving between the
+ *     two on every repack.
  *
  * Both want measuring against a GPU first. A mesh spent against an unmeasured
  * worry is a mesh spent twice.

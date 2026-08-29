@@ -52,6 +52,7 @@ import {
 import { mergeByMaterial, type ModelPart } from './model.ts';
 import {
   MODEL_EXTENT,
+  MODEL_JITTER_MAX,
   MODEL_LIT,
   MODEL_LIT_MAX,
   MODEL_STYLES,
@@ -132,16 +133,22 @@ const HEIGHT_JITTER_MAX = 1.24;
 /**
  * Whether a building is drawn from a model rather than massed from the ladder.
  *
- * The first rung of housing and of commerce, plus their ruins, which are drawn
- * in that rung's set because a boarded-up plot still holds a plot. Everything
- * else in the three ladders is a box with dressing on it — including all of
- * industry, which is read from above as a footprint rather than a facade.
+ * The first rung of every zone, plus the ruins, which are drawn in that rung's
+ * set because a boarded-up plot still holds a plot. Everything above it is a
+ * box with dressing on it.
+ *
+ * It takes the kind as well as the level even though only the level decides
+ * today. That is not ceremony and it is not a type guard either: narrowing on
+ * the zone would make the massed branch unreachable, because every `ZoneKind`
+ * is now a `ModelledKind`. What keeps a fourth zone honest is `MODELS` in
+ * `modelled.ts`, which is a `Record` over `ZoneKind` — a zone arriving without
+ * a table of models is a type error there, where the tables are.
  *
  * A predicate rather than a field on `LevelShape`, because what it selects is
  * not a *shape* — it is which of two write paths a building takes, and the two
  * have different meshes, different bookkeeping and different jitter.
  */
-const modelled = (kind: ZoneKind, level: number): kind is ModelledKind =>
+const modelled = (kind: ZoneKind, level: number): boolean =>
   level <= 0 && (MODELLED_KINDS as readonly string[]).includes(kind);
 
 /**
@@ -158,12 +165,32 @@ const modelHeightJitter = (slot: number): number => 0.94 + variety(slot, 0x6b) *
 const MODEL_HEIGHT_JITTER_MAX = 1.06;
 
 /**
+ * A modelled building's footprint jitter, clamped by the plot it stands on.
+ *
+ * The same +-12% every massed body takes, capped at whatever its own model can
+ * afford — see `MODEL_JITTER_MAX`. The cap is a no-op for a house and a shop
+ * and binds on industry, which is the widest thing on the map and has the least
+ * room to grow.
+ */
+const modelWidthJitter = (kind: ModelledKind, slot: number): number =>
+  Math.min(widthJitter(slot), cap(kind, slot));
+const modelDepthJitter = (kind: ModelledKind, slot: number): number =>
+  Math.min(depthJitter(slot), cap(kind, slot));
+
+const cap = (kind: ModelledKind, slot: number): number =>
+  MODEL_JITTER_MAX[kind][modelStyleOf(kind, slot)] as number;
+
+/**
  * Which way a modelled building turns to face its street, in quarter turns.
  *
  * Salted per zone like the style is, so a shop and a house on facing corners of
  * the same junction do not both take the same side of their identical choice.
  */
-const MODEL_TURN_SALT: Readonly<Record<ModelledKind, number>> = { home: 0x8f, shop: 0xb3 };
+const MODEL_TURN_SALT: Readonly<Record<ModelledKind, number>> = {
+  home: 0x8f,
+  shop: 0xb3,
+  industry: 0x2d,
+};
 
 const modelTurn = (kind: ModelledKind, x: number, z: number, slot: number): number =>
   modelFacing(x, z, variety(slot, MODEL_TURN_SALT[kind]));
@@ -461,7 +488,11 @@ export function buildingStyle(kind: ZoneKind, slot: number): number {
 }
 
 /** A per-zone salt, so a house and a shop on slot 7 are not both style 2. */
-const MODEL_SALT: Readonly<Record<ModelledKind, number>> = { home: 0xd7, shop: 0x4e };
+const MODEL_SALT: Readonly<Record<ModelledKind, number>> = {
+  home: 0xd7,
+  shop: 0x4e,
+  industry: 0x1b,
+};
 
 /**
  * Which of its zone's five models a plot's first-rung building is.
@@ -502,10 +533,11 @@ export function bodyExtent(kind: ZoneKind, level: number): { width: number; heig
   if (modelled(kind, level)) {
     let width = 0;
     let height = 0;
-    for (const model of MODEL_EXTENT[kind]) {
-      width = Math.max(width, Math.max(model.width, model.depth) * JITTER_MAX);
+    MODEL_EXTENT[kind].forEach((model, style) => {
+      const span = Math.max(model.width, model.depth);
+      width = Math.max(width, span * Math.min(JITTER_MAX, MODEL_JITTER_MAX[kind][style] as number));
       height = Math.max(height, model.height * MODEL_HEIGHT_JITTER_MAX);
-    }
+    });
     return { width, height };
   }
   const shape = shapeOf(kind, level);
@@ -1116,8 +1148,8 @@ class ZoneLayer {
     const style = modelStyleOf(kind, slot);
     const model = modelOf(kind, slot);
     const turn = modelTurn(kind, at.x, at.z, slot);
-    const sx = widthJitter(slot);
-    const sz = depthJitter(slot);
+    const sx = modelWidthJitter(kind, slot);
+    const sz = modelDepthJitter(kind, slot);
     const sy = modelHeightJitter(slot) * scale;
 
     // The model stands on y = 0, so it grows out of the ground by scaling about
@@ -1672,8 +1704,8 @@ export function bodyFootprint(
 ): { width: number; depth: number } {
   if (modelled(kind, level)) {
     const model = modelOf(kind, slot);
-    const along = model.width * widthJitter(slot);
-    const across = model.depth * depthJitter(slot);
+    const along = model.width * modelWidthJitter(kind, slot);
+    const across = model.depth * modelDepthJitter(kind, slot);
     // An odd quarter turn puts the model's depth across the world's x. A model
     // never stretches to a merged parcel — see `writeModel` — so `plots` is not
     // consulted here either.
@@ -2553,7 +2585,7 @@ class Outline {
 /**
  * The instanced meshes the three zone ladders are allowed to cost, all told.
  *
- * Thirteen bodies, eight shared detail parts, ten models and the construction
+ * Twelve bodies, eight shared detail parts, fifteen models and the construction
  * cage. The alternative the styles were designed against is 45 meshes: five
  * levels by three styles by three zones, each a draw call for what is
  * fundamentally the same box. Asserted in test/skyline.test.ts, so a later
@@ -2572,16 +2604,19 @@ class Outline {
  *   - **-1, the pitched roof.** The hipped cone in the part bank was worn by
  *     level-1 housing and by nothing else in the city, so modelling that rung
  *     left it with no wearer. See `PART`;
- *   - **+5, the five shop models**, on the same floor argument — against the 44
- *     a mesh-per-material merge of ten materials would have cost;
- *   - **-1, `shop:0`.** Nothing in the part bank died with it: the three shop
- *     styles still wear an awning, a fin and a setback from level 2 up.
+ *   - **+5 -1, the shops** and `shop:0`. Nothing in the part bank died with it:
+ *     the three shop styles still wear an awning, a fin and a setback from
+ *     level 2 up;
+ *   - **+5 -1, industry** and `industry:0`, on the same argument again. The
+ *     stack and the plant survive it for the same reason.
  *
- * So 25 - 2 + 5 - 1 + 5 = 32, and the two rungs a district is actually made of
- * get ten silhouettes for the price of eight boxes. The cost that is *not* in
- * this number is triangles rather than draw calls: a modelled building is 18 to
- * 31 boxes where the massed one was one, which is measured by
- * tools/lod.calibrate.mjs part 1b rather than bounded here.
+ * So 25 - 2 + 4 + 4 = 36, and the three rungs a district is actually made of
+ * get fifteen silhouettes for the price of thirteen boxes. Every ladder is now
+ * four bodies rather than five, and every zone's first rung is a model.
+ *
+ * The cost that is *not* in this number is triangles rather than draw calls: a
+ * modelled building is 15 to 31 boxes where the massed one was one, which is
+ * measured by tools/lod.calibrate.mjs part 1b rather than bounded here.
  *
  * The cage is the twenty-fifth and it is worth saying what it costs, because a
  * budget nobody argues with is a budget that drifts: it is one mesh, it is
@@ -2603,7 +2638,7 @@ class Outline {
  * opens is another instance in the ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
  * `powerPlantSet` and `landmarkSet`.
  */
-export const BUILDING_MESH_BUDGET = 32;
+export const BUILDING_MESH_BUDGET = 36;
 
 /**
  * The building layer. It owns no game state: given counts, it reconciles the
