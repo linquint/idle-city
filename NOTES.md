@@ -1220,3 +1220,110 @@ the honest place for it is the other side of the ratio — something that change
 `TRIPS_PER_RESIDENT` rather than the road, which is a statement about how people
 live rather than about how wide the street is. That is a different feature and
 not this one.
+
+
+---
+
+## 16. The eleventh square — asked for, built, measured, reverted
+
+Section 13 recommended culture as two rows in `LANDMARKS` sharing the one
+small-landmark site a district already has. That was put to the reviewer against
+two alternatives and the answer was to **enlarge the districts instead**, so
+that culture gets a square of its own rather than competing with the museum.
+
+It was built. It does not work, and the reason is not a tuning miss.
+
+### Widening the district is the expensive reading, and the wrong one
+
+Measured over 60,000 raw plans at `DISTRICT_SPAN` 16:
+
+| | span 15 | span 16 |
+| --- | --- | --- |
+| buildable-plot mode | 144 at 62.9% | 156 at 44.1% |
+| commercial frontage | **45**, 100% of seeds | **48**, 100% of seeds |
+| `ROAD_CELLS_PER_DISTRICT` | 81 | 100 |
+| residential 24 reachable | yes | **no, at any square count** |
+
+Commercial frontage is invariant per span — `zoneBlocks` lays shops along block
+rings and a ring *is* the frontage — so widening moves `TARGET_PLOTS`,
+`ROAD_CELLS_PER_DISTRICT`, the commercial count *and* residential off the anchor
+`SERVICES` calls "the load-bearing part". Four load-bearing constants, and with
+them `SHOP_BASE`, `SHOP_GROWTH`, `SHOP_THROUGHPUT`, `SUPPLY_DRAW`,
+`EXPORT_PER_DISTRICT`, `CONGESTION_SCALE` and every `Service.plots`.
+
+### The district does not need widening — the sampler was throwing the land away
+
+`onTarget` pins the square **count**, so a plan offering ten or eleven 2x2
+squares is rejected today for offering too many. Measured over 200,000 plans at
+span 15, squares offered after the two 3x3s are taken:
+
+| squares | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| share | 2.9% | 4.5% | 14.8% | 30.6% | 19.8% | **15.6%** | **8.2%** | 3.4% | 0.1% |
+
+Nearly a quarter of on-target plans already offer more than nine. The tuples
+with residential pinned at 24 and commerce at its invariant 45:
+
+| squares | tuple (R/C/I/courtyard) | acceptance |
+| --- | --- | --- |
+| 9 | 24/45/**13**/8 | 2.481% — what ships |
+| 10 | 24/45/11/6 | **0.192%** — a quarter of districts fail to generate |
+| 11 | 24/45/**9**/4 | **1.607%** |
+
+Ten is a wall rather than a near miss. Eleven works: `FRONTAGE_MAX_ATTEMPTS`
+512 → 1,024 puts the failure rate back where the 512 note left it (6.3e-8 a
+district), the expected cost is 62 attempts against 40, and a full 49-district
+map generates in 336 ms.
+
+It costs **four industrial plots**, and it has to: residential is pinned,
+commerce is invariant per span, and the arithmetic forbids the alternative —
+24 + 45 + 13 + 11×4 + 2×9 is 144 exactly, with nothing left for the parks.
+
+### And four industrial plots is what the economy cannot pay
+
+Industry is the densest employer in the game. `ZONE_SHARE` solves
+`14R = 8C + 20I`, so cutting industrial land 13 → 9 is 13% of a district's whole
+job supply and 31% of the dense third of it:
+
+| | shops | works | total jobs | workers | jobs/worker |
+| --- | --- | --- | --- | --- | --- |
+| industrial 13 | 360 | 260 | **620** | 53 | 11.74 |
+| industrial 9 | 360 | 180 | **540** | 53 | 10.23 |
+
+`demandTargets.r` is `(jobs − reachableWorkers) / scale`, so residential demand
+falls with the jobs. Measured, `npm run economy:calibrate` at three horizons:
+
+| policy | 12h | 24h | 48h |
+| --- | --- | --- | --- |
+| discount-chasing, industrial 13 | R 0.0m | R 0.0m | R 0.0m |
+| discount-chasing, industrial 9 | R 0.0m | **R 25.8m** | **R 1,244.4m** |
+
+Residential pins at −1 for twenty of forty-eight hours against a build that pins
+nothing under any policy at any horizon. Auto-develop ends 30% smaller as well:
+65,909 residents against 93,683, on eight districts against nine.
+
+That is the brief's stop condition, so the change was reverted rather than
+tuned. And it is not tunable from here: the constant that would have to move is
+`ZONE_SHARE`, which is frozen and is *precisely* the thing the land ratio
+realises. This is the same wall section 8 predicted for farms — "halving supply
+pushes industrial demand harder positive... this needs an
+`npm run economy:calibrate` run before and after" — arriving from the other
+direction and failing on residential rather than on industrial.
+
+### What is left
+
+The eleventh square is **available and unaffordable**. Two things would make it
+affordable, and neither is this cycle's:
+
+1. **re-solve `ZONE_SHARE` at 24/45/9.** The equilibrium is expressible — it is
+   the same solve with a different `I` — but every constant priced against the
+   old ratio moves with it, which is the cycle of work `DISTRICT_SPAN`'s own
+   comment describes;
+2. **give industry back its jobs somewhere else.** The estates already stand on
+   land the city does not own and are counted apart from every plot total; a
+   district that lost four works plots could be made whole by the band rather
+   than by the zoning budget. That is a real feature and it is not a land memo.
+
+Until one of those happens, **culture shares the small-landmark site** — section
+13's recommendation, which costs no land, needs no migration, and is the only
+form the measurement leaves standing.
