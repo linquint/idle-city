@@ -364,13 +364,21 @@ describe('fires resolve inside the catch-up loop', () => {
 
 describe('a fire never outlives its building', () => {
   it('drops fires whose building was destroyed under them', () => {
+    // The third test in this suite to state its budget, for the same reason the
+    // one below it does: six hours in tenth-second ticks is 216,000 of them and
+    // the cost is the tick count. It ran at 3.09 seconds of a 5-second default
+    // before the rival term joined `demandTargets` and 3.45 after — 12%, which
+    // is what one more table row on the hottest path in the game costs. It
+    // cleared the default locally at both and timed out on a CI runner at the
+    // second. The budget is what the measurement says: the same run is well
+    // under a second outside vitest, and nothing below is unbounded.
     const game = at({ ...housed(1), cash: 0 });
     run(game, 6 * 3600);
     for (const fire of game.state.fires) {
       const of = fire.kind === 'home' ? game.state.homes : fire.kind === 'shop' ? game.state.shops : game.state.industry;
       expect(fire.index).toBeLessThan(of);
     }
-  });
+  }, 20_000);
 
   it('leaves a city that burned down completely in a legal state', () => {
     // Twelve hours in tenth-second ticks is 432,000 of them, which is what this

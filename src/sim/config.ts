@@ -219,7 +219,7 @@ export const FRONTAGE_TARGET = {
  * A district built out at one level, measured through `demandTargets` at the
  * wider district's 24 / 45 / 13 frontage, before TRADE_LADDER and after:
  *
- *   level              w/j    flat trade ladder       sqrt trade ladder
+ *   level              w/j    flat trade ladder      sqrt trade ladder
  *                             demand R      C      I    R      C      I
  *   detached housing  0.09       +1.00  -0.82  +0.39  +1.00  -0.82  +0.39
  *   apartments        0.34       +0.31  -0.09  +0.10  +0.31  -0.34  +0.15
@@ -233,6 +233,12 @@ export const FRONTAGE_TARGET = {
  * ran -0.82 to +0.14 to one that runs -0.82 to +0.09 through a shallower
  * middle — and, far more importantly, the *land* those numbers imply. See
  * TRADE_LADDER for the ratio the flat ladder was asking the district for.
+ *
+ * The right-hand column is the ladder as it stood at exponent 0.5, kept because
+ * what this table is about is the residential column standing still. The
+ * exponent has since gone to 0.65 and commerce's column with it — flatter again
+ * through the middle and lower at the top — for reasons that are entirely about
+ * the land and not about this budget. TRADE_LADDER carries them.
  *
  * `demandScale` is why the fifth rung adds a hundredth of a point to a signal
  * already settled: it divides by `cityScale`, so the imbalance a built city can
@@ -675,39 +681,114 @@ export const HOME_BASE = 8;
 export const HOME_GROWTH = 1.14;
 
 /**
- * Commerce opens a third above what a house costs and compounds at exactly the
- * same rate.
+ * What filling one district's whole allotment of a pool zone multiplies its
+ * price by.
  *
- * The matched growth is what the wider district cost this pair, and it is the
- * repair rather than a simplification. A shop used to compound faster than a
- * house — 1.18 against 1.14 — which was affordable over 31 commercial plots and
- * is not over 45: measured, filling one district's commerce went from 8,409 to
- * 85,784, or 67.6x what its housing costs. The exponent is what exploded, so
- * the exponent is what was fixed, and the whole gap moved onto the base.
+ * One number for both zones that contest the shared pool, and it is the repair
+ * the last commercial rebalance stopped one step short of. Matching the growth
+ * *rates* fixed a crossing — see SHOP_BASE — but a district sells 45 commercial
+ * plots against 24 residential, and the same rate over 88% more plots is not
+ * the same price. Filling a district's commerce came to `1.14 ** 45`, or 363.7x,
+ * against housing's `1.14 ** 24`, or 23.2x. Sixteen times as much, per district,
+ * and compounding again every time the city took another one.
  *
- * What that buys is a price *order* that never inverts. A shop is 1.375 houses
- * at the first of each and at the forty-fifth, where before the ratio ran from
- * 1.13 to 8x. Curves that cross are the failure mode here: 9 / 1.11 was
- * measured first, and because it undercuts housing from the fifth building on,
- * the discount-chasing policy bought fifteen shops, four homes and no hospital,
- * then sat at 18% happiness for the rest of the day with eleven in the bank —
- * a livelock, not a stall. See test/economy.test.ts, which asserts the order at
- * every step.
+ * That gap is what makes the commercial signal unanswerable in a built city.
+ * Measured on the state it was reported from — 8 districts, 131 housing plots
+ * and 189 commercial, 113.5K residents — the next house cost 228M and the next
+ * shop 626B, or 2,737x, against a city earning 2.1M a second: 94 seconds of
+ * income for the house, 47 for a works, and three days for the shop. The demand
+ * panel read C +100% and R -71% throughout. The city was asking for the one
+ * thing its own price curve had put out of reach, and it is the whole of what
+ * `tools/economy.calibrate.mjs` was already reporting: every policy stalled at
+ * 5 to 7 districts in 24 hours with shop costs of 1e11 against home costs of
+ * 1e4, and build-out parked just under the 70% annexation gate on commercial
+ * land that had been zoned and could never be built on.
  *
- * 11 rather than 9, and that is the one number set against a target rather than
- * against the curve. SHOP_BONUS is the strongest income multiplier in the game,
- * and the constant it is judged by is what ten shops cost per 1.0 of it: 1,433
- * two cycles ago, 423 after the last rebalance. At base 9 the matched curve put
- * it at 348 and the greedy livelock above followed; at 11 it is 425, which is
- * the number that was aimed at.
+ * Nothing on the demand side reaches it, and that is worth saying because
+ * TRADE_LADDER is where the last two cycles looked. The two prices diverge as
+ * `(363.7 / 23.2) ** districts` whatever the city wants, so a demand model that
+ * asked for exactly the 1.88 commercial plots per housing plot a district sells
+ * — at every rung, perfectly — would still price the ninth district's commerce
+ * at 16 ** 9 times its housing. The demand side decides how much land commerce
+ * gets; it cannot decide what a plot on it costs.
  *
- * Filling one district's commerce now costs 28,496 against housing's 1,269, or
- * 22.5x over 88% more plots. Commerce is the expensive half of a district by
- * *count* rather than by curve, which is a bound the plot split can be read off
- * rather than a coincidence of two exponents.
+ * Housing's multiple is the one kept, because it is the one every pacing
+ * constant was calibrated against: RENT, HOME_BASE and the first tier's
+ * capacity set the opening minute and `1.14 ** 24` is the curve they were set
+ * on. Commerce keeps its gap on SHOP_BASE, where a gap is a price rather than
+ * an exponent — a 1.375x that holds at every *share of the allotment* instead
+ * of a 16x that compounds per district.
+ *
+ * Industry is deliberately not in this. INDUSTRY_RESERVE caps a district's
+ * works at 13 plots and no amount of demand moves that, so its exponent has no
+ * pool to win and cannot run away from housing's the way a contested zone's
+ * can. `1.14 ** 13` stays what it was.
+ *
+ * Measured over 24 hours against the build before it (with TRADE_EXPONENT's
+ * move, which is the other half of the same cycle — neither works alone):
+ *
+ *   policy         districts    residents    shops     end C
+ *   auto-develop      5 -> 9    67K -> 95K  73 -> 152  +0.56 -> +0.06
+ *   greedy            7 -> 12  3.0K -> 152K 40 -> 167  -0.23 -> +0.39
+ *   disciplined       5 -> 8    58K -> 66K  66 -> 132  +0.50 -> -0.05
+ *
+ * Nothing pins, on any signal, under any policy, at 12, 24 or 48 hours. The
+ * greedy row is the one to read twice: its 24-hour city was 2,983 residents and
+ * 40 shops, which is what "the price is massive" looks like from inside the
+ * probe rather than from the HUD.
+ */
+export const DISTRICT_FILL_MULTIPLE = HOME_GROWTH ** FRONTAGE_TARGET.residential;
+
+/**
+ * Commerce opens a third above what a house costs and fills a district for the
+ * same multiple.
+ *
+ * The rate is derived rather than typed, and DISTRICT_FILL_MULTIPLE carries the
+ * argument for why: over 45 plots, `23.212 ** (1 / 45)` is 1.0724 where housing
+ * compounds at 1.14. The whole gap between the two zones is on the base now,
+ * and a base is a gap that stays a gap — a shop is 1.375 houses at the first of
+ * each, at the halfway mark of each zone's own allotment, and at the last.
+ *
+ * What that gives up is the *raw* price order, and it has to be said plainly
+ * because the last cycle bought it deliberately. A shop is cheaper than a house
+ * at the same count from the sixth of each on, and the failure that guards
+ * against is real: 9 / 1.11 crossed at the fifth and the discount-chasing
+ * policy bought fifteen shops, four homes and no hospital, then sat at 18%
+ * happiness for the rest of the day with eleven in the bank.
+ *
+ * It is a different crossing, and the difference is the allotment. At the sixth
+ * of each, housing is a quarter of the way through what a district sells it and
+ * commerce an eighth: they are not comparable purchases, and comparing them was
+ * only ever a proxy for the order that matters. The order that matters is per
+ * share of the zone's own land, and there commerce is dearer at every point by
+ * exactly SHOP_BASE / HOME_BASE and never crosses at all. `test/economy.test.ts`
+ * asserts that form, and the livelock was re-measured rather than assumed away:
+ * the greedy policy now ends its day at 98R / 167C / 81I over 12 districts with
+ * happiness at 98%, and what the cheaper opening costs it is its first service,
+ * 47.8m -> 58.3m, and its first hour of mood, 46% -> 35%. Both recover by the
+ * six-hour mark — 80% -> 98% — because the city it is building is no longer
+ * stunted. The two policies that are not chasing the discount barely move:
+ * first service 6.8m and 14.3m, unchanged, and the city hall 37.8m unchanged
+ * and 1.25h -> 1.17h.
+ *
+ * 11 rather than something higher, and the number it is judged by is what ten
+ * shops cost per 1.0 of SHOP_BONUS — the strongest income multiplier in the
+ * game. That was 1,433 two cycles ago and 425 after the last rebalance; the
+ * flatter curve puts it at 307, and raising the base to hold 425 would take it
+ * to 15 and open commerce at 1.9 houses rather than 1.4, which is the "commerce
+ * is something you unlock" the last cycle spent itself getting rid of. What the
+ * looser number actually costs was measured rather than argued: the shop
+ * multiplier's share of income at 24 hours goes 43% -> 49% under auto-develop
+ * and 21% -> 44% under greedy, both well inside the 60% line SHOP_BONUS was
+ * swept against, and no policy collapses into the one button.
+ *
+ * Filling one district's commerce now costs 3,376 against housing's 1,269, or
+ * 2.7x over 88% more plots. Commerce is still the expensive half of a district,
+ * and it is expensive by *count* — which is the bound the plot split can be
+ * read straight off, and the one thing about this pair that has not changed.
  */
 export const SHOP_BASE = 11;
-export const SHOP_GROWTH = 1.14;
+export const SHOP_GROWTH = DISTRICT_FILL_MULTIPLE ** (1 / FRONTAGE_TARGET.commercial);
 
 /**
  * Industry opens dear and compounds at the same rate as everything else.
@@ -716,9 +797,14 @@ export const SHOP_GROWTH = 1.14;
  * holds 13 industrial plots now against 8, and 240 / 1.2 filled them for 11,639
  * against the 3,960 the old eight cost. 120 / 1.14 fills the thirteen for 3,851
  * — the pacing the constants around it were measured against — and matching
- * HOME_GROWTH means the price order across the three zones is fixed by the base
- * alone: a house opens at 8, a shop at 11, a works at 120, and that ordering
- * holds at every building rather than up to some crossover.
+ * HOME_GROWTH is what keeps a works dearer than a house at every count rather
+ * than up to some crossover.
+ *
+ * It keeps that rate where commerce gave it up, and INDUSTRY_RESERVE is the
+ * whole difference. Industry's allotment is capped at 13 plots however hard the
+ * city argues for it, so `1.14 ** 13` is a multiple that cannot grow — where
+ * commerce draws on a pool that floats, and a rate charged over however many
+ * plots it wins is what ran away. See DISTRICT_FILL_MULTIPLE.
  *
  * Industry being the dearest thing to start is the whole of its identity here.
  * Measured over 24 hours, every policy still builds it out — 37 under
@@ -1000,50 +1086,73 @@ export const INDUSTRY_JOBS = LEVEL_FOOTPRINT.map(
  *   0.45      1, 1.9, 3.6, 7.0, 13.0      23x         6.58     3.5x   -.82 -.30 -.05 +.06 +.11
  *   0.50      1, 2.0, 4.2, 8.7, 17.3      17x         4.95     2.6x   -.82 -.34 -.08 +.04 +.09
  *   0.60      1, 2.3, 5.6, 13.3, 30.6    9.8x         2.80     1.5x   -.82 -.41 -.16 -.02 +.05
+ *   0.65      1, 2.5, 6.4, 16.5, 40.8    7.4x         2.10     1.12x                — see below
  *   1.00      1, 4, 17.5, 75, 300           1x        0.29     0.15x  -.82 -.82 -.82 -.82 -.82
  *
- * 0.5 is the square root of the capacity ladder, and it is taken because of
- * where it *crosses*: the wanted ratio passes the land's 1.88 between apartments
- * and towers, which is exactly where the flat ladder crosses it today, so the
- * shape of the early game is unchanged and only the runaway is cut. It holds
- * commercial demand inside +-0.35 at every rung against a flat ladder's -0.82,
- * and its top wants 4.95 commercial plots per housing plot — a ratio a district
- * cannot supply today at 1.88, and the number the zoning work is sized against.
+ * The last column is a historical sweep and is left as one: it was taken before
+ * visitors, transit labour reach, education and the estates were wired into the
+ * demand targets, so the rungs cannot be reproduced on this build and the row
+ * added since deliberately does not pretend to. The four columns before it are
+ * arithmetic on LEVEL_CAPACITY, SPEND_PER_RESIDENT and SHOP_THROUGHPUT, which
+ * is why they are the ones the choice below is argued from.
  *
- * The first rung is exactly 1, so nothing about a fresh save moves. That is not
- * a hope: the demand-neutral build-out probe reads 55.1% and 24R / 7C / 11I at
- * detached housing at *every* exponent from 0 to 0.5, which is what a ladder
- * anchored at 1 has to mean and what the probe had to be repaired to show.
+ * What decides it in the end is not where the wanted ratio crosses the land but
+ * where it *ends*, and 0.5 was set on the crossing. Its top rung wants 4.95
+ * commercial plots per housing plot against the 1.88 a district sells — 2.6x —
+ * and that last number is the one the player reads, because a city climbing the
+ * ladder spends its whole endgame at the top rung. The note that used to stand
+ * here called 4.95 "a ratio a district cannot supply today at 1.88, and the
+ * number the zoning work is sized against", and left it for the land supply to
+ * answer. Floating zoning did answer part of it — the demand-neutral build-out
+ * probe now reads 100% / 9% / 102% / 94% / 92% up the ladder against the 24.7%
+ * this comment's own table recorded, so the annexation gate is no longer the
+ * thing at risk — but not this part. Reaching 4.95 means zoning a district
+ * 11 residential against 57 commercial, and the surveyor moves one parcel at a
+ * time against ZONE_FLOOR, so what a built city actually does is sit at the
+ * bound: measured with the price curve repaired but this constant left at 0.5,
+ * the discount-chasing policy spent 1,003 minutes of 1,440 pinned at C +1.
  *
- * What it costs, stated plainly, because it is a real loss and not a rounding
- * one. The demand-neutral build-out of one district, per level held:
+ * 0.65 is set on the endpoint instead. Its top rung wants 2.10 commercial plots
+ * per housing plot against the 1.88 a district sells — 12% more, a district
+ * zoned about 22 residential against 47 commercial, which is two parcels off
+ * what one already sells. The wanted ratio per rung:
  *
- *   exponent   detached  apartments   towers  arcologies  megastructures
- *   0 (flat)      55.1%       10.1%    89.9%       78.7%           76.4%
- *   0.35          55.1%       11.2%    47.2%       36.0%           62.9%
- *   0.45          55.1%       11.2%    27.0%       29.2%           47.2%
- *   0.50          55.1%       11.2%    24.7%       24.7%           40.4%
+ *   exponent   detached  apartments  towers  arcologies  megastructures
+ *   0.50           0.29        0.57    1.20        2.47            4.95
+ *   0.60           0.29        0.50    0.90        1.61            2.80
+ *   0.65           0.29        0.46    0.78        1.29            2.10
+ *   0.70           0.29        0.43    0.67        1.04            1.58
+ *   (the land a district sells is 1.88)
  *
- * Against a 70% annexation gate, a uniform district above apartments used to
- * justify filling itself and now does not. That is the *first* failure in
- * LEVEL_SCALE's comment arriving in a milder form, and it is accepted here for
- * one reason only: the probe measures against a commercial allotment fixed at
- * 45, and a district of towers that wants 8 commercial plots rather than 23 is
- * a district that should be *zoned* for 8. The land supply is the other half of
- * this change and it is not this constant's to fix. If demand-driven zoning
- * does not recover the gate, this exponent is the first thing to bring down —
- * 0.35 and 0.45 are measured above and are the fallbacks, and 0.35's top wants
- * 11.43 commercial plots per housing plot, which is past what a shared pool can
- * offer.
+ * 0.70 is the bound on the other side and is why this is not simply pushed
+ * higher: at 1.58 the top rung wants *less* commercial land than a district
+ * already sells, so commerce stops being something the city has to zone for and
+ * the surveyor has nothing left to do about it. 0.65 keeps the ask above the
+ * land at the only rung where it was ever in doubt.
  *
- * What it buys, over 24 hours, is the other half of the same trade. The
- * discount-chasing policy's commercial pin falls from 1,035 minutes of 1,440 to
- * 496 — less than half — while residential holds at 987, because residential
- * pinning is a *mix* failure that no capacity ladder reaches. Auto-develop is
- * unmoved (5 districts, first annex 1.72h against 1.73h) and the disciplined
- * policy is better off (6 districts against 5). See tools/economy.calibrate.mjs.
+ * The first rung is exactly 1 at any exponent, so nothing about a fresh save
+ * moves, and the early rungs move by hundredths. What moves is the endgame.
+ * Measured with the commercial price curve repaired alongside it — the two are
+ * one change and neither works alone — no signal pins under any policy at 12,
+ * 24 or 48 hours. Against 0.6, which was measured first: 0.6 leaves the
+ * discount-chasing policy pinned at C +1 for 18.4m at every horizon, and leaves
+ * a built-out endgame city reading +0.89 with the split frozen, close enough to
+ * the bound that the tourism term alone carries it over — see
+ * `test/port.test.ts`, which asserts that VISITOR_TRIPS never does. What 0.65
+ * costs against 0.6 is about one district over 48 hours (auto-develop 9 against
+ * 10, disciplined 8 against 9) and 30-odd shops, because a city that wants less
+ * commerce zones less of it. Against the build before either change it is 9
+ * districts and 95K residents where auto-develop reached 5 and 67K.
+ *
+ * What it costs the mid-game is its appetite for commercial land: the wanted
+ * ratio crosses the 1.88 a district sells between arcologies and megastructures
+ * now rather than between towers and arcologies, so a city of towers wants a
+ * rung less commerce than it did. That is the *first* failure in LEVEL_SCALE's
+ * comment arriving in its mildest form yet, and the build-out probe above —
+ * 100% / 9% / 102% / 94% / 92% up the ladder — is what says it no longer
+ * reaches the annexation gate.
  */
-export const TRADE_EXPONENT = 0.5;
+export const TRADE_EXPONENT = 0.65;
 
 export const TRADE_LADDER = LEVEL_CAPACITY.map(
   (capacity) => (capacity / (LEVEL_CAPACITY[0] ?? 1)) ** TRADE_EXPONENT,

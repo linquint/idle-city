@@ -58,6 +58,7 @@ import {
   type DemandTerm,
   DEMAND_TAU,
   DISTRICT_BONUS,
+  DISTRICT_FILL_MULTIPLE,
   ESTATE_BASE,
   ESTATE_GROWTH,
   ESTATE_PLOTS,
@@ -76,7 +77,6 @@ import {
   HAPPINESS_TAU,
   HIGHWAY_COST,
   HOME_BASE,
-  HOME_GROWTH,
   INDUSTRIAL_OUTPUT,
   INDUSTRY_BASE,
   INDUSTRY_BONUS,
@@ -123,7 +123,6 @@ import {
   SERVICES,
   SHOP_BASE,
   SHOP_BONUS,
-  SHOP_GROWTH,
   SHOP_JOBS,
   SKILL_YIELD,
   ROAD_VISITORS,
@@ -2738,14 +2737,20 @@ export const priceModifier = (d: number): number => {
 /**
  * What filling one district's whole allotment of a zone multiplies its price by.
  *
- * The curve's anchor, and it is today's numbers rather than a new choice:
- * 1.14 ** 24 for housing, 1.14 ** 45 for commerce, 1.14 ** 13 for industry — the
- * price multiple a district's frontage already carried before zoning floated.
- * 23.2, 363.7 and 5.5.
+ * The curve's anchor, and the two zones that contest the shared pool share it:
+ * 23.2 for a district of housing and 23.2 for a district of commerce, so what
+ * the surveyor decides is how much land each gets rather than what a plot on it
+ * costs. They used to read 23.2 against 363.7, which is a 16x charge on
+ * commerce for being the wider frontage and the reason a built city could never
+ * answer its own commercial demand — see DISTRICT_FILL_MULTIPLE, which is where
+ * that number now comes from.
+ *
+ * Industry keeps its own, `1.14 ** 13` or 5.5. It draws on a reserve rather
+ * than the pool, so its allotment cannot grow and its multiple cannot run away.
  */
 export const ZONE_FILL_MULTIPLE = {
-  home: HOME_GROWTH ** FRONTAGE_TARGET.residential,
-  shop: SHOP_GROWTH ** FRONTAGE_TARGET.commercial,
+  home: DISTRICT_FILL_MULTIPLE,
+  shop: DISTRICT_FILL_MULTIPLE,
   industry: INDUSTRY_GROWTH ** FRONTAGE_TARGET.industrial,
 } as const;
 
