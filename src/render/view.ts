@@ -1,8 +1,11 @@
 import * as THREE from 'three';
+import type { Settings } from '../core/settings.ts';
+import { resolveMotion } from '../core/settings.ts';
 import { cityCentre, cityRadius, CityLayout } from '../sim/layout.ts';
 import { countOf } from '../sim/economy.ts';
 import type { GameState } from '../sim/state.ts';
 import { Buildings, type BuildingRef } from './buildings.ts';
+import { Collapse, COLLAPSE_SECONDS } from './collapse.ts';
 import { CameraRig } from './cameraRig.ts';
 import { Cars } from './cars.ts';
 import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight.ts';
@@ -14,7 +17,7 @@ import { Pedestrians } from './pedestrians.ts';
 import { Port, portReach } from './port.ts';
 import { Ships } from './ships.ts';
 import { Water } from './water.ts';
-import { World } from './world.ts';
+import { SHADOW_STEPS, World } from './world.ts';
 import { Courtyards, Parks, Zones, type ZoneMode } from './zones.ts';
 
 /**
@@ -43,6 +46,23 @@ export class View {
    */
   private readonly walkers: Pedestrians;
   private readonly fires: Fires;
+  /**
+   * Buildings falling down. Its own layer, not the fire's and not the
+   * skyline's, because it is the only thing in the renderer that outlives the
+   * building it draws — see `Collapse`.
+   */
+  private readonly collapse: Collapse;
+  /**
+   * Whether a lost building is animated at all. False under reduced motion.
+   *
+   * Skipped rather than shortened, matching the construction cages and for the
+   * same reason: at GROW_SECONDS_REDUCED the rebuild that follows the collapse
+   * is seven frames long, so the whole sequence would be a building blinking
+   * out and back. A city that quietly has one fewer building is what the game
+   * did before this existed, and it is the right thing to keep doing for
+   * someone who asked for less motion.
+   */
+  private collapsing: boolean;
   private readonly port: Port;
   private readonly ships: Ships;
   private readonly highway: Highway;
@@ -86,12 +106,14 @@ export class View {
    * fresh reading per frame would be a per-frame allocation.
    */
   private readonly sky = createSkyReading();
-  /** Reduced motion holds the cycle at dusk instead of running it. */
-  private readonly cycling: boolean;
+  /** Reduced motion holds the cycle at midday instead of running it. */
+  private cycling: boolean;
 
-  constructor(canvas: HTMLCanvasElement, layout: CityLayout) {
-    const reducedMotion =
-      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  constructor(canvas: HTMLCanvasElement, layout: CityLayout, settings?: Readonly<Settings>) {
+    // The preference, resolved once, and `system` is what it resolves to when
+    // nobody handed one in — which is exactly the `matchMedia` read this used
+    // to make inline. A `View` built without settings behaves as it always did.
+    const reducedMotion = resolveMotion(settings?.motion ?? 'system');
 
     this.world = new World(canvas);
     this.ground = new Ground(this.world.scene, layout);
@@ -99,13 +121,15 @@ export class View {
     // the seed and never reconciled against anything, so the view holds no
     // reference to it. It was there before the city was.
     new Water(this.world.scene);
-    this.buildings = new Buildings(this.world.scene, layout);
+    this.buildings = new Buildings(this.world.scene, layout, reducedMotion);
     this.zones = new Zones(this.world.scene, layout);
     this.courtyards = new Courtyards(this.world.scene, layout);
     this.parks = new Parks(this.world.scene, layout);
     this.cars = new Cars(this.world.scene, layout, !reducedMotion);
     this.walkers = new Pedestrians(this.world.scene, layout, !reducedMotion);
     this.fires = new Fires(this.world.scene, layout, !reducedMotion);
+    this.collapse = new Collapse(this.world.scene);
+    this.collapsing = !reducedMotion;
     this.port = new Port(this.world.scene);
     this.ships = new Ships(this.world.scene, !reducedMotion);
     this.highway = new Highway(this.world.scene);
@@ -226,6 +250,44 @@ export class View {
   }
 
   /**
+   * Applies the display preferences to everything that answers to them.
+   *
+   * Every one of these was a constructor argument read once from `matchMedia`,
+   * and every one of them is now a setter — because a preference the player can
+   * change has to take effect on the click rather than on the next reload. The
+   * whole method is idempotent: the store announces the entire object whenever
+   * any field of it moves, and each call below early-outs on a value it already
+   * holds.
+   *
+   * What it deliberately does *not* touch is `GameState`. A city looks
+   * different and is not different: the traffic that stops moving is a readout
+   * over `trips`, the sun that stops crossing the sky is a read over `elapsed`,
+   * and both of those numbers carry on exactly as they were.
+   */
+  apply(settings: Readonly<Settings>): void {
+    const reduced = resolveMotion(settings.motion);
+    this.world.setShadows(settings.shadows);
+    // The other half of a shadow step, and it is here rather than in `World`
+    // because `World` owns the light and the building layer owns the meshes
+    // that cast into it. See SHADOW_STEPS for why the step needs both halves:
+    // the pass is geometry-bound at 49 districts and the map size alone buys
+    // almost nothing.
+    this.buildings.setDressingShadows(SHADOW_STEPS[settings.shadows].dressing);
+    this.world.setFog(settings.fog);
+    this.cycling = !reduced;
+    this.buildings.setMotion(reduced);
+    this.rig.setDrift(!reduced);
+    this.cars.setMoving(!reduced);
+    this.walkers.setMoving(!reduced);
+    this.fires.setMoving(!reduced);
+    this.ships.setMoving(!reduced);
+    this.collapsing = !reduced;
+    // Anything already falling stops falling, rather than finishing under a
+    // preference that has just said not to.
+    if (reduced) this.collapse.clear();
+  }
+
+  /**
    * The overlay, stepped through ZONE_MODES. Building colours are rebuilt once
    * here rather than every frame; the pads themselves are rebuilt by the next
    * `sync`, which keeps the view from having to hold on to a copy of the
@@ -314,6 +376,22 @@ export class View {
     this.cars.sync(state);
     this.walkers.sync(state);
     this.fires.sync(state);
+    // Whatever the fire has just destroyed, drawn where it was standing.
+    //
+    // Drained every sync whether or not it is animated, so a preference change
+    // cannot leave a backlog of buildings waiting to fall over. The plot the
+    // flames were on is not the plot the simulation empties — see `Collapse`
+    // and `Game.demolish` — and this is deliberately the flames' plot: a
+    // building falling down where the fire was is the reading the player can
+    // check, and the count is the part the simulation is actually honest about.
+    for (const loss of this.fires.drainLosses()) {
+      if (!this.collapsing) continue;
+      this.collapse.start(loss.x, loss.z, loss.width, loss.depth, loss.top, this.elapsed);
+      // And the plot fills again once the dust has settled. The city really is
+      // one building smaller — at the far end of the build list — so this is
+      // the plot being rebuilt rather than the loss being undone.
+      this.buildings.rebuild(loss.kind, loss.slot, this.elapsed + COLLAPSE_SECONDS);
+    }
     this.port.sync(state);
     this.ships.sync(state);
   }
@@ -352,6 +430,8 @@ export class View {
     this.walkers.update(dt, this.rig.target);
     this.ships.update(dt, this.rig.target);
     this.fires.update(dt, this.elapsed, this.sky.night);
+    // O(what is falling), which is at most six and is nearly always none.
+    this.collapse.update(this.elapsed);
 
     this.world.render();
   }

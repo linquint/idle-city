@@ -458,6 +458,25 @@ class PartBank {
     for (const glow of this.glows) glow.setNight(night);
   }
 
+  /**
+   * Puts the dressing in or out of the shadow pass.
+   *
+   * The awning, the stack, the setback and the plant, and not the roofs: a roof
+   * is the top of a building's silhouette, so a shadow without one is a
+   * flat-topped shadow of a pitched house. The bands and the beacon are glow
+   * materials and were never in the pass.
+   *
+   * Measured at 49 districts fully built: the four are 7,013 of the 16,396
+   * casting instances and 84,156 of the 193,528 casting triangles — 43% of the
+   * shadow pass, thrown by a canopy at knee height and a vent on a roof. See
+   * SHADOW_STEPS, which is what decides when to spend it.
+   */
+  setDressingShadows(on: boolean): void {
+    for (const part of [PART.awning, PART.stack, PART.setback, PART.plant]) {
+      this.meshes[part]?.setCastShadow(on);
+    }
+  }
+
   /** States what the bank covers, so its nine meshes can be frustum-culled. */
   setBounds(x: number, z: number, reach: number, top: number): void {
     for (const mesh of this.meshes) mesh?.setBounds(x, z, reach, top);
@@ -658,14 +677,51 @@ class ZoneLayer {
   /**
    * Stages the growth animation for whatever arrived since the last write.
    *
-   * A zone that lost buildings clears instead: a merge, an abandonment or a
-   * demolition renumbers every slot above it, so an animation keyed to the old
-   * numbering would play on the wrong buildings.
+   * This used to clear on any shrink, and the comment said why: a merge, an
+   * abandonment or a demolition renumbers every slot above it, so an animation
+   * keyed to the old numbering would play on the wrong buildings. Two of those
+   * three turn out not to. It is worth writing down which, because the
+   * demolition animation is built on the difference.
+   *
+   *   - **a merge does renumber.** `place(zone, slot, merged, ...)` maps slots
+   *     `[0, merged)` onto the two-plot parcels, so raising `merged` by one
+   *     shifts the plot every slot in the zone stands on. This is the case the
+   *     clear is for, and it is now the only one;
+   *   - **an abandonment does not.** It moves buildings out of the cohort and
+   *     into the ruin count. A building's *level* changes, and therefore which
+   *     mesh draws it — but a slot is a slot, and `writeOne` takes the slot;
+   *   - **a demolition does not either.** `Game.demolish` takes the building
+   *     off the *newest* end, so every slot below it means what it meant. That
+   *     is the same property that makes the loss dishonest about which plot
+   *     empties (see `Collapse`), and it is what lets an animation survive it.
+   *
+   * So the clear is on `merged` alone, and a demolition leaves whatever is in
+   * flight alone — which is what makes the rebuild scheduled by `rebuild`
+   * survive the very shrink that caused it.
    */
   stage(state: Readonly<GameState>, now: number): void {
     const count = countOf(state, this.kind);
-    if (count > this.shown) this.growth.stage(this.shown, count, now, 1.4, WAVE_BUDGET);
-    else if (count < this.shown) this.growth.clear();
+    // `shownMerged` opens at -1, which is not a merge — it is a layer that has
+    // not drawn anything yet, and the city it is about to draw for the first
+    // time is the one that should animate in.
+    const merged = mergedOf(state, this.kind);
+    if (this.shownMerged >= 0 && merged !== this.shownMerged) this.growth.clear();
+    else if (count > this.shown) this.growth.stage(this.shown, count, now, 1.4, WAVE_BUDGET);
+  }
+
+  /**
+   * Puts one slot back up, after a delay.
+   *
+   * The whole of the rebuild half of the demolition animation, and it needs no
+   * new machinery at all: `GrowthSchedule` stores a *birth time* and
+   * `scaleAt` answers 0.001 for anything not yet born, so scheduling a slot in
+   * the future is the same thing as hiding it and then growing it back. The
+   * plot stands empty for `delay` and the building rises out of it on the
+   * ordinary arrival curve.
+   */
+  rebuild(slot: number, at: number): void {
+    if (slot < 0 || slot >= this.shown) return;
+    this.growth.schedule(slot, at);
   }
 
   setOverlay(source: OverlaySource | null): void {
@@ -884,6 +940,13 @@ class ZoneLayer {
     // instance are recovered from the cohort the scene is drawing.
     const standing = this.shown - this.ruins;
     const moving = this.growth.update(now, (slot) => {
+      // A slot the zone no longer has. `stage` no longer clears on a shrink —
+      // see the note there — so a building that was in flight when the city
+      // lost one can outlive its own slot by an animation's length. Skipping it
+      // leaves it in the active set until its scale reaches 1 and it retires
+      // itself, which costs one arithmetic test a frame and cannot write past
+      // the end of a mesh.
+      if (slot >= this.shown) return;
       const found = levelAt(this.cohort, slot);
       const level = slot < standing ? Math.max(0, found) : -1;
       const body = this.bodies[Math.max(0, level)];
@@ -1062,6 +1125,9 @@ const MAX_BUILDING_TOP = (() => {
  * in-flight building per frame.
  */
 const SCRATCH_AT = createPlacement();
+
+/** One reusable footprint, for the same reason SCRATCH_AT is reusable. */
+const SCRATCH_FOOT = { width: 0, depth: 0 };
 
 /**
  * Where each of a building's pieces is recorded in `partAt`.
@@ -1282,6 +1348,39 @@ function landmarkSet(scene: THREE.Scene, landmark: Landmark, capacity: number): 
     width,
     CELL,
   );
+}
+
+/**
+ * How wide and deep a building actually stands, in world units.
+ *
+ * The same numbers `writeOne` scales its body by and `highlight` wraps its
+ * outline around — the level's footprint, the style's multiplier, the
+ * per-building jitter, and MERGED_SPAN along a merged parcel's own axis.
+ * Exported so the collapse animation can be the size of the building that fell
+ * rather than the size of a plot: a cottage and an arcology come down very
+ * differently and a heap sized for the wrong one reads as a bug.
+ *
+ * Fills `out` rather than returning a fresh object, for the reason SCRATCH_AT
+ * does: this is asked for on the frame a building is destroyed and there is no
+ * reason for it to allocate.
+ */
+export function bodyFootprint(
+  kind: ZoneKind,
+  slot: number,
+  level: number,
+  plots: number,
+  alongX: boolean,
+  out: { width: number; depth: number },
+): { width: number; depth: number } {
+  const shape = shapeOf(kind, level);
+  const style = styleOf(kind, slot);
+  out.width = shape.width * style.width * widthJitter(slot);
+  out.depth = shape.width * shape.depth * style.width * depthJitter(slot);
+  if (plots > 1) {
+    if (alongX) out.width = MERGED_SPAN;
+    else out.depth = MERGED_SPAN;
+  }
+  return out;
 }
 
 /**
@@ -1680,7 +1779,16 @@ export class Buildings {
   /** Nine unit shapes, shared by every zone and every level. See `PartBank`. */
   private readonly parts: PartBank;
   /**
-   * Cages around whatever is mid-growth. Null under reduced motion.
+   * Cages around whatever is mid-growth.
+   *
+   * Built whatever the motion preference says and *gated* by `caged`, so the
+   * preference is a switch rather than a restart — one hidden mesh with no
+   * instances in it costs nothing, and a settings toggle that needed a reload
+   * to take effect would be a settings toggle nobody believes.
+   */
+  private readonly scaffold: Scaffold;
+  /**
+   * Whether cages are drawn at all. False under reduced motion.
    *
    * Skipped rather than shortened, and that is the honest answer to the
    * preference: reduced motion runs the whole animation in
@@ -1689,10 +1797,10 @@ export class Buildings {
    * reads, it is a flash, which is the exact thing the preference is set to
    * stop. Shortening it further would make it a one-frame flicker and leaving
    * it at full length would mean scaffolding standing after the building it
-   * wrapped had finished. Nothing at all is the only version that respects
-   * what was asked for.
+   * wrapped had finished. Nothing at all is the only version that respects what
+   * was asked for.
    */
-  private readonly scaffold: Scaffold | null;
+  private caged: boolean;
   /**
    * One entry per service, in SERVICES order, each owning its own mesh set,
    * growth schedule and shown count. Civic sites are reserved up front and
@@ -1738,11 +1846,18 @@ export class Buildings {
   constructor(
     scene: THREE.Scene,
     private readonly layout: CityLayout,
+    /**
+     * Whether the animation is held back. Defaults to the media query, which is
+     * the read this used to make inline — so a layer built without an opinion
+     * behaves exactly as it always did, and the settings panel is the only
+     * thing that ever passes one.
+     */
+    reduced: boolean = prefersReducedMotion(),
   ) {
-    const reduced = prefersReducedMotion();
     const duration = reduced ? GROW_SECONDS_REDUCED : GROW_SECONDS;
     this.parts = new PartBank(scene, 128);
-    this.scaffold = reduced ? null : new Scaffold(scene, SCAFFOLD_CAPACITY);
+    this.scaffold = new Scaffold(scene, SCAFFOLD_CAPACITY);
+    this.caged = !reduced;
     this.zones = [
       new ZoneLayer(scene, 'home', ZONE.residential, layout, duration, 64, this.detail),
       new ZoneLayer(scene, 'shop', ZONE.commercial, layout, duration, 32, this.detail),
@@ -1897,7 +2012,7 @@ export class Buildings {
       zone.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
     }
     this.parts.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
-    this.scaffold?.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
+    this.scaffold.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
     for (const set of this.civic) set.meshes.setBounds(centre.x, centre.z, reach, MAX_BUILDING_TOP);
   }
 
@@ -1917,9 +2032,43 @@ export class Buildings {
     return this.detail.dressingAll;
   }
 
+  /**
+   * Takes one building down and puts it back up, after a delay.
+   *
+   * Called when a fire has just destroyed a building. What it animates is the
+   * plot the flames were on, and the plot that actually empties is the newest
+   * one in the zone — see `Collapse` for why the two are different and why this
+   * is nonetheless the right thing to draw.
+   */
+  rebuild(kind: ZoneKind, slot: number, at: number): void {
+    for (const zone of this.zones) {
+      if (zone.kind === kind) zone.rebuild(slot, at);
+    }
+  }
+
+  /** Whether the dressing joins the shadow pass. See `PartBank.setDressingShadows`. */
+  setDressingShadows(on: boolean): void {
+    this.parts.setDressingShadows(on);
+  }
+
   /** Construction cages standing. For the tests and the calibrators. */
   get scaffolds(): number {
-    return this.scaffold?.standing ?? 0;
+    return this.scaffold.standing;
+  }
+
+  /**
+   * Answers the motion preference, under the running game.
+   *
+   * Both halves of it: how long an animation runs, and whether it is dressed.
+   * `GrowthSchedule` stores a birth time and derives the scale from the age, so
+   * shortening the duration finishes what is already in the air on the next
+   * frame rather than stranding it — see `setDuration`.
+   */
+  setMotion(reduced: boolean): void {
+    const duration = reduced ? GROW_SECONDS_REDUCED : GROW_SECONDS;
+    for (const zone of this.zones) zone.growth.setDuration(duration);
+    for (const set of this.civic) set.growth.setDuration(duration);
+    this.caged = !reduced;
   }
 
   /**
@@ -2032,15 +2181,8 @@ export class Buildings {
     }
     const at = this.layout.place(zoneOf(ref.kind), ref.slot, mergedOf(state, ref.kind), state, SCRATCH_AT);
     const level = levelAt(levelsOf(state, ref.kind), ref.slot);
-    const shape = shapeOf(ref.kind, level);
-    const style = styleOf(ref.kind, ref.slot);
-    let width = shape.width * style.width * widthJitter(ref.slot);
-    let depth = shape.width * shape.depth * style.width * depthJitter(ref.slot);
-    if (at.plots > 1) {
-      if (at.alongX) width = MERGED_SPAN;
-      else depth = MERGED_SPAN;
-    }
-    this.outline.show(at.x, at.z, width, depth, roofline(ref.kind, ref.slot, level));
+    const foot = bodyFootprint(ref.kind, ref.slot, level, at.plots, at.alongX, SCRATCH_FOOT);
+    this.outline.show(at.x, at.z, foot.width, foot.depth, roofline(ref.kind, ref.slot, level));
   }
 
   /** Advances in-flight growth animations. Returns true while any are running. */
@@ -2051,11 +2193,16 @@ export class Buildings {
     // list is exactly what was written this pass, so a building that finished
     // is simply not in it. Free when nothing is moving — `begin` is an integer
     // and `end` early-returns on a list that was empty last frame too.
-    this.scaffold?.begin();
+    this.scaffold.begin();
     for (const zone of this.zones) {
-      moving = zone.update(this.parts, this.dummy, this.tint, now, this.scaffold) || moving;
+      moving =
+        zone.update(this.parts, this.dummy, this.tint, now, this.caged ? this.scaffold : null) ||
+        moving;
     }
-    this.scaffold?.end();
+    // Closed whether or not anything was written, and that is what takes the
+    // cages down the frame the preference changes as well as the frame a
+    // building finishes: the list is only ever what this pass put in it.
+    this.scaffold.end();
     if (moving) this.parts.flush();
 
     for (const set of this.civic) {

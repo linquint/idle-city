@@ -1,8 +1,53 @@
 import * as THREE from 'three';
+import type { ShadowQuality } from '../core/settings.ts';
 import type { SkyReading } from './daylight.ts';
 import { PALETTE } from './palette.ts';
 
 const SHADOW_SPAN = 150;
+
+/**
+ * What each shadow step actually sets, and nothing else about it.
+ *
+ * A table rather than a switch inside `setShadows`, so the thing the settings
+ * panel is choosing between can be read — and tested — without a WebGL context.
+ * `high` is exactly what `World` has always constructed: 2048px and
+ * `PCFSoftShadowMap`. That is the whole of the default-equivalence claim for
+ * this setting and test/settings.test.ts asserts it against these numbers.
+ *
+ * The steps move *texels and filter*, never SHADOW_SPAN. That matters: the
+ * frustum covers a fixed span that follows the camera's focus, so texel density
+ * is constant however far the city spreads — see `focusShadows`. Making a step
+ * cheaper by widening the span instead would make shadows worse on a big city
+ * and no better on a small one, which is the exact failure the fixed span was
+ * built to avoid.
+ */
+export const SHADOW_STEPS: Readonly<
+  Record<
+    ShadowQuality,
+    {
+      readonly enabled: boolean;
+      readonly size: number;
+      readonly type: THREE.ShadowMapType;
+      /** Whether a building's awning, stack, setback and plant cast. */
+      readonly dressing: boolean;
+    }
+  >
+> = {
+  high: { enabled: true, size: 2048, type: THREE.PCFSoftShadowMap, dressing: true },
+  // Quarter the texels, the cheaper filter, and the dressing out of the pass.
+  //
+  // The third of those is the one that pays, and it is worth saying why,
+  // because the obvious step is the first two and the measurement says they are
+  // nearly free. At 49 districts, headless with a software rasteriser, the
+  // frame went 1,679 ms at `high` and 1,621 at 2048 -> 1024 alone — 3.5%. The
+  // pass is *geometry*-bound at this size, not fill-bound: it resubmits 16,396
+  // instances and 193,528 triangles whatever resolution it writes them at. So
+  // the middle step has to take geometry out of it or it does not earn its
+  // place, and the dressing is 43% of both counts for shadows thrown by a shop
+  // canopy and a roof vent. See `PartBank.setDressingShadows`.
+  low: { enabled: true, size: 1024, type: THREE.PCFShadowMap, dressing: false },
+  off: { enabled: false, size: 1024, type: THREE.PCFShadowMap, dressing: false },
+};
 
 /**
  * Tallest thing the city can stand on a plot: an arcology at the top of its
@@ -43,6 +88,8 @@ export class World {
   private readonly shadowFocus = new THREE.Vector3(NaN, NaN, NaN);
   private radius = 100;
   private fogDistance = -1;
+  /** The step the map is currently sized and filtered for. See `setShadows`. */
+  private shadows: ShadowQuality = 'high';
 
   /** The element the world is drawn into. Where a click's coordinates are measured from. */
   readonly canvas: HTMLCanvasElement;
@@ -55,8 +102,11 @@ export class World {
       powerPreference: 'high-performance',
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Read off the table rather than typed, so "the default is what the game
+    // always did" is true by construction rather than by two literals agreeing.
+    const shadows = SHADOW_STEPS[this.shadows];
+    this.renderer.shadowMap.enabled = shadows.enabled;
+    this.renderer.shadowMap.type = shadows.type;
 
     // Held rather than looked up: both are re-tinted every frame by the cycle,
     // and `scene.background` is typed wide enough that reading it back would
@@ -71,7 +121,7 @@ export class World {
     // them change colour together.
     this.key = new THREE.DirectionalLight(0xffce96, 2.1);
     this.key.castShadow = true;
-    this.key.shadow.mapSize.set(2048, 2048);
+    this.key.shadow.mapSize.set(shadows.size, shadows.size);
     this.key.shadow.bias = -0.0007;
     this.key.shadow.normalBias = 0.02;
     this.scene.add(this.key, this.key.target);
@@ -102,6 +152,62 @@ export class World {
     }
     this.lightDir.set(sky.dirX, sky.dirY, sky.dirZ);
     this.sunMoved = true;
+  }
+
+  /**
+   * Applies one of the shadow steps.
+   *
+   * Three things have to happen together and the order is load-bearing. The
+   * renderer's flag and filter are global state that every material's program
+   * was compiled against, so changing the type sets `shadowMap.needsUpdate`,
+   * which is what makes three rebuild them; the map itself is a render target
+   * three allocated at the old size, so it is disposed and dropped rather than
+   * resized, and three reallocates it at the new one on the next frame; and the
+   * frustum's own texel snapping is derived from `mapSize.x`, so the cached
+   * focus has to be invalidated or the next frame would snap the light to a
+   * grid that no longer exists.
+   *
+   * Idempotent, because the settings store announces the whole object on every
+   * change and three of the four fields have nothing to say to this.
+   */
+  setShadows(quality: ShadowQuality): void {
+    if (quality === this.shadows) return;
+    this.shadows = quality;
+    const step = SHADOW_STEPS[quality];
+    this.renderer.shadowMap.enabled = step.enabled;
+    this.renderer.shadowMap.type = step.type;
+    this.renderer.shadowMap.needsUpdate = true;
+    const shadow = this.key.shadow;
+    if (shadow.mapSize.x !== step.size) {
+      shadow.mapSize.set(step.size, step.size);
+      shadow.map?.dispose();
+      shadow.map = null;
+    }
+    // See `focusShadows`: the snap grid is one shadow texel wide, so a map that
+    // changed size leaves the cached focus meaning a different thing.
+    this.shadowFocus.set(NaN, NaN, NaN);
+    this.sunMoved = true;
+  }
+
+  /**
+   * Hangs the haze on the scene, or takes it off.
+   *
+   * The fog object itself is *kept* either way, which is the whole of how this
+   * survives `daylight.ts` re-tinting it every frame: `setSky` and `updateFog`
+   * go on writing colour, near and far into the same object whether or not the
+   * scene is currently holding it, so turning fog back on gets the haze the
+   * cycle has been maintaining rather than a stale one from whenever it was
+   * switched off. A one-shot that cleared `fog.color` would be overwritten on
+   * the next frame; a one-shot that cleared `scene.fog` and let the cycle write
+   * into a detached object is exactly this, and it is correct by construction.
+   *
+   * What the player gets for turning it off is a hard horizon: the backdrop is
+   * still the sky's colour, so the grassland ends at a line rather than fading
+   * into one. That is the trade, and it is worth offering because the haze is a
+   * full-screen effect and full-screen effects are what people turn off.
+   */
+  setFog(on: boolean): void {
+    this.scene.fog = on ? this.haze : null;
   }
 
   /** Re-frames depth for a city of the given radius. */

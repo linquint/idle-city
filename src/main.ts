@@ -1,5 +1,6 @@
 import './style.css';
 
+import { SettingsStore } from './core/settings';
 import { Game } from './sim/game';
 import { CityLayout } from './sim/layout';
 import { load, save, secondsAway } from './sim/save';
@@ -18,11 +19,34 @@ if (!(canvas instanceof HTMLCanvasElement)) throw new Error('Missing #stage canv
 const layout = new CityLayout();
 const saved = load();
 const game = new Game(saved ?? createState());
-const view = new View(canvas, layout);
+
+// Read before the view is built, because the view's construction depends on it
+// — the motion preference decides how long a growth animation runs and whether
+// the traffic moves at all. It comes from its own storage key and is not part
+// of the save: `reset()` and `ascend()` throw the city away and leave this
+// exactly as it was, which is what a preference should do. See core/settings.
+const settings = new SettingsStore();
+const view = new View(canvas, layout, settings.value);
 
 // A renderer instrument, fed from the frame loop rather than from the HUD:
 // `Hud` reads the simulation, and frame rate is not a simulation number.
 const fps = new FpsMeter();
+
+/**
+ * Everything a display preference reaches.
+ *
+ * Applied here rather than inside the store, so the store stays a value that
+ * knows nothing about a renderer — the same separation the overlay and the
+ * camera already have, where the view owns the state and the HUD is a
+ * subscriber. Run once at startup as well as on every change, so the panel's
+ * defaults and what is actually on screen cannot disagree on the first frame.
+ */
+function applySettings(): void {
+  view.apply(settings.value);
+  fps.setVisible(settings.value.fps);
+}
+settings.onChange = () => applySettings();
+applySettings();
 
 const hud = new Hud(game, layout, {
   onReset: () => persist(),
@@ -40,6 +64,10 @@ const hud = new Hud(game, layout, {
   // The camera is the view's in exactly the way the overlay is.
   onStreet: () => view.toggleStreet(),
   street: () => view.street,
+  // Not a hook, because it is not a request: the panel reads the store to mark
+  // its controls and writes to it, and this module is subscribed to the same
+  // store. Nothing about it reaches `game`.
+  settings,
 });
 
 // And the other direction: the Z key belongs to the view, so a cycle there has

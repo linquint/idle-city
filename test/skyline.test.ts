@@ -450,13 +450,16 @@ describe('the cages on what is being built', () => {
     // A cage sized for a detached house standing around an arcology would read
     // as a bug, so the cage takes the *drawn* footprint — the same number the
     // body's own merged stretch is built from.
-    const root = new THREE.Scene();
-    const buildings = new Buildings(root, new CityLayout());
-    const mesh = cage(root);
     const box = new THREE.Matrix4();
     const size = new THREE.Vector3();
 
+    // A fresh layer per reading, because a merge is exactly what `stage` now
+    // clears in-flight animations on — see its note. Two readings from one
+    // layer would be measuring the second against a wiped schedule.
     const spanOf = (levels: number[], homes: number, merged = 0): number => {
+      const root = new THREE.Scene();
+      const buildings = new Buildings(root, new CityLayout());
+      const mesh = cage(root);
       buildings.sync(state({ homes, homeLevels: [...levels], mergedR: merged }), 0);
       buildings.update(0.01);
       expect(standing(mesh)).toBeGreaterThan(0);

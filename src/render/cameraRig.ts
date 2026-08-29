@@ -186,10 +186,23 @@ export class CameraRig {
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
     private readonly dom: HTMLElement,
-    private readonly drift: boolean,
+    private drift: boolean,
   ) {
     this.listen();
     this.apply();
+  }
+
+  /**
+   * Whether the camera drifts when nobody is touching it.
+   *
+   * A switch rather than a constructor argument, so the motion preference can
+   * be answered without rebuilding the rig. The drift only ever moves `theta`
+   * toward a want that the damping is already chasing, so turning it off stops
+   * the city rotating on the next frame and leaves the camera exactly where the
+   * player last left it.
+   */
+  setDrift(on: boolean): void {
+    this.drift = on;
   }
 
   /**

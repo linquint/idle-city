@@ -18,6 +18,13 @@ import {
 } from '../sim/achievements';
 import { fmt, fmtDuration, fmtInt } from '../core/format';
 import {
+  systemPrefersReducedMotion,
+  type MotionSetting,
+  type Settings,
+  type SettingsStore,
+  type ShadowQuality,
+} from '../core/settings';
+import {
   ANNEX_MIN_OCCUPANCY,
   CELL,
   LANDMARKS,
@@ -217,6 +224,35 @@ export interface HudHooks {
   onSkip?: (seconds: number) => void;
   /** Told when the card is dismissed, so the outline goes with it. */
   onDeselect?: () => void;
+  /**
+   * The display preferences, if this build has any.
+   *
+   * The store rather than a pair of hooks, and it is the one thing in here that
+   * is not a hook, because it is not a request: the HUD reads the current value
+   * to mark the controls and writes the new one, and `main.ts` is subscribed to
+   * the same store and applies whatever comes out. Nothing about it touches the
+   * game — the panel would render identically against a `Game` that had been
+   * thrown away.
+   *
+   * Optional, exactly as `onZoneMode` is: without one the disclosure is hidden
+   * rather than rendered empty.
+   */
+  settings?: SettingsStore;
+}
+
+/**
+ * One row of the display panel.
+ *
+ * `choices` present means a radiogroup and absent means a switch, which is the
+ * only structural difference between the four rows — everything else about them
+ * is a name and a line of prose.
+ */
+interface SettingRow {
+  readonly key: keyof Settings;
+  readonly name: string;
+  readonly choices?: readonly { readonly value: string; readonly label: string }[];
+  /** What to say under the control, given what it is set to. Empty says nothing. */
+  readonly note: (value: Settings[keyof Settings]) => string;
 }
 
 /** What each zone is called in the inspector, and what its capacity is called. */
@@ -502,6 +538,8 @@ export class Hud {
     overlays: el('overlays'),
     overlayNote: el('overlay-note'),
     streetView: el('street-view'),
+    settings: el('settings'),
+    settingsBody: el('settings-body'),
     corner: el('corner'),
     sheetGrip: el<HTMLButtonElement>('sheet-grip'),
     education: el('education'),
@@ -752,6 +790,15 @@ export class Hud {
   private awardsTabShown = '';
   /** One chip per overlay mode, built once. See `buildOverlays`. */
   private readonly overlayButtons = new Map<ZoneMode, HTMLButtonElement>();
+  /** Every control on the display panel, with the row and value it stands for. */
+  private readonly settingButtons: Array<{
+    row: SettingRow;
+    button: HTMLButtonElement;
+    /** The choice this button selects, or null for a switch. */
+    value: string | null;
+  }> = [];
+  /** The line under each setting, so it can be repainted when the value moves. */
+  private readonly settingNotes = new Map<keyof Settings, HTMLElement>();
   /** The mode the picker is marking, so the note can be repainted live. */
   private overlayShown: ZoneMode = 'off';
   /** What that note last said, so an unchanged one is left alone. */
@@ -905,6 +952,7 @@ export class Hud {
     this.wireSheet();
     this.buildOverlays();
     this.buildStreetView();
+    this.buildSettings();
     this.buildGraphs();
     this.buildAwards();
 
@@ -1234,6 +1282,152 @@ export class Hud {
     }
     button.addEventListener('click', () => this.markStreet(this.hooks.onStreet?.() ?? false));
     this.markStreet(this.hooks.street?.() ?? false);
+  }
+
+  /**
+   * The display settings, as a table.
+   *
+   * A table rather than four hand-written blocks, because the four rows differ
+   * only in what they choose between and what they are called — and writing
+   * that out four times is how a panel ends up with three chips that mark
+   * themselves and one that does not. Each row is either a set of choices (a
+   * radiogroup) or a switch, and that distinction is real rather than
+   * cosmetic: a screen reader told that "Fog" is one of two overlays would be
+   * told something false.
+   *
+   * The order is what a player reaches for in anger. Shadows first because it
+   * is the one with real frame time behind it, fog second because it is the
+   * most visible change, motion third because most people who want it have
+   * already set it at the OS level, and the frame-rate readout last because it
+   * is an instrument rather than a preference.
+   */
+  private settingRows(): readonly SettingRow[] {
+    const shadow = (key: ShadowQuality, label: string) => ({ value: key, label });
+    const motion = (key: MotionSetting, label: string) => ({ value: key, label });
+    return [
+      {
+        key: 'shadows',
+        name: 'Shadows',
+        choices: [shadow('high', 'High'), shadow('low', 'Low'), shadow('off', 'Off')],
+        note: (value) =>
+          value === 'off'
+            ? 'No shadow pass at all. The cheapest thing on this panel.'
+            : value === 'low'
+              ? 'A quarter of the texels and a cheaper filter.'
+              : 'A soft 2048px map. What the game has always drawn.',
+      },
+      {
+        key: 'fog',
+        name: 'Haze',
+        note: (value) =>
+          value ? '' : 'The grassland now ends at a line rather than fading into one.',
+      },
+      {
+        key: 'motion',
+        name: 'Motion',
+        choices: [motion('system', 'System'), motion('full', 'Full'), motion('reduced', 'Reduced')],
+        note: (value) =>
+          value === 'system'
+            ? `Following your machine, which currently asks for ${
+                systemPrefersReducedMotion() ? 'reduced' : 'full'
+              } motion.`
+            : value === 'reduced'
+              ? 'Traffic held still, the sun held at midday, buildings arriving without ceremony.'
+              : 'Traffic, the day/night cycle and the arrival animations, whatever your machine asks for.',
+      },
+      {
+        key: 'fps',
+        name: 'Frame rate',
+        note: () => '',
+      },
+    ];
+  }
+
+  /**
+   * Builds the display panel once, and keeps it marked.
+   *
+   * Hidden rather than rendered empty when no store was handed in, which is the
+   * rule `buildStreetView` already follows: the markup is in `index.html`
+   * either way and an empty disclosure is worse than none.
+   */
+  private buildSettings(): void {
+    const store = this.hooks.settings;
+    if (!store) {
+      this.nodes.settings.hidden = true;
+      return;
+    }
+    for (const row of this.settingRows()) {
+      const block = document.createElement('div');
+      block.className = 'setting';
+      const name = document.createElement('p');
+      name.className = 'setting-name';
+      name.textContent = row.name;
+      const controls = document.createElement('div');
+      controls.className = 'setting-row';
+      const note = document.createElement('p');
+      note.className = 'setting-note';
+      block.append(name, controls, note);
+
+      if (row.choices) {
+        controls.setAttribute('role', 'radiogroup');
+        controls.setAttribute('aria-label', row.name);
+        for (const choice of row.choices) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'overlay';
+          button.setAttribute('role', 'radio');
+          button.textContent = choice.label;
+          button.addEventListener('click', () => {
+            store.set(row.key, choice.value as Settings[typeof row.key]);
+            this.markSettings();
+          });
+          controls.append(button);
+          this.settingButtons.push({ row, button, value: choice.value });
+        }
+      } else {
+        // A switch, and it says so. The overlays above are one-of-seven and
+        // these are on-or-off; a screen reader told otherwise would announce a
+        // fog toggle as an eighth map overlay.
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'overlay';
+        button.addEventListener('click', () => {
+          store.set(row.key, !store.value[row.key] as Settings[typeof row.key]);
+          this.markSettings();
+        });
+        controls.append(button);
+        this.settingButtons.push({ row, button, value: null });
+      }
+      this.settingNotes.set(row.key, note);
+      this.nodes.settingsBody.append(block);
+    }
+    this.markSettings();
+  }
+
+  /**
+   * Marks every control against what the store currently holds.
+   *
+   * Read back from the store rather than from what was clicked, so a value the
+   * store refused — or one another surface changed — cannot leave the panel
+   * saying something the renderer is not doing.
+   */
+  private markSettings(): void {
+    const store = this.hooks.settings;
+    if (!store) return;
+    const settings = store.value;
+    for (const { row, button, value } of this.settingButtons) {
+      const current = settings[row.key];
+      if (value === null) {
+        button.setAttribute('aria-pressed', String(current === true));
+        button.textContent = current === true ? 'On' : 'Off';
+      } else {
+        button.setAttribute('aria-checked', String(current === value));
+      }
+    }
+    for (const row of this.settingRows()) {
+      const note = this.settingNotes.get(row.key);
+      if (note) note.textContent = row.note(settings[row.key]);
+    }
   }
 
   /**

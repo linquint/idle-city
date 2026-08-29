@@ -35,6 +35,7 @@ export class FpsMeter {
   private frameTime = 0;
   /** Last value written to the DOM. -1 so the first sample always writes. */
   private shown = -1;
+  private visible = true;
 
   constructor(parent: HTMLElement = document.body) {
     const node = document.createElement('div');
@@ -58,12 +59,34 @@ export class FpsMeter {
    * one.
    */
   sample(dt: number): void {
-    if (!(dt > 0)) return;
+    // Hidden costs nothing at all rather than costing an invisible write: this
+    // is the one thing in the frame loop whose whole job is to not perturb the
+    // frame loop, and an instrument that kept averaging while switched off
+    // would still be measuring itself.
+    if (!this.visible || !(dt > 0)) return;
     this.frameTime = this.frameTime === 0 ? dt : this.frameTime + (dt - this.frameTime) * ALPHA;
     const fps = Math.round(1 / this.frameTime);
     if (fps === this.shown) return;
     this.shown = fps;
     this.node.textContent = `${fps} fps`;
+  }
+
+  /**
+   * Shows or hides the readout.
+   *
+   * `hidden` rather than a class, because the node's only job is to carry a
+   * number and there is no layout to preserve. The average is thrown away on
+   * the way out and the last-written value with it, so switching it back on
+   * shows what the frame loop is doing *now* rather than a number from before
+   * the player went away and came back.
+   */
+  setVisible(on: boolean): void {
+    if (on === this.visible) return;
+    this.visible = on;
+    this.node.hidden = !on;
+    this.frameTime = 0;
+    this.shown = -1;
+    if (!on) this.node.textContent = '—— fps';
   }
 
   dispose(): void {

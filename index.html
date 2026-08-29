@@ -38,6 +38,21 @@
   </div>
   <div class="overlays" id="overlays" role="radiogroup" aria-label="Map overlay"></div>
   <p class="overlay-note" id="overlay-note"></p>
+
+  <!-- Display settings, on the same shelf as the overlay chips and the street
+       switch, and for the third time for the same reason: these are controls
+       over how the *map is drawn* rather than over the city. They are
+       emphatically not a tenth tab — the dock's nine tabs are all about what
+       the city is and what it is doing, and a shadow-quality step is about
+       neither. Nothing in here reaches `GameState`.
+
+       A native disclosure rather than a popover: it is keyboard-accessible and
+       screen-reader-correct with no script at all, and the panel is four rows
+       that do not need to float over anything. -->
+  <details class="settings" id="settings">
+    <summary class="overlay">Display</summary>
+    <div class="settings-body" id="settings-body"></div>
+  </details>
 </div>
 
 <!-- One docked control in the bottom-left corner, with the selected building's
