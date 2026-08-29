@@ -21,6 +21,7 @@ const PALETTE = {
   0xd8dee8: 'hospital', 0x63c6a8: 'hospitalRoof', 0x2e3e55: 'parapet',
   0x54637c: 'stack', 0x2a3140: 'runway', 0xf0a64b: 'sodium',
   0xe8ecf2: 'marking', 0xd8453c: 'emergency',
+  0x6d2f2c: 'fire', 0xe0574b: 'fireRoof', 0xc9d1da: 'concrete',
 };
 
 /* ---- parsing ------------------------------------------------------------ */
@@ -136,7 +137,7 @@ if (flag === '--ts') {
       : p.shape === 'disc'
         ? `radius: ${p.radius}, height: ${n(p.height)}, segments: ${p.segments}`
         : `inner: ${p.inner}, outer: ${p.outer}, height: ${n(p.height)}, segments: ${p.segments}`;
-    console.log(`  { shape: '${p.shape}', at: [${p.centre.map(n).join(', ')}], ${geo}, colour: ${name(p.colour)} }, // ${p.from}`);
+    console.log(`  { shape: '${p.shape}', at: [${p.centre.map(n).join(', ')}], ${geo}, mtl: '${p.mtl}', colour: ${name(p.colour)} }, // ${p.from}`);
   }
   console.log('];');
 } else {
@@ -147,7 +148,7 @@ if (flag === '--ts') {
       : p.shape === 'disc' ? `r${p.radius} h${n(p.height)} x${p.segments}`
       : `r${p.inner}-${p.outer} h${n(p.height)} x${p.segments}`;
     console.log(`  ${p.shape.padEnd(4)} ${p.from.padEnd(17)} at [${p.centre.map(n).join(', ')}]`.padEnd(60)
-      + `${geo.padEnd(24)} ${name(p.colour)}`);
+      + `${geo.padEnd(24)} ${p.mtl.padEnd(15)} ${name(p.colour)}`);
   }
 }
 if (refused.length) {

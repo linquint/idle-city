@@ -15,12 +15,19 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
  * Positions are the primitive's *centre*, relative to the site centre, in the
  * same world units the rest of the renderer uses: x and z across the footprint,
  * y up from the pavement.
+ *
+ * `mtl` is the material's name in the MTL file and `colour` its diffuse, and
+ * both are carried because they are not interchangeable: two materials may
+ * share a colour and mean different things. The fire station's `roof-red` and
+ * `beacon-red` are the same red, and one is a painted roof while the other is a
+ * light — a distinction no amount of looking at the colour recovers.
  */
 export type ModelPart =
   | {
       readonly shape: 'box';
       readonly at: readonly [number, number, number];
       readonly size: readonly [number, number, number];
+      readonly mtl: string;
       readonly colour: number;
     }
   | {
@@ -29,6 +36,7 @@ export type ModelPart =
       readonly radius: number;
       readonly height: number;
       readonly segments: number;
+      readonly mtl: string;
       readonly colour: number;
     }
   | {
@@ -38,6 +46,7 @@ export type ModelPart =
       readonly outer: number;
       readonly height: number;
       readonly segments: number;
+      readonly mtl: string;
       readonly colour: number;
     };
 
@@ -72,27 +81,35 @@ function geometryOf(part: ModelPart): THREE.BufferGeometry {
 }
 
 /**
- * The model's primitives merged into one geometry per colour, in the order the
- * colours first appear.
+ * The model's primitives merged into one geometry per material, in the order
+ * the materials first appear.
  *
- * By colour and not by part, because a colour is what a draw call is: every
- * part sharing a material also shares this building's single instance
- * transform, so they can never be anything but one mesh's worth of work. A
- * hospital is eighteen pieces and eight draw calls, and it stays eight however
- * many the city opens.
+ * Per material, because a material is what a draw call is: every part wearing
+ * one also shares this building's single instance transform, so they can never
+ * be more than one mesh's worth of work. A hospital is twenty-one pieces and
+ * eight draw calls, and it stays eight however many the city opens.
+ *
+ * Per material rather than per *colour*, which is the same thing right up until
+ * it is not: the fire station paints its beacon and its roof caps the same red
+ * and needs the beacon lit, so a merge keyed on colour would weld a light onto
+ * three roofs with no way back.
  */
-export function mergeByColour(
+export function mergeByMaterial(
   parts: readonly ModelPart[],
-): Array<{ colour: number; geometry: THREE.BufferGeometry }> {
-  const groups = new Map<number, THREE.BufferGeometry[]>();
+): Array<{ mtl: string; colour: number; geometry: THREE.BufferGeometry }> {
+  const groups = new Map<string, { colour: number; geometries: THREE.BufferGeometry[] }>();
   for (const part of parts) {
-    const found = groups.get(part.colour);
-    if (found) found.push(geometryOf(part));
-    else groups.set(part.colour, [geometryOf(part)]);
+    const found = groups.get(part.mtl);
+    if (found) found.geometries.push(geometryOf(part));
+    else groups.set(part.mtl, { colour: part.colour, geometries: [geometryOf(part)] });
   }
-  return [...groups].map(([colour, geometries]) => ({
+  return [...groups].map(([mtl, { colour, geometries }]) => ({
+    mtl,
     colour,
     // `mergeGeometries` on a single geometry is a copy nobody needs.
-    geometry: geometries.length === 1 ? (geometries[0] as THREE.BufferGeometry) : mergeGeometries(geometries),
+    geometry:
+      geometries.length === 1
+        ? (geometries[0] as THREE.BufferGeometry)
+        : mergeGeometries(geometries),
   }));
 }

@@ -38,7 +38,8 @@ import { Glow } from './glow.ts';
 import { GrowableInstancedMesh, SlotRanges } from './growable.ts';
 import { GrowthSchedule } from './growth.ts';
 import { PALETTE } from './palette.ts';
-import { mergeByColour, type ModelPart } from './model.ts';
+import { HOSPITAL_PARTS, FIRE_STATION_PARTS } from './civicModels.ts';
+import { mergeByMaterial, type ModelPart } from './model.ts';
 import type { OverlaySource } from './zones.ts';
 
 const GROW_SECONDS = 0.55;
@@ -1341,10 +1342,10 @@ const PART_AT_SITE = new THREE.Vector3(0, 0, 0);
  * play camera.
  *
  * A set is a list of parts rather than a fixed body-roof-mark triple, because
- * the types have grown apart. Nine of them are a slab with one thing standing
- * on it and say exactly that through `civicTrio`; the hospital is a composed
- * design — two volumes, glazing, canopies, a helipad and a rooftop cross —
- * which merges by material down to eight meshes. A list is what both of those
+ * the types have grown apart. Eight of them are a slab with one thing standing
+ * on it and say exactly that through `civicTrio`; the hospital and the fire
+ * station are modelled — assembled from part tables generated out of `models/`
+ * and merged by material, to eight and nine meshes. A list is what both kinds
  * are, and the cost still grows with the *table* rather than with the city:
  * every mesh is built once, in this constructor, and a hundred hospitals are a
  * hundred instances in it rather than a hundred draw calls.
@@ -1537,9 +1538,10 @@ const PLANT_STACK_H = 6.5;
  *
  * Industrial concrete rather than a civic colour, because that is what it is —
  * the one 2x2 building on the map that is not civic. What tells it apart from a
- * works is that it is on a 2x2 square at all, and the lit stack: the fire
- * station's bay doors are the only other civic surface that is a light rather
- * than a colour, and the two are never on the same site.
+ * works is that it is on a 2x2 square at all, and the lit stack standing off
+ * one corner of it: the other lit civic surfaces are all *doors, bands or a
+ * beacon* — down on the building or on top of it — and none of them is a mass
+ * of light standing beside the roof.
  *
  * The stack stands off centre deliberately: dead centre reads as a spire, which
  * is the city hall's silhouette and has to stay the city hall's.
@@ -1559,185 +1561,50 @@ function powerPlantSet(scene: THREE.Scene, capacity: number): CivicMeshes {
 }
 
 /**
- * The hospital, as `tools/model2parts.mjs` reads it out of the model.
+ * How a modelled building's surfaces are drawn.
  *
- * Generated — `npm run model:parts -- <name>.obj <name>.mtl --ts` — and pasted
- * whole. Do not hand-edit it: the numbers are the model's, and a value changed
- * here is a value that silently stops matching the file it came from. A remodel
- * is a re-run and a paste.
- */
-const HOSPITAL_PARTS: readonly ModelPart[] = [
-  { shape: 'box', at: [0, 1.65, -2], size: [7, 3.3, 3], colour: PALETTE.hospital }, // ward
-  { shape: 'box', at: [0, 1, -2], size: [7.06, 0.36, 3.06], colour: PALETTE.parapet }, // ward-glazing
-  { shape: 'box', at: [0, 2.12, -2], size: [7.06, 0.36, 3.06], colour: PALETTE.parapet }, // ward-glazing
-  { shape: 'box', at: [0, 3.4, -2], size: [7.22, 0.22, 3.22], colour: PALETTE.hospitalRoof }, // ward-cap
-  { shape: 'box', at: [-1, 0.825, 1.5], size: [5, 1.65, 4], colour: PALETTE.hospital }, // wing
-  { shape: 'box', at: [-1, 0.82, 1.5], size: [5.06, 0.5, 4.06], colour: PALETTE.parapet }, // wing-glazing
-  { shape: 'box', at: [-1, 1.74, 1.5], size: [5.2, 0.2, 4.2], colour: PALETTE.hospitalRoof }, // wing-cap
-  { shape: 'box', at: [-1.7, 1.28, 3.2], size: [3.2, 0.2, 1.5], colour: PALETTE.parapet }, // entrance-canopy
-  { shape: 'box', at: [-3.05, 0.64, 3.75], size: [0.22, 1.28, 0.22], colour: PALETTE.hospital }, // entrance-columns
-  { shape: 'box', at: [-0.35, 0.64, 3.75], size: [0.22, 1.28, 0.22], colour: PALETTE.hospital }, // entrance-columns
-  { shape: 'box', at: [2.4, 1.95, 1.35], size: [2.1, 0.16, 3.7], colour: PALETTE.stack }, // bay-canopy
-  { shape: 'box', at: [2.4, 0.6, -0.44], size: [1.9, 1.15, 0.14], colour: PALETTE.sodium }, // bay-doors
-  { shape: 'disc', at: [1.4, 3.62, -2], radius: 1.45, height: 0.12, segments: 40, colour: PALETTE.runway }, // helipad
-  { shape: 'box', at: [-2.5, 3.9, -2.9], size: [1.5, 0.62, 0.9], colour: PALETTE.stack }, // roof-plant
-  { shape: 'box', at: [-2.5, 3.9, -1.5], size: [0.9, 0.62, 0.7], colour: PALETTE.stack }, // roof-plant
-  { shape: 'box', at: [-0.7, 3.9, -2.6], size: [0.7, 0.62, 1.4], colour: PALETTE.stack }, // roof-plant
-];
-
-/**
- * How each of the hospital's colours is drawn.
- *
- * Kept apart from the parts table on purpose: the model states shape and
- * colour, and how a surface behaves under light is a renderer decision that a
- * modeller should not have to encode and a regenerated table must not clobber.
+ * Deliberately not in the part tables. The model states shape, material and
+ * colour; whether a surface casts a shadow, receives one, is a light, or takes
+ * the zone overlay is a *renderer* decision, and holding it in `civicModels.ts`
+ * would mean the next regeneration threw it away without saying so. Keyed on
+ * the material name for the same reason the merge is — see `mergeByMaterial`.
  */
 interface Finish {
   readonly name: string;
-  /** Supplied only where the surface is not plain diffuse — a lit face. */
-  readonly material?: THREE.Material;
-  /** Whether the zone overlay resolves against this colour. Walls only. */
+  /** Set where the surface is a light rather than a colour, and so ramps. */
+  readonly glow?: Glow;
+  /** Whether the zone overlay resolves against this material. Walls only. */
   readonly tint?: boolean;
   readonly castShadow?: boolean;
   readonly receiveShadow?: boolean;
 }
 
 /**
- * A marking painted on a roof: a closed outline, extruded and laid flat.
+ * A civic building assembled from its model: one instanced mesh per material.
  *
- * The outline is given in the site's own plan view — the pairs are (x, z).
- * `ExtrudeGeometry` works in a shape's XY plane and pushes along +Z, so the
- * result is tipped a quarter turn onto the ground; that tip mirrors the second
- * axis, which both of these outlines are symmetric about, so nothing has to be
- * unwound afterwards.
+ * The two composed types come through here and the eight slabs go through
+ * `civicTrio`; the only thing that makes this different is that the geometry
+ * came out of a file. Growth is `ride` with no offset throughout, which comes
+ * out as the whole assembly scaling about the site's ground centre — the one
+ * thing that keeps twenty-odd pieces in register with each other on the way up.
  */
-function markingAt(
-  outline: ReadonlyArray<readonly [number, number]>,
-  thickness: number,
-  x: number,
-  y: number,
-  z: number,
-): THREE.BufferGeometry {
-  const shape = new THREE.Shape();
-  outline.forEach(([px, pz], i) => (i === 0 ? shape.moveTo(px, pz) : shape.lineTo(px, pz)));
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-  geometry.rotateX(-Math.PI / 2);
-  // Extruded from the ground up, so it is lowered by half its own thickness to
-  // put its centre where the design asks for it.
-  return geometry.translate(x, y - thickness / 2, z);
-}
-
-/** The H on the helipad, in plan view. */
-const HELIPAD_H: ReadonlyArray<readonly [number, number]> = [
-  [-0.75, -0.75], [-0.41, -0.75], [-0.41, -0.17], [0.41, -0.17],
-  [0.41, -0.75], [0.75, -0.75], [0.75, 0.75], [0.41, 0.75],
-  [0.41, 0.17], [-0.41, 0.17], [-0.41, 0.75], [-0.75, 0.75],
-];
-
-/** The cross on the wing roof, in plan view. */
-const MEDICAL_CROSS: ReadonlyArray<readonly [number, number]> = [
-  [-1.3, -0.43], [-0.43, -0.43], [-0.43, -1.3], [0.43, -1.3],
-  [0.43, -0.43], [1.3, -0.43], [1.3, 0.43], [0.43, 0.43],
-  [0.43, 1.3], [-0.43, 1.3], [-0.43, 0.43], [-1.3, 0.43],
-];
-
-/**
- * The two markings `tools/model2parts.mjs` refuses, hand-written until it does
- * not have to.
- *
- * Both are extruded twelve-sided outlines, which the converter will not accept
- * and is right not to — see `ModelPart`. They are here knowingly, and only
- * because the alternative is shipping a hospital with no cross on it, and the
- * cross is the one literal sign anywhere in the city.
- *
- * It is a debt with a known payment. Both decompose exactly into
- * non-overlapping boxes — the cross into a full-length arm and two stubs, the H
- * into two uprights and a bar — so a model that draws them that way converts
- * with no approximation, joins `HOSPITAL_PARTS` on the next regeneration, and
- * takes this function and its two outline tables with it. The finishes below
- * are already keyed on the right colours, so nothing else moves when it does.
- */
-function pendingMarkings(finishes: ReadonlyMap<number, Finish>): CivicPart[] {
-  const flat = (colour: number, geometry: THREE.BufferGeometry): CivicPart => {
-    const finish = finishes.get(colour);
-    if (!finish) throw new Error(`hospital: no finish for 0x${colour.toString(16)}`);
+function modelSet(
+  scene: THREE.Scene,
+  parts: readonly ModelPart[],
+  finishes: ReadonlyMap<string, Finish>,
+  capacity: number,
+): CivicMeshes {
+  const glows: Glow[] = [];
+  const meshes = mergeByMaterial(parts).map(({ mtl, colour, geometry }): CivicPart => {
+    const finish = finishes.get(mtl);
+    // A material in the model with nothing said about how to draw it. Thrown
+    // rather than defaulted: it means a remodel introduced a surface, and a
+    // guessed finish would put it on screen looking almost right.
+    if (!finish) throw new Error(`no finish for material '${mtl}'`);
+    if (finish.glow && !glows.includes(finish.glow)) glows.push(finish.glow);
     return {
       geometry,
-      material: new THREE.MeshLambertMaterial({ color: colour }),
-      offset: PART_AT_SITE,
-      grow: 'ride',
-      tint: null,
-      name: finish.name,
-      castShadow: finish.castShadow ?? true,
-    };
-  };
-  return [
-    flat(PALETTE.marking, markingAt(HELIPAD_H, 0.06, 1.4, 3.72, -2)),
-    flat(PALETTE.emergency, markingAt(MEDICAL_CROSS, 0.07, -1.2, 1.945, 1.4)),
-  ];
-}
-
-/**
- * The hospital: a ward slab across the back of the site and a low treatment
- * wing across the front of it, in an L around the ambulance bay.
- *
- * It is the one civic type that is *composed* rather than a slab with a mark on
- * it, and it earns that by being the building the city is told to buy first —
- * the anchor of the service ladder, on the site the player looks at longest.
- * What it has to do from the play camera is read as a hospital rather than as a
- * pale 2x2 shed, and three things do that, in the order they become visible as
- * the camera comes down:
- *
- *  - The **massing**. Two volumes at two heights, not one: a 3.3-tall ward with
- *    a helipad and plant on its roof, and a 1.65-tall wing in front of it. From
- *    overhead that L is unlike anything else on a civic quad, all of which are
- *    one square block.
- *  - The **roof**, which is a working surface rather than a lid — helipad, deck
- *    markings, and the plant housings beside them. The play camera looks down,
- *    so the roof is most of what a building actually shows.
- *  - The **cross**, painted on the wing where the ward does not overshadow it,
- *    and read last because it is the smallest. It is the only literal sign
- *    anywhere in the city, which is why it is the hospital that gets one: the
- *    building whose name a new player has to learn before any other.
- *
- * The geometry is the model's, by way of `mergeByColour`: eighteen pieces, eight
- * meshes. The pale walls and mint cap are the two colours the hospital already
- * wore, so a city built before this design still reads as the same city after.
- */
-function hospitalSet(scene: THREE.Scene, capacity: number): CivicMeshes {
-  // The ambulance bay doors, the one lit surface on the building. The same
-  // sodium the fire station's doors wear, and for the same reason: the two
-  // buildings people are sent to at night are the two that stay lit.
-  const doors = new Glow(PALETTE.sodium, 0.5);
-  const finishes = new Map<number, Finish>([
-    // The ward, the wing and the entrance columns.
-    [PALETTE.hospital, { name: 'hospital:walls', tint: true, receiveShadow: true }],
-    // Banded storeys on both volumes, and the entrance canopy, which is the
-    // same dark glass and reads as one material with them. Proud of the walls
-    // by 3cm and so never shadow-cast: a surface that close to the one behind
-    // it buys acne and nothing else.
-    [PALETTE.parapet, { name: 'hospital:glazing', castShadow: false }],
-    // The mint caps. They overhang their walls, so they cast the eave line that
-    // tells the two volumes apart from above — and they are the surface the
-    // roof clutter stands on, which the play camera is looking straight down at.
-    [PALETTE.hospitalRoof, { name: 'hospital:caps', receiveShadow: true }],
-    // Plant housings and the ambulance bay canopy, in the working grey the
-    // industrial stacks wear.
-    [PALETTE.stack, { name: 'hospital:plant' }],
-    [PALETTE.sodium, { name: 'hospital:doors', material: doors.material, castShadow: false }],
-    // The helipad deck, in the near-black the airport's runways use, because it
-    // is the same thing: made ground for an aircraft.
-    [PALETTE.runway, { name: 'hospital:helipad', castShadow: false }],
-    [PALETTE.marking, { name: 'hospital:mark', castShadow: false }],
-    [PALETTE.emergency, { name: 'hospital:cross', castShadow: false }],
-  ]);
-
-  const parts = mergeByColour([...HOSPITAL_PARTS]).map(({ colour, geometry }): CivicPart => {
-    const finish = finishes.get(colour);
-    if (!finish) throw new Error(`hospital: no finish for 0x${colour.toString(16)}`);
-    return {
-      geometry,
-      material: finish.material ?? new THREE.MeshLambertMaterial({ color: colour }),
+      material: finish.glow?.material ?? new THREE.MeshLambertMaterial({ color: colour }),
       offset: PART_AT_SITE,
       grow: 'ride',
       tint: finish.tint === true ? colour : null,
@@ -1746,8 +1613,114 @@ function hospitalSet(scene: THREE.Scene, capacity: number): CivicMeshes {
       receiveShadow: finish.receiveShadow ?? false,
     };
   });
+  return new CivicMeshes(scene, meshes, capacity, glows);
+}
 
-  return new CivicMeshes(scene, [...parts, ...pendingMarkings(finishes)], capacity, [doors]);
+/**
+ * The hospital: a ward slab across the back of the site and a low treatment
+ * wing across the front of it, in an L around the ambulance bay.
+ *
+ * It is one of the two civic types that are *composed* rather than massed, and
+ * it earns that by being the building the city is told to buy first — the
+ * anchor of the service ladder, on the site the player looks at longest. What
+ * it has to do from the play camera is read as a hospital rather than as a pale
+ * 2x2 shed, and three things do that, in the order they become visible as the
+ * camera comes down:
+ *
+ *  - The **massing**. Two volumes at two heights, not one: a 3.3-tall ward with
+ *    a helipad and plant on its roof, and a 1.65-tall wing in front of it. From
+ *    overhead that L is unlike anything else on a civic quad.
+ *  - The **roof**, which is a working surface rather than a lid — helipad, deck
+ *    markings, and the plant housings beside them. The play camera looks down,
+ *    so the roof is most of what a building actually shows.
+ *  - The **cross**, painted on the wing where the ward does not overshadow it,
+ *    and read last because it is the smallest. It is the only literal sign
+ *    anywhere in the city, which is why it is the hospital that gets one: the
+ *    building whose name a new player has to learn before any other.
+ *
+ * Twenty-one pieces, eight meshes. The pale walls and mint cap are the two
+ * colours the hospital always wore, so a city built before this design still
+ * reads as the same city afterwards.
+ */
+function hospitalSet(scene: THREE.Scene, capacity: number): CivicMeshes {
+  // The ambulance bay doors, the one lit surface on the building. The same
+  // sodium the fire station's doors wear, and for the same reason: the two
+  // buildings people are sent to at night are the two that stay lit.
+  const doors = new Glow(PALETTE.sodium, 0.5);
+  return modelSet(
+    scene,
+    HOSPITAL_PARTS,
+    new Map<string, Finish>([
+      // The ward, the wing and the entrance columns.
+      ['clinic-white', { name: 'hospital:walls', tint: true, receiveShadow: true }],
+      // Banded storeys on both volumes, and the entrance canopy, which is the
+      // same dark glass and reads as one material with them. Proud of the walls
+      // by 3cm and so never shadow-cast: a surface that close to the one behind
+      // it buys acne and nothing else.
+      ['glazing', { name: 'hospital:glazing', castShadow: false }],
+      // The mint caps. They overhang their walls, so they cast the eave line
+      // that tells the two volumes apart from above — and they carry the roof
+      // clutter, which the play camera is looking straight down at.
+      ['mint-roof', { name: 'hospital:caps', receiveShadow: true }],
+      ['plant-grey', { name: 'hospital:plant' }],
+      ['sodium-glow', { name: 'hospital:doors', glow: doors, castShadow: false }],
+      // The helipad deck, in the near-black the airport's runways use, because
+      // it is the same thing: made ground for an aircraft.
+      ['deck-asphalt', { name: 'hospital:helipad', castShadow: false }],
+      ['marking-white', { name: 'hospital:mark', castShadow: false }],
+      ['emergency-red', { name: 'hospital:cross', castShadow: false }],
+    ]),
+    capacity,
+  );
+}
+
+/**
+ * The fire station: an appliance hall on the street, a dormitory block behind
+ * it, and a hose tower on the back corner.
+ *
+ * The other composed type, and it is composed for the opposite reason to the
+ * hospital's. The hospital had to stop reading as a pale shed; this one has to
+ * stop reading as the *police station*, which is the same dark 2x2 block a
+ * player meets in the same first hour. Height is what separates them, and this
+ * has it three ways: a hall, a taller dorm behind, and a 5.3-unit tower over
+ * both. The police station is the flattest thing on a civic quad and this is
+ * now the tallest, which is a difference that survives any camera angle.
+ *
+ * The two lit surfaces are the appliance bay doors and the beacon on the tower
+ * cap. Both are what a fire station *is* at night, and the beacon is the only
+ * lit surface in the city that is not sodium — a red light on the highest point
+ * of the building, which is the one cue that carries when the city is dark and
+ * the massing has stopped reading at all.
+ *
+ * Twenty pieces, nine meshes: the beacon needs a mesh of its own because it
+ * wears the same red as the roof caps and has to glow when they do not.
+ */
+function fireStationSet(scene: THREE.Scene, capacity: number): CivicMeshes {
+  const doors = new Glow(PALETTE.sodium, 0.5);
+  // A lower floor than the doors: a beacon that stayed bright at noon would
+  // read as painted, and the whole point of it is that it comes *on*.
+  const beacon = new Glow(PALETTE.fireRoof, 0.3);
+  return modelSet(
+    scene,
+    FIRE_STATION_PARTS,
+    new Map<string, Finish>([
+      // The hall, the dorm and the hose tower.
+      ['engine-brick', { name: 'fire:walls', tint: true, receiveShadow: true }],
+      // Door surrounds and the band along the hall's roofline: the pale trim
+      // that keeps a dark red building from reading as one unlit mass.
+      ['trim-concrete', { name: 'fire:trim' }],
+      ['bay-door-light', { name: 'fire:doors', glow: doors, castShadow: false }],
+      ['roof-red', { name: 'fire:caps', receiveShadow: true }],
+      ['glazing', { name: 'fire:glazing', castShadow: false }],
+      ['beacon-red', { name: 'fire:beacon', glow: beacon, castShadow: false }],
+      // The apron the appliances pull out onto, and the bay guides painted on
+      // it. Ground rather than building, so it receives and never casts.
+      ['apron-asphalt', { name: 'fire:apron', castShadow: false, receiveShadow: true }],
+      ['marking-white', { name: 'fire:markings', castShadow: false }],
+      ['plant-grey', { name: 'fire:plant' }],
+    ]),
+    capacity,
+  );
 }
 
 /** One mesh set per service, in SERVICES order. */
@@ -1766,21 +1739,7 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
       capacity,
     );
   }
-  if (service.key === 'fire') {
-    // The bay doors: a lit band across one face, at ground level. The one civic
-    // surface that is a light rather than a colour, so it ramps with the cycle.
-    const doors = new Glow(PALETTE.sodium, 0.5);
-    return civicTrio(
-      scene,
-      service.key,
-      { body: PALETTE.fire, roof: PALETTE.fireRoof, height: 2.0 },
-      new THREE.BoxGeometry(CIVIC_W - 0.6, 1.2, 0.3),
-      doors.material,
-      new THREE.Vector3(0, -1.4, CIVIC_W / 2),
-      capacity,
-      doors,
-    );
-  }
+  if (service.key === 'fire') return fireStationSet(scene, capacity);
   if (service.key === 'school') {
     // A long low hall with a lit clerestory band along its roofline. Read from
     // the play camera it is the flattest thing on a 2x2 site, which is what
@@ -1894,11 +1853,12 @@ class Outline {
  * separately and are not part of this: they stand on 2x2 and 3x3 sites, have no
  * level ladder, and are told apart by silhouette rather than by style. Ten
  * types — six services, the city hall, the power plant and two landmark sizes
- * — nine of them a slab, a roof and one mark at three meshes each, plus the
- * hospital's composed design at eight. The count grows with the *table* rather
- * than with the city: a mesh is built once per type and every hospital the
- * player opens is another instance in the ones that already exist. See
- * `civicSet`, `hospitalSet`, `cityHallSet`, `powerPlantSet` and `landmarkSet`.
+ * — eight of them a slab, a roof and one mark at three meshes each, plus the
+ * two modelled ones: the hospital at eight meshes and the fire station at nine.
+ * The count grows with the *table* rather than with the city: a mesh is built
+ * once per type and every hospital the player opens is another instance in the
+ * ones that already exist. See `civicSet`, `modelSet`, `cityHallSet`,
+ * `powerPlantSet` and `landmarkSet`.
  */
 export const BUILDING_MESH_BUDGET = 24;
 
@@ -2200,9 +2160,9 @@ export class Buildings {
   /**
    * Ramps every lit surface in the city with the day/night phase.
    *
-   * Called once a frame, and cheap enough to be: it touches four materials at
-   * most — the shared band and beacon, the fire station's doors, the school's
-   * clerestory — and never an instance buffer.
+   * Called once a frame, and cheap enough to be: it touches a handful of
+   * materials — the shared band and beacon, the fire station's bay doors and
+   * tower beacon, the school's clerestory — and never an instance buffer.
    */
   setNight(night: number): void {
     this.parts.setNight(night);

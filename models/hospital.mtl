@@ -1,0 +1,49 @@
+# Exported by three-d-stage
+newmtl clinic-white
+Kd 0.6867 0.7305 0.8070
+Ks 0.2000 0.2000 0.2000
+Ns 44
+d 1.0000
+
+newmtl glazing
+Kd 0.0273 0.0482 0.0908
+Ks 0.2000 0.2000 0.2000
+Ns 144
+d 1.0000
+
+newmtl mint-roof
+Kd 0.1248 0.5647 0.3916
+Ks 0.2000 0.2000 0.2000
+Ns 68
+d 1.0000
+
+newmtl plant-grey
+Kd 0.0887 0.1248 0.2016
+Ks 0.2000 0.2000 0.2000
+Ns 40
+d 1.0000
+
+newmtl sodium-glow
+Kd 0.8714 0.3813 0.0704
+Ks 0.2000 0.2000 0.2000
+Ns 120
+d 1.0000
+
+newmtl deck-asphalt
+Kd 0.0232 0.0307 0.0513
+Ks 0.2000 0.2000 0.2000
+Ns 20
+d 1.0000
+
+newmtl marking-white
+Kd 0.8070 0.8388 0.8879
+Ks 0.2000 0.2000 0.2000
+Ns 30
+d 1.0000
+
+newmtl emergency-red
+Kd 0.6867 0.0595 0.0452
+Ks 0.2000 0.2000 0.2000
+Ns 80
+d 1.0000
+

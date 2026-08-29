@@ -298,11 +298,14 @@ box.
 - Industry is the anti-tower — wide, low and flat, with one stack. Height is how
   the housing tiers say "bigger", so industry competes on footprint instead.
 - Civic buildings get 2x2 plots, which is room for a silhouette each rather than
-  three colours of the same box: the police station is low and dark, the fire
-  station squat with a lit bay-door face. The hospital goes further and is the
-  one type composed rather than massed — a ward slab and a lower treatment wing
-  in an L, with a helipad, plant and a painted cross on the roofs the play
-  camera actually looks down at.
+  three colours of the same box: the police station is a low dark block, the
+  school a long flat hall, the depot a shed with a lit apron. Two of them go
+  further and are *modelled* rather than massed — the hospital as a ward slab
+  and a lower treatment wing in an L, with a helipad and a painted cross on the
+  roofs the play camera looks down at; the fire station as an appliance hall, a
+  dormitory and a hose tower with a beacon on top, so it cannot be mistaken for
+  the police station at the same footprint. Both are generated from the models
+  in `models/` — see `npm run model:parts`.
 - Land nobody will build on is drawn as courtyard, not left as a hole — block
   interiors, and the civic sites still standing empty.
 
