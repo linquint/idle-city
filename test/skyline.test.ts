@@ -171,22 +171,24 @@ describe('the skyline the renderer draws', () => {
       expect(seen.get('home:2') ?? 0).toBe(0);
       expect(roofTotal(seen)).toBe(0);
     }
-    // Housing has no massed rung left to promote *to* — it is modelled all the
-    // way up — so the promotion that hands a building to a body mesh and its
-    // roof to the bank is now a commerce story. It is still worth keeping: that
-    // hand-off is the case the shared bank exists for, and commerce is where it
-    // still happens.
-    const last = MODEL_LEVELS.shop - 1;
-    const massed = MODEL_LEVELS.shop;
+    // Neither housing nor commerce has a massed rung left to promote *to* —
+    // both are modelled all the way up — so the promotion that hands a building
+    // to a body mesh and its roof to the bank is now an industry story, and
+    // industry is the last zone where it happens at all. That hand-off is the
+    // case the shared bank exists for, so it is asserted wherever it survives;
+    // if industry is ever modelled above its first rung, this block has nothing
+    // left to stand on and the bank's roofs have no wearer.
+    const last = MODEL_LEVELS.industry - 1;
+    const massed = MODEL_LEVELS.industry;
     expect(massed).toBeLessThan(LEVELS);
     for (let promoted = 0; promoted <= 24; promoted++) {
       const levels = new Array<number>(LEVELS).fill(0);
       levels[last] = 24 - promoted;
       levels[massed] = promoted;
-      buildings.sync(state({ shops: 24, shopLevels: mix(...levels) }), 6 + promoted * 0.1);
+      buildings.sync(state({ industry: 24, industryLevels: mix(...levels) }), 6 + promoted * 0.1);
       const seen = counts();
-      expect(modelTotal(seen, 'shop', last)).toBe(24 - promoted);
-      expect(seen.get(`shop:${massed}`) ?? 0).toBe(promoted);
+      expect(modelTotal(seen, 'industry', last)).toBe(24 - promoted);
+      expect(seen.get(`industry:${massed}`) ?? 0).toBe(promoted);
       expect(roofTotal(seen)).toBe(promoted);
     }
   });
@@ -223,18 +225,18 @@ describe('the skyline the renderer draws', () => {
   it('takes a roof from the bank for a massed rung, and only for one', () => {
     const { buildings, counts } = scene();
     // The other half of the sentence above, kept where it is still true.
-    // Housing carries its own roof at every rung; commerce and industry carry
-    // theirs only at their first, so a city of level-2 shops is exactly what
-    // the bank's roofs are for.
-    const massed = MODEL_LEVELS.shop;
+    // Housing and commerce carry their own roof at every rung; industry carries
+    // its own only at its first, so a city of level-2 works is now the only
+    // thing in the game the bank's roofs are for.
+    const massed = MODEL_LEVELS.industry;
     const levels = new Array<number>(LEVELS).fill(0);
     levels[massed] = 16;
-    buildings.sync(state({ shops: 20, shopLevels: mix(...levels), abandonedC: 4 }), 0);
+    buildings.sync(state({ industry: 20, industryLevels: mix(...levels), abandonedI: 4 }), 0);
     const seen = counts();
     // Sixteen standing, four shuttered — and a ruin still holds its plot in the
     // modelled first rung, so it wears its model's own roof and takes none.
     expect(roofTotal(seen)).toBe(16);
-    expect(modelTotal(seen, 'shop', 0)).toBe(4);
+    expect(modelTotal(seen, 'industry', 0)).toBe(4);
   });
 
   it('puts out the lights on a shuttered building but leaves it standing', () => {
@@ -626,27 +628,23 @@ describe('what the ladder costs to draw', () => {
   it('draws a merged building across its whole parcel', () => {
     const root = new THREE.Scene();
     const buildings = new Buildings(root, new CityLayout());
-    // Six merged shops against six single-plot works. The comparison has to be
+    // Six merged works against six single-plot ones. The comparison has to be
     // between two *massed* bodies to mean anything — a model is never stretched
-    // to a parcel — and neither arm can be drawn from the zone the other comes
-    // from any more. Commerce models its first four rungs, so its *top* one is
-    // the only massed commercial body left and it is the merged arm; every rung
-    // standing on a single plot is `LEVEL_FOOTPRINT`'s first two, and commerce
-    // models both, so the single arm comes from industry's second — the last
-    // massed body in the game on one plot.
+    // to a parcel — and industry is the only zone that still has any: housing
+    // and commerce are modelled at every rung. So both arms come from one zone
+    // again, which is what this test wanted in the first place, and the two
+    // rungs are simply the first two industry masses — level 1 on a plot and
+    // level 2 on a parcel, either side of `MERGE_LEVEL`.
     //
-    // Both arms are now the last of their kind, which is worth saying plainly:
-    // modelling either `shop:4` or `industry:1` retires this test rather than
-    // moving it, and the thing it checks — that a merged body is stretched
-    // along its parcel and an unmerged one is not — would need asserting
-    // against `bodyExtent` instead of against drawn instances.
+    // If industry is ever modelled above its first rung this test has no massed
+    // pair left anywhere, and what it checks — that a merged body is stretched
+    // along its parcel and an unmerged one is not — would have to be asserted
+    // against `bodyExtent` rather than against drawn instances.
     buildings.sync(
       state({
-        shops: 6,
-        shopLevels: mix(0, 0, 0, 0, 6),
-        mergedC: 6,
-        industry: 6,
-        industryLevels: mix(0, 6),
+        industry: 12,
+        industryLevels: mix(0, 6, 6),
+        mergedI: 6,
         districts: 2,
       }),
       0,
@@ -661,16 +659,25 @@ describe('what the ladder costs to draw', () => {
       matrix.decompose(position, quaternion, scale);
       return Math.max(scale.x, scale.z) / Math.min(scale.x, scale.z);
     };
-    const merged = meshes(root, 'shop:4')[0];
+    const merged = meshes(root, 'industry:2')[0];
     const single = meshes(root, 'industry:1')[0];
-    // A merged shop is oblong by roughly the parcel's two plots against one
-    // shop's width; a single-plot works is square to within its own jitter and
+    // A merged works is oblong by roughly the parcel's two plots against one
+    // works's width; a single-plot one is square to within its own jitter and
     // its style's proportions. Both meshes have to actually be there: a body
     // that stopped being drawn would otherwise leave `aspect` reading the
     // matrix the previous call decomposed, and both arms would pass.
     expect(merged).toBeDefined();
     expect(single).toBeDefined();
-    for (let i = 0; i < 6; i++) expect(aspect(merged, i)).toBeGreaterThan(1.8);
+    //
+    // The merged bound is 1.7 where it was 1.8 for the commercial rung this
+    // test used to draw from, and the number moved because the zone did rather
+    // than because anything slipped: an industrial body is wider across its
+    // frontage than a commercial one and shallower with it — `ZONE_SHAPES`
+    // gives it 3.5 and a depth of 0.86 against commerce's 3.2 and 1 — so the
+    // same 6.8 along the parcel comes out a squatter oblong. Measured, the six
+    // merged bodies span 1.72 to 2.28 and the six single ones 1.02 to 1.09, so
+    // the two populations are further apart here than they have ever been.
+    for (let i = 0; i < 6; i++) expect(aspect(merged, i)).toBeGreaterThan(1.7);
     for (let i = 0; i < 6; i++) expect(aspect(single, i)).toBeLessThan(1.4);
   });
 });

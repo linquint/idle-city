@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 5, +8 shared parts, +50 models = 63 (asserted, plus the cage) | 9, +8, +55 = **72**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 4, +8 shared parts, +55 models = 67 (asserted, plus the cage) | 8, +8, +60 = **76**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -199,6 +199,36 @@ clothes.
 > whole of its five models is new geometry on land the city has never drawn.
 > Against 72, and still owing a generator change and a fifth frontage number the
 > sampler has never been measured for.
+>
+> An eleventh, after commerce's *fifth*: four bodies and fifty-five models,
+> 64 -> 68, floor for a fourth zone now 76. Commerce is finished — every rung
+> modelled, no body mesh at any of them — so this row goes quiet for the same
+> reason it went quiet after housing. Not "last": the seventh entry said that
+> and was wrong four entries later. The only thing that can move it again is
+> industry, and see below for why that is a smaller door than it looks.
+>
+> Two things this entry settles that eight previous ones argued about. The
+> first: **all three arguments reach industry.** Its second rung is a second
+> rung, its third is the merge, its fourth and fifth sit above that merge — the
+> far-side test, the merge and the measurement each apply exactly where they
+> applied to the other two zones. This row should stop implying the arguments
+> themselves are what is holding the line, because they are not; the *value* is,
+> and industry's upper rungs are the least-looked-at surfaces in the game.
+>
+> The second: **the measurement argument has a direction, and it is the wrong
+> one.** Applied four times it has returned -14,304, -429,876, +50,832 and
+> +155,436 (`lod:calibrate` parts 1e, 1f, 1i, 1j). Housing's models got simpler
+> as they climbed and commerce's did not, so the same argument paid for
+> housing's top two rungs and charged progressively more for commerce's. Part 1k
+> is the ladder that shows it: commerce ends at 633k against its own peak of
+> 641k, where housing ends at 396k against 840k. Anyone reaching for this
+> argument on industry should measure industry rather than cite commerce.
+>
+> None of which helps Option A, and the reason is unchanged and now unarguable:
+> a fourth zone's first rung has no rung below it to differ from, so the whole
+> of its five models is new geometry on land the city has never drawn, and none
+> of the three arguments is even *about* a first rung. Against 76, a generator
+> change, and a fifth frontage number the sampler has never been measured for.
 
 ### Option B — a second building type on the commercial frontage
 

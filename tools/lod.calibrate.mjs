@@ -211,8 +211,9 @@ const big = stand(MAX_DISTRICTS, LEVELS - 1);
   console.log(`  BUILDING_MESH_BUDGET is ${BUILDING_MESH_BUDGET}: the three zone ladders, the shared`);
   console.log('  part bank and the construction cage. A massed style is a parameter set');
   console.log('  rather than a mesh and the detail parts are shared across every zone and');
-  console.log('  level, so what is left massed — 15 looks across five rungs — costs five');
-  console.log('  bodies and eight parts, against 50 meshes for the ten modelled rungs.');
+  console.log('  level, so what is left massed — 12 looks across four rungs, all of them');
+  console.log('  industry — costs four bodies and eight parts, against 55 meshes for the');
+  console.log('  eleven modelled rungs.');
   console.log('');
   console.log('  the ten largest, by triangles submitted\n');
   console.log('    mesh                     instances     triangles   shadow');
@@ -656,6 +657,90 @@ console.log("what commerce's rung above the merge costs\n");
   console.log(`  Same ${nA.toLocaleString('en-GB')} parcels either way — both rungs merge — so this is the models`);
   console.log(`  and nothing else: ${thou(tA - tB, 1)} triangles, ${fixed((100 * tA) / Math.max(1, tB) - 100, 1, 1)}% on the commerce and`);
   console.log(`  ${fixed((100 * wholeA) / Math.max(1, wholeB) - 100, 1, 1)}% on the whole scene, ${thou(wholeB, 1)} to ${thou(wholeA, 1)}.`);
+}
+console.log('');
+
+// ------------------------------------------------------- part 1j
+
+/**
+ * What commerce's *top* rung costs, on part 1i's terms.
+ *
+ * The third and last application of the pinned-parcel argument to commerce, and
+ * the one that finishes the ladder. Same parcels either way, so this is the two
+ * models and nothing else.
+ */
+console.log("what commerce's top rung costs\n");
+{
+  const exchanges = stand(MAX_DISTRICTS, 3);
+  const towers = stand(MAX_DISTRICTS, 4);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:shop:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(exchanges.root, 3);
+  const after = rows(towers.root, 4);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce alone climbing`);
+  console.log('');
+  console.log('    commerce              buildings     triangles      each');
+  console.log(
+    `    ${'level 4, exchanges'.padEnd(22)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 5, trade towers'.padEnd(22)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log(`  Same ${nA.toLocaleString('en-GB')} parcels either way: ${thou(tA - tB, 1)} triangles, ${fixed((100 * tA) / Math.max(1, tB) - 100, 1, 1)}% on`);
+  console.log('  the commerce.');
+}
+console.log('');
+
+// ------------------------------------------------------- part 1k
+
+/**
+ * The whole commerce ladder, now that every rung of it is modelled.
+ *
+ * Part 1f's twin, and the number to quote when someone asks what modelling
+ * commerce cost. Worth reading beside it rather than alone, because the two
+ * ladders do *not* have the same shape and the difference is the useful part:
+ * housing's turns over after the merge and keeps falling, commerce's turns over
+ * at the merge and then climbs again.
+ */
+console.log('the whole commerce ladder, rung by rung\n');
+{
+  const rung = (level) => {
+    const scene = level <= 1 ? stand(MAX_DISTRICTS, 0, { shop: level }) : stand(MAX_DISTRICTS, level);
+    const rows = submitted(scene.root).filter((r) => r.name.startsWith(`model:shop:${level}:`));
+    return {
+      n: rows.reduce((a, r) => a + r.count, 0),
+      tris: rows.reduce((a, r) => a + r.tris, 0),
+    };
+  };
+  const names = ['shops', 'high streets', 'retail parks', 'exchanges', 'trade towers'];
+  const all = names.map((_, l) => rung(l));
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce alone climbing, housing and industry at level 1`);
+  console.log('');
+  console.log('    rung                   buildings     triangles      each      massed');
+  all.forEach((r, l) => {
+    console.log(
+      `    ${`${l + 1}. ${names[l]}`.padEnd(23)}${thou(r.n, 9)}${thou(r.tris, 14)}${thou(r.tris / Math.max(1, r.n), 10)}${thou(r.n * 24, 12)}`,
+    );
+  });
+  console.log('');
+  const peak = all.reduce((best, r, l) => (r.tris > all[best].tris ? l : best), 0);
+  console.log(`  Peak is rung ${peak + 1} at ${thou(all[peak].tris, 1)}, and the merge at rung 3 is what`);
+  console.log(`  turns it over: the parcel count halves there and never recovers, so the`);
+  console.log(`  top rung stands on ${all[4].n.toLocaleString('en-GB')} buildings against rung 2's ${all[1].n.toLocaleString('en-GB')}.`);
+  console.log('');
+  console.log('  Read beside part 1f: housing falls away after its merge because its models');
+  console.log('  get simpler as they climb, and commerce climbs back because its do not.');
+  console.log('  Both ladders are affordable and only one of them is affordable for the');
+  console.log('  reason the note on BUILDING_MESH_BUDGET used to give.');
 }
 console.log('');
 

@@ -37,6 +37,13 @@ import {
   EXCHANGE_SLAB_PARTS,
 } from './exchangeModels.ts';
 import {
+  TRADETOWER_CROWN_PARTS,
+  TRADETOWER_LANTERN_PARTS,
+  TRADETOWER_MARKER_PARTS,
+  TRADETOWER_SETBACK_PARTS,
+  TRADETOWER_SLOT_PARTS,
+} from './tradeTowerModels.ts';
+import {
   INDUSTRY_DOCK_PARTS,
   INDUSTRY_MILL_PARTS,
   INDUSTRY_SHED_PARTS,
@@ -79,7 +86,7 @@ import type { ZoneKind } from '../sim/state.ts';
  * The modelled rungs of the three ladders, and the meshes that draw them.
  *
  * The first rung of housing, of commerce and of industry, plus housing's second
- * through fifth and commerce's second through fourth: the rungs the city is
+ * through fifth and commerce's second through fifth: the rungs the city is
  * mostly *made* of.
  * Every plot a player buys starts on a first rung, a district that has not been
  * pushed up the ladder is nothing but them, and they are what a new player
@@ -92,8 +99,9 @@ import type { ZoneKind } from '../sim/state.ts';
  * along a kerb in the order the seed put them in. What it costs is five meshes
  * a rung, and most of this file is about keeping it to five.
  *
- * **Housing is modelled at every rung and commerce at its first four, and both
- * are where the cliffs were rather than a step toward modelling everything.** A
+ * **Housing and commerce are both modelled at every rung, and industry at its
+ * first only.** That is not a step toward modelling everything — it is where
+ * the cliffs were, and then where the measurements said a rung was affordable. A
  * player's first promotion turned a street of five house silhouettes into
  * twenty-four copies of one 2.6 x 4.6 box, and the second turned *that* into
  * the same box twice as wide and twice as tall — the merge, which is the most
@@ -112,9 +120,17 @@ import type { ZoneKind } from '../sim/state.ts';
  * stretched to twice the width; and a fourth only on the measurement, because
  * above a merge the parcel count is pinned and a rung is worth no more than the
  * difference between two models. That last one prices a rung rather than
- * licensing it — commerce's fourth came in at +50,832 triangles where housing's
- * came in at -14,304 — so it is the argument to check rather than to cite.
- * Industry is modelled at its first rung only.
+ * licensing it, and the four times it has been applied read -14,304, -429,876,
+ * +50,832 and +155,436: housing's models got simpler as they climbed and
+ * commerce's did not, so the same argument paid for housing's top two rungs and
+ * charged for commerce's. It is the argument to measure rather than to cite.
+ *
+ * Industry is modelled at its first rung only, and all three arguments would
+ * reach it — its second is a second, its third is the merge, its fourth and
+ * fifth sit above that merge. What has not been argued is the *value*: its
+ * upper rungs are the least-looked-at surfaces in the game. Industry is also
+ * the only zone still holding a body mesh, so it is what keeps the shared part
+ * bank's roofs in use.
  *
  * Nothing in housing is massed now. What finished it was the measurement rather
  * than an argument: the note that used to stand here said the top rung was the
@@ -226,6 +242,13 @@ const MODELS: Readonly<Record<ModelledKind, readonly (readonly (readonly ModelPa
       EXCHANGE_ORDER_PARTS,
       EXCHANGE_SLAB_PARTS,
     ],
+    [
+      TRADETOWER_CROWN_PARTS,
+      TRADETOWER_SETBACK_PARTS,
+      TRADETOWER_SLOT_PARTS,
+      TRADETOWER_MARKER_PARTS,
+      TRADETOWER_LANTERN_PARTS,
+    ],
   ],
   industry: [
     [
@@ -243,11 +266,14 @@ export const MODELLED_KINDS = Object.keys(MODELS) as readonly ModelledKind[];
 /**
  * How many rungs from the bottom each zone draws from models.
  *
- * All five for housing and one for the other two. Housing reaching `LEVELS` is
- * the one value here with a consequence beyond this file: a zone modelled at
- * every rung has no body mesh at any of them, so `ZoneLayer.bodies` is all
- * holes for `home`. Nothing special is done about that — the arrays were
- * always allowed to be empty — but it is the first time one is.
+ * All five for housing, all five for commerce, one for industry. Reaching
+ * `LEVELS` is the one value here with a consequence beyond this file: a zone
+ * modelled at every rung has no body mesh at any of them, so `ZoneLayer.bodies`
+ * is all holes for both `home` and `shop`. Nothing special is done about that —
+ * the arrays were always allowed to be empty — and industry is now the only
+ * zone keeping any of them, which is also what keeps the shared part bank's
+ * roofs in use at all. See test/skyline.test.ts, which asserts the hand-off
+ * where it survives.
  *
  * Read by `modelledAt`, which is the only thing that should ever ask.
  */
