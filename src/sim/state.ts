@@ -226,6 +226,19 @@ export interface GameState {
   museums: number;
   stadiums: number;
   /**
+   * The cheap culture tier, on the square the eleventh FRONTAGE_TARGET square
+   * bought: one site a district, and the two types interleave across it the way
+   * the civic types interleave across theirs.
+   *
+   * Two counts and nothing else, exactly as the landmarks above are. Neither
+   * carries mood: a library answers the idleness half of `crimePressure` and a
+   * theatre lands an audience on `berthsLanding`, both of which are quantities
+   * the game already had. See CULTURE for why a fourth happiness weight and a
+   * seventh bracket modifier were both costed and refused.
+   */
+  libraries: number;
+  theatres: number;
+  /**
    * Lines of each kind the city has laid.
    *
    * Two counts and no routes, which is the whole of the network. The k-th line
@@ -550,6 +563,8 @@ export function createState(now = Date.now()): GameState {
     parks: 0,
     museums: 0,
     stadiums: 0,
+    libraries: 0,
+    theatres: 0,
     cruiseTerminals: 0,
     cargoTerminals: 0,
     tramLines: 0,

@@ -2374,6 +2374,114 @@ export const LANDMARKS: readonly Landmark[] = [
  */
 export const LANDMARK_MOOD = 0.12;
 
+// -------------------------------------------------------------------- culture
+
+/**
+ * The cheap tier: a library and a theatre, on the square the eleventh
+ * FRONTAGE_TARGET square bought.
+ *
+ * Culture is what NOTES.md section 13 costed both of the brief's ways and found
+ * no room for either. As a *fourth happiness weight* it takes its share from
+ * three terms that sum to exactly 1 — and worse, `plots_i = 20 x w_hospital /
+ * w_i`, so a fourth weight moves the `Service.plots` column with it and
+ * re-opens LEVEL_EDUCATION's window and the >= 0.95 ceiling together. As a
+ * *modifier in the bracket* it fails on the ceiling from the other side: a
+ * maxed city sits at 0.9583, so a +0.08 bonus is mostly thrown past the clamp,
+ * and a -0.08 penalty for going without takes the ceiling to 0.8783 against a
+ * test that asserts 0.95 and predates all of this.
+ *
+ * So neither building carries mood at all. Each lands on a quantity that
+ * already exists, which is the route the brief prefers and the one every term
+ * since the police re-calibration has taken:
+ *
+ *   - a **library** is somewhere to go, so it answers the *idleness* half of
+ *     `crimePressure`. See LIBRARY_CRIME_RELIEF;
+ *   - a **theatre** is a reason to come, so it lands an audience on
+ *     `berthsLanding` beside the quay, the runway, the coach and the terminus.
+ *     See THEATRE_VISITORS.
+ *
+ * That is also what stops them being one building with two names, which is the
+ * failure section 13 names. They share a site, a price ladder and a reach; what
+ * they do with it has nothing in common.
+ *
+ * **Education was the split the memo proposed and the measurement refused.** A
+ * library feeding `educationCoverage` has to clear no LEVEL_EDUCATION rung on
+ * its own *and* leave schools-plus-library under the 0.85 top rung, because the
+ * university is what that rung is for. Schools alone already reach 78%, so the
+ * library's whole budget is 0.07 of coverage — three plots of reach, which is a
+ * building that does nothing. The pool was too full to take a third contributor.
+ */
+export interface Culture {
+  /** Matches the GameState counter and the site interleave offset. */
+  readonly key: 'library' | 'theatre';
+  readonly name: string;
+  readonly buildLabel: string;
+  readonly base: number;
+  readonly growth: number;
+  /**
+   * Housing plots one building reaches.
+   *
+   * Derived rather than picked, on the rule SERVICES states for its own column:
+   * a type covers the city exactly when every building the land allows is
+   * standing. Culture has one site a district shared by two types, so half a
+   * site each — and half a site covering 24 housing plots is 48 plots of reach.
+   *
+   * Plots rather than a `Landmark`-style world-space `reach`, and that is the
+   * one place culture is not a landmark. A reach needs `landmarkPlotsCovered`'s
+   * geometry and its memo, which is keyed on the counts it walks; a plots-
+   * covered share is the convention every *service* uses — a plot count over
+   * the housing land, with nothing anywhere deciding which plots. What decides
+   * it is what the number feeds: a museum's mood is an area-of-effect the
+   * overlay draws, and neither of these is.
+   */
+  readonly plots: number;
+}
+
+export const CULTURE: readonly Culture[] = [
+  { key: 'library', name: 'Libraries', buildLabel: 'Open library', base:   900, growth: 1.5, plots: 48 },
+  { key: 'theatre', name: 'Theatres',  buildLabel: 'Open theatre', base: 2_200, growth: 1.5, plots: 48 },
+];
+
+/**
+ * How much of the idleness half of `crimePressure` a fully-libraried city
+ * answers.
+ *
+ * Idleness rather than crowding, and it is the half the config already says is
+ * the player's to act on: CRIME_FROM_IDLENESS is 0.6 against crowding's 0.4
+ * *because* "a term the player can act on should be the larger half of one they
+ * cannot". A library is one more way to act on it, and it cannot touch crowding
+ * — that is the level ladder, and no reading room makes a tower less full.
+ *
+ * On the *pressure* rather than on `crime` itself, which is what keeps it from
+ * double-counting against the police: police answer the crime that happens and
+ * a library is a reason for less of it to happen. A city with full police
+ * coverage reads exactly zero either way, so the happiness ceiling cannot move
+ * — the same construction UNANSWERED_CRIME relies on.
+ *
+ * 0.35, so a complete library network takes a wholly idle city's pressure from
+ * 0.6 to 0.39 and a typical mid-game city's from 0.75 to 0.59. Under half,
+ * deliberately: the answer to idleness is work, and a building that made
+ * unemployment stop mattering would be a building that replaced the demand
+ * loop rather than softening it.
+ */
+export const LIBRARY_CRIME_RELIEF = 0.35;
+
+/**
+ * What a fully-theatred city is worth in arrivals, in cruise berths.
+ *
+ * The fifth source on `berthsLanding`, stated in berths for the reason
+ * ROAD_VISITORS, AIRPORT_VISITORS and RAIL_VISITORS all are: `visitors` is one
+ * expression — residents x VISITORS_PER_RESIDENT x happiness, per berth — and a
+ * second path beside it would be a second place for the happiness scaling to be
+ * got wrong. Nobody's night out is somewhere grim either.
+ *
+ * 1.5 against the coach's 2, the runway's 3 and the terminus's 2, so a theatre
+ * is the smallest of the four landlocked sources — which is right for the cheap
+ * tier. A city with every one of them lands 8.5 berths against the six a full
+ * waterfront holds, and every one of the five has to be bought.
+ */
+export const THEATRE_VISITORS = 1.5;
+
 // ------------------------------------------------------------------ parks
 
 /**

@@ -425,6 +425,30 @@
       </button>
     </div>
 
+    <!-- The cheap tier, on the square the eleventh FRONTAGE_TARGET square
+         bought. One site a district shared by the two, so they are scarcer than
+         a museum by construction — and neither carries mood: a library answers
+         the idleness half of crime and a theatre lands an audience. -->
+    <p class="cap">Culture</p>
+    <div class="civic-row sheet-key">
+      <button class="civic" id="build-library" type="button">
+        <span>Library</span><span class="built" id="build-library-built">0/0</span>
+        <span class="cost" id="build-library-cost">900</span>
+      </button>
+      <button class="civic" id="build-theatre" type="button">
+        <span>Theatre</span><span class="built" id="build-theatre-built">0/0</span>
+        <span class="cost" id="build-theatre-cost">2200</span>
+      </button>
+    </div>
+    <div class="services" id="culture" role="img">
+      <div class="svc"><span class="k">Libraries</span>
+        <span class="built" id="culture-library">0%</span>
+        <span class="covers" id="culture-idleness">no effect on crime</span></div>
+      <div class="svc"><span class="k">Theatres</span>
+        <span class="built" id="culture-theatre">0%</span>
+        <span class="covers" id="culture-audience">no audience yet</span></div>
+    </div>
+
     <p class="cap">Reach</p>
     <div class="services" id="landmark-reach" role="img">
       <div class="svc"><span class="k">Museums</span>

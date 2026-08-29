@@ -39,6 +39,7 @@ import {
   type Service,
   type Terminal,
   type TransitLine,
+  type Culture,
 } from './config.ts';
 import {
   annexCost,
@@ -68,6 +69,8 @@ import {
   canBuildTerminal,
   canBuildLine,
   lineCost,
+  canBuildCulture,
+  cultureCost,
   canMergeParcel,
   cityHallCost,
   civicBuildings,
@@ -1452,6 +1455,23 @@ export class Game {
     s.cash -= landmarkCost(s, landmark);
     if (landmark.key === 'museum') s.museums++;
     else s.stadiums++;
+    return true;
+  }
+
+  /**
+   * A library or a theatre, on the culture square its district reserves.
+   *
+   * Neither carries mood, which is the whole of what makes them two buildings
+   * rather than one: a library answers the idleness half of `crimePressure` and
+   * a theatre lands an audience on `berthsLanding`. See CULTURE, which costs
+   * the fourth-weight and bracket-modifier readings that were refused.
+   */
+  buildCulture(culture: Culture): boolean {
+    const s = this.inner;
+    if (!canBuildCulture(s, culture)) return false;
+    s.cash -= cultureCost(s, culture);
+    if (culture.key === 'library') s.libraries++;
+    else s.theatres++;
     return true;
   }
 

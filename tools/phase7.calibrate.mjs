@@ -63,7 +63,11 @@ import {
   LEVEL_FOOTPRINT,
   MAX_DISTRICTS,
   OCCUPANCY_FULL,
+  CULTURE,
+  CRIME_FROM_IDLENESS,
   LANDMARKS,
+  LIBRARY_CRIME_RELIEF,
+  THEATRE_VISITORS,
   RECREATION_WEIGHT,
   ROAD_CELLS_PER_DISTRICT,
   TRIPS_PER_RESIDENT,
@@ -78,6 +82,12 @@ import {
   callRate,
   cityRank,
   crime,
+  cultureAllowed,
+  cultureCoverage,
+  cultureCost,
+  libraryCoverage,
+  theatreCoverage,
+  unemployment,
   ignitionRate,
   missesDeadline,
   responseResolvesAt,
@@ -1311,3 +1321,105 @@ console.log('  tuning miss: ZONE_SHARE is frozen and is exactly the constant tha
 console.log('  to move. Sharing the small-landmark site remains the only way culture gets a');
 console.log('  site this cycle, and it costs no land at all — see section 13 of NOTES.md.');
 console.log('');
+
+// ==================================================================== 4b
+
+console.log('='.repeat(78));
+console.log('4b  the library and the theatre, as built');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('the sites, and what a complete tier reaches\n');
+{
+  console.log('  One culture square a district, two types on a fixed interleave — so each');
+  console.log('  gets half a district\'s worth, and `Culture.plots` is 48 because half a');
+  console.log('  site covering 24 housing plots is 48 plots of reach.');
+  console.log('');
+  console.log('  districts   libraries allowed   theatres allowed   library reach   theatre reach');
+  for (const d of [1, 2, 4, 12, 25, MAX_DISTRICTS]) {
+    const bare = city(d, 2, 0);
+    const nl = cultureAllowed(bare, CULTURE[0]);
+    const nt = cultureAllowed(bare, CULTURE[1]);
+    const full = { ...bare, libraries: nl, theatres: nt };
+    console.log(
+      `  ${pad(d, 9)}${pad(nl, 19)}${pad(nt, 19)}${pct(libraryCoverage(full), 16, 0)}` +
+        `${pct(theatreCoverage(full), 16, 0)}`,
+    );
+  }
+  console.log('');
+  console.log('  A complete tier covers the city exactly, at every size from two districts');
+  console.log('  up. One district gets a library and no theatre, which is the interleave');
+  console.log('  doing what `civicSiteFor` does at one district: somebody is first.');
+  console.log('');
+}
+
+console.log('what a library takes off the crime pressure\n');
+{
+  console.log(`  LIBRARY_CRIME_RELIEF ${LIBRARY_CRIME_RELIEF} on the idleness half,` +
+    ` which is CRIME_FROM_IDLENESS ${CRIME_FROM_IDLENESS} of the pressure.`);
+  console.log('');
+  console.log('  districts   level   idleness   pressure, none   every library   crime, no police');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const bare = city(d, level, 0);
+      const nl = cultureAllowed(bare, CULTURE[0]);
+      const full = { ...bare, libraries: nl };
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${fixed(unemployment(bare), 11, 3)}` +
+          `${fixed(crimePressure(bare), 17, 3)}${fixed(crimePressure(full), 16, 3)}` +
+          `${fixed(crime(full), 19, 3)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  On the *pressure* rather than on `crime`, so a library and a police station');
+  console.log('  are not charged for the same thing: police answer the crime that happens');
+  console.log('  and this is a reason for less of it to happen. A fully policed city still');
+  console.log('  reads exactly zero either way, so the happiness ceiling cannot move.');
+  console.log('');
+}
+
+console.log('what a theatre lands, against the four sources beside it\n');
+{
+  console.log(`  THEATRE_VISITORS ${THEATRE_VISITORS} berths at full coverage, against the coach's 2,`);
+  console.log("  the runway's 3, the terminus's 2 and a quay's 1 each.");
+  console.log('');
+  console.log('  districts   level   theatres   berths   visitors   of all arrivals   income');
+  for (const d of [4, 12, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const bare = settled(city(d, level, 1));
+      const nt = cultureAllowed(bare, CULTURE[1]);
+      const full = settled({ ...city(d, level, 1), theatres: nt });
+      const from = visitorSources(full);
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${pad(nt, 11)}` +
+          `${fixed(THEATRE_VISITORS * theatreCoverage(full), 9, 2)}${fixed(from.stage, 11, 0)}` +
+          `${pct(from.total > 0 ? from.stage / from.total : 0, 18, 0)}` +
+          `${pct((income(full) - income(bare)) / Math.max(1e-9, income(bare)), 9, 2)}`,
+      );
+    }
+  }
+  console.log('');
+}
+
+console.log('the price of the tier, against the museum it sits under\n');
+{
+  console.log('  building   1st       4th       8th      16th');
+  for (const culture of CULTURE) {
+    const at = (n) => cultureCost({ ...city(25, 2, 0), libraries: n, theatres: n }, culture);
+    console.log(
+      `  ${pad(culture.key, 9)}${fixed(at(0), 6, 0)}${fixed(at(3), 10, 0)}` +
+        `${fixed(at(7), 10, 0)}${fixed(at(15), 10, 0)}`,
+    );
+  }
+  const museum = LANDMARKS[0];
+  console.log(`  ${pad('museum', 9)}${fixed(museum.base, 6, 0)}` +
+    `${fixed(museum.base * museum.growth ** 3, 10, 0)}` +
+    `${fixed(museum.base * museum.growth ** 7, 10, 0)}` +
+    `${fixed(museum.base * museum.growth ** 15, 10, 0)}`);
+  console.log('');
+  console.log('  Under the museum at every rung, which is what "the cheap tier" has to mean,');
+  console.log('  and growing at 1.5 against its 1.6 because there are half as many sites to');
+  console.log('  fill — the curve has fewer rungs to climb.');
+  console.log('');
+}

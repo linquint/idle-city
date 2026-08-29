@@ -129,6 +129,10 @@ import {
   SKILL_YIELD,
   ROAD_VISITORS,
   RAIL_VISITORS,
+  CULTURE,
+  LIBRARY_CRIME_RELIEF,
+  THEATRE_VISITORS,
+  type Culture,
   VISITOR_TRIPS,
   SHOP_SUPPLY,
   SHOP_TRIPS,
@@ -175,6 +179,7 @@ import {
   housingCentrality,
   housingCentralityBase,
   housingCentralityMean,
+  CULTURE_SITES_PER_DISTRICT,
   landmarkPlotsCovered,
   linePairAt,
   linePairCapacity,
@@ -1297,7 +1302,15 @@ export const unemployment = (s: GameState): number =>
 export const crimePressure = (s: GameState): number =>
   Math.min(
     1,
-    CRIME_FROM_CROWDING * crimeCrowding(s) + CRIME_FROM_IDLENESS * unemployment(s),
+    CRIME_FROM_CROWDING * crimeCrowding(s) +
+      // The idleness half, less whatever the libraries answer. On the *pressure*
+      // rather than on `crime`, which is what keeps a library from being charged
+      // against the police: they answer the crime that happens, and this is a
+      // reason for less of it to happen. Crowding is untouched and cannot be
+      // touched — that is the level ladder. See LIBRARY_CRIME_RELIEF.
+      CRIME_FROM_IDLENESS *
+        unemployment(s) *
+        (1 - LIBRARY_CRIME_RELIEF * libraryCoverage(s)),
   );
 
 /**
@@ -1488,6 +1501,88 @@ export const recreationCoverage = (s: GameState): number => {
   return Math.min(1, (s.parks * PLOTS_PER_PARK) / plots);
 };
 
+// -------------------------------------------------------------------- culture
+
+/** How many of a culture type the city has, through one key. */
+export const cultureCount = (s: GameState, key: Culture['key']): number =>
+  key === 'library' ? s.libraries : s.theatres;
+
+/**
+ * How many of a culture type the city's land allows.
+ *
+ * One site a district shared by two types on a fixed interleave, so the
+ * arithmetic is `siteCapacity`'s with a divisor of two — and it is the same
+ * arithmetic for the same reason: a fixed interleave is the only assignment
+ * that survives a reload, because the save holds a count and the position has
+ * to fall out of the ordinal. The first district's site is the library's, the
+ * second's is the theatre's, and they alternate from there.
+ */
+export const cultureAllowed = (s: GameState, culture: Culture): number => {
+  const sites = Math.max(0, s.districts) * CULTURE_SITES_PER_DISTRICT;
+  const offset = CULTURE.findIndex((entry) => entry.key === culture.key);
+  if (offset < 0) return 0;
+  return Math.max(0, Math.ceil((sites - offset) / CULTURE.length));
+};
+
+/**
+ * Share of the city's housing land one culture type reaches, in [0, 1].
+ *
+ * The plots-covered form every *service* uses rather than the landmarks'
+ * world-space reach — see `Culture.plots` for why. Zero rather than one for a
+ * city with no housing, which is `landmarkCoverage`'s convention and the
+ * opposite of a service's: a service coverage is the share it *fails* and it
+ * fails nothing when nothing is built, where this is a thing the city has
+ * earned and an empty one has not.
+ */
+export const cultureCoverage = (s: GameState, culture: Culture): number => {
+  const plots = housingPlots(s);
+  if (plots <= 0) return 0;
+  return Math.min(1, (cultureCount(s, culture.key) * culture.plots) / plots);
+};
+
+/** The two rows, by name, so a reader has one thing to look up. */
+export const LIBRARY = CULTURE.find((entry) => entry.key === 'library');
+export const THEATRE = CULTURE.find((entry) => entry.key === 'theatre');
+
+/** Share of the city's housing land within reach of a library, in [0, 1]. */
+export const libraryCoverage = (s: GameState): number =>
+  LIBRARY ? cultureCoverage(s, LIBRARY) : 0;
+
+/** Share of the city's housing land within reach of a theatre, in [0, 1]. */
+export const theatreCoverage = (s: GameState): number =>
+  THEATRE ? cultureCoverage(s, THEATRE) : 0;
+
+/** What the next building of a culture type costs. Not demand-priced. */
+export const cultureCost = (s: GameState, culture: Culture): number =>
+  culture.base * culture.growth ** cultureCount(s, culture.key);
+
+export const canBuildCulture = (s: GameState, culture: Culture): boolean =>
+  cultureCount(s, culture.key) < cultureAllowed(s, culture) &&
+  s.cash >= cultureCost(s, culture);
+
+/** Why a culture button is off. Land only, exactly as `landmarkBlocker` is. */
+export function cultureBlocker(s: GameState, culture: Culture): string | null {
+  return cultureCount(s, culture.key) >= cultureAllowed(s, culture) ? 'No sites left' : null;
+}
+
+export interface CultureReading {
+  readonly culture: Culture;
+  readonly built: number;
+  readonly allowed: number;
+  readonly cost: number;
+  readonly coverage: number;
+}
+
+/** The whole culture block, in one read, for the HUD. */
+export const cultureReadings = (s: GameState): readonly CultureReading[] =>
+  CULTURE.map((culture) => ({
+    culture,
+    built: cultureCount(s, culture.key),
+    allowed: cultureAllowed(s, culture),
+    cost: cultureCost(s, culture),
+    coverage: cultureCoverage(s, culture),
+  }));
+
 /** How many of a landmark type the city has, through one key. */
 export const landmarkCount = (s: GameState, key: Landmark['key']): number =>
   key === 'museum' ? s.museums : s.stadiums;
@@ -1592,7 +1687,11 @@ export const berthsLanding = (s: GameState): number =>
   // commercial demand: a visitor shops, and `demandTargets.c` reads
   // `visitors x VISITOR_TRIPS`. See RAIL_VISITORS for why it is the shoppers
   // channel rather than the labour one.
-  RAIL_VISITORS * networkService(s);
+  RAIL_VISITORS * networkService(s) +
+  // And the theatre, which is the fifth and the smallest. Folded in here for
+  // the reason all four of the others are: one arrivals expression, one place
+  // for the happiness scaling to live. See THEATRE_VISITORS.
+  THEATRE_VISITORS * theatreCoverage(s);
 
 /** What those visitors spend, per second, before tax. */
 export const cruiseIncome = (s: GameState): number => visitors(s) * VISITOR_SPEND;
@@ -1611,19 +1710,21 @@ export interface VisitorSources {
   readonly air: number;
   readonly road: number;
   readonly rail: number;
+  readonly stage: number;
   readonly total: number;
 }
 
 export const visitorSources = (s: GameState): VisitorSources => {
   const berths = berthsLanding(s);
   const total = visitors(s);
-  if (berths <= 0) return { quay: 0, air: 0, road: 0, rail: 0, total: 0 };
+  if (berths <= 0) return { quay: 0, air: 0, road: 0, rail: 0, stage: 0, total: 0 };
   const per = total / berths;
   return {
     quay: per * s.cruiseTerminals,
     air: per * (s.airport ? AIRPORT_VISITORS : 0),
     road: per * ROAD_VISITORS * landmarkCoverage(s),
     rail: per * RAIL_VISITORS * networkService(s),
+    stage: per * THEATRE_VISITORS * theatreCoverage(s),
     total,
   };
 };

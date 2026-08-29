@@ -65,6 +65,10 @@ import {
   RIVAL_MATCH_DISTRICTS,
   TERMINALS,
   TRANSIT_LINES,
+  CULTURE,
+  CRIME_FROM_IDLENESS,
+  LIBRARY_CRIME_RELIEF,
+  THEATRE_VISITORS,
   NETWORK_EXPORT_LIFT,
   FIRE_RESPONSE,
   POLICE_RESPONSE,
@@ -95,6 +99,11 @@ import {
   canBuildPlant,
   canBuildTerminal,
   canBuildLine,
+  canBuildCulture,
+  cultureBlocker,
+  cultureReadings,
+  libraryCoverage,
+  theatreCoverage,
   lineBlocker,
   missesDeadline,
   responseSeconds,
@@ -647,6 +656,11 @@ export class Hud {
     fireOutcome: el('fire-outcome'),
     garbageRate: el('garbage-rate'),
     garbageMood: el('garbage-mood'),
+    culture: el('culture'),
+    cultureLibrary: el('culture-library'),
+    cultureIdleness: el('culture-idleness'),
+    cultureTheatre: el('culture-theatre'),
+    cultureAudience: el('culture-audience'),
     network: el('network'),
     networkReach: el('network-reach'),
     networkWhere: el('network-where'),
@@ -728,6 +742,14 @@ export class Hud {
    * rung *above* — the depot — lives there, and a player looking for what to do
    * about their traffic should find both in one place.
    */
+  /** One row per culture type, in the same shape as the landmark rows. */
+  private readonly cultureNodes = CULTURE.map((culture) => ({
+    culture,
+    button: el<HTMLButtonElement>(`build-${culture.key}`),
+    cost: el(`build-${culture.key}-cost`),
+    allowance: el(`build-${culture.key}-built`),
+  }));
+
   private readonly lineNodes = TRANSIT_LINES.map((line) => ({
     line,
     button: el<HTMLButtonElement>(`build-${line.key}`),
@@ -895,6 +917,11 @@ export class Hud {
     for (const row of this.lineNodes) {
       row.button.addEventListener('click', () =>
         this.act({ kind: 'line', key: row.line.key }, row.button),
+      );
+    }
+    for (const row of this.cultureNodes) {
+      row.button.addEventListener('click', () =>
+        this.act({ kind: 'culture', key: row.culture.key }, row.button),
       );
     }
     n.airport.addEventListener('click', () => this.act({ kind: 'airport' }, n.airport));
@@ -2281,6 +2308,38 @@ export class Hud {
    */
   private paintLandmarks(s: Readonly<GameState>): void {
     const n = this.nodes;
+    // Culture first, because it is the cheap tier and sits above the landmarks
+    // in the panel. Neither row says "points of mood", and that is the feature
+    // rather than an omission — see CULTURE.
+    for (const { culture, built, allowed, cost } of cultureReadings(s)) {
+      const row = this.cultureNodes.find((entry) => entry.culture.key === culture.key);
+      if (!row) continue;
+      row.allowance.textContent = `${fmtInt(built)}/${fmtInt(allowed)}`;
+      row.cost.textContent = fmt(cost);
+      row.button.disabled = !canBuildCulture(s, culture);
+      row.button.title = cultureBlocker(s, culture) ?? culture.buildLabel;
+    }
+    const reading = libraryCoverage(s);
+    const stage = theatreCoverage(s);
+    n.cultureLibrary.textContent = pct(reading);
+    // Stated as what it takes off the idleness half rather than as a coverage,
+    // because a coverage on its own says nothing a player can act on.
+    n.cultureIdleness.textContent =
+      reading <= 0
+        ? 'no effect on crime'
+        : `−${Math.round(LIBRARY_CRIME_RELIEF * reading * CRIME_FROM_IDLENESS * 100)}% of crime pressure`;
+    n.cultureTheatre.textContent = pct(stage);
+    n.cultureAudience.textContent =
+      stage <= 0
+        ? 'no audience yet'
+        : `${fmt(visitorSources(s).stage)} arriving for the show`;
+    n.culture.setAttribute(
+      'aria-label',
+      `Culture: libraries reaching ${Math.round(reading * 100)} percent of the city, ` +
+        `theatres ${Math.round(stage * 100)} percent, worth ` +
+        `${(THEATRE_VISITORS * stage).toFixed(1)} berths of arrivals.`,
+    );
+
     for (const { landmark, built, allowed, cost } of landmarkReadings(s)) {
       const row = this.landmarkNodes.find((entry) => entry.landmark.key === landmark.key);
       if (!row) continue;
@@ -2345,7 +2404,11 @@ export class Hud {
     // museums is landing a fraction of one and flooring it to zero would say it
     // had none. The allowance counts the road's two the same way.
     const allowed =
-      berths + (s.airport ? AIRPORT_VISITORS : 0) + ROAD_VISITORS + RAIL_VISITORS;
+      berths +
+      (s.airport ? AIRPORT_VISITORS : 0) +
+      ROAD_VISITORS +
+      RAIL_VISITORS +
+      THEATRE_VISITORS;
     n.portBerths.textContent = `${fmt(berthsLanding(s))}/${fmt(allowed)}`;
     n.portWhere.textContent =
       first >= 0 ? `first quay on district ${fmtInt(first + 1)}`
@@ -2369,6 +2432,7 @@ export class Hud {
     if (from.air > 0) parts.push(`${fmt(from.air)} air`);
     if (from.road > 0) parts.push(`${fmt(from.road)} road`);
     if (from.rail > 0) parts.push(`${fmt(from.rail)} rail`);
+    if (from.stage > 0) parts.push(`${fmt(from.stage)} stage`);
     n.portSources.textContent = parts.length > 0 ? parts.join(' · ') : '—';
     const share = visitorShare(s);
     n.portShopping.textContent =

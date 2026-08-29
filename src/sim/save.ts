@@ -13,6 +13,7 @@ import {
   TAX_NEUTRAL,
   TAX_STEPS,
   TRANSIT_LINES,
+  CULTURE,
 } from './config';
 import {
   burnableOf,
@@ -29,6 +30,7 @@ import {
   landmarkSiteCapacity,
   estateCapacity,
   lineAllowed,
+  cultureAllowed,
   serviceAllowed,
   shopCapacity,
   terminalCapacity,
@@ -382,6 +384,16 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
     // parks and civic buildings are.
     museums: count(r['museums']),
     stadiums: count(r['stadiums']),
+    /**
+     * Culture, and what a save written before v15 is entitled to.
+     *
+     * None, which is the state a city that never opened one is in. Clamped
+     * against `cultureAllowed` below with everything else, because the site is
+     * one a district shared by two types and a save trimmed to fewer districts
+     * has fewer of them.
+     */
+    libraries: count(r['libraries']),
+    theatres: count(r['theatres']),
     cruiseTerminals: count(r['cruiseTerminals']),
     cargoTerminals: count(r['cargoTerminals']),
     /**
@@ -594,6 +606,13 @@ export function migrate(raw: unknown, now = Date.now()): GameState | null {
   // sheds the landmarks whose squares no longer exist.
   state.museums = Math.min(state.museums, landmarkSiteCapacity(state, 'museum'));
   state.stadiums = Math.min(state.stadiums, landmarkSiteCapacity(state, 'stadium'));
+  // Culture shares one site a district between two types, so its clamp is the
+  // interleave's rather than a flat per-district count.
+  for (const culture of CULTURE) {
+    const allowed = cultureAllowed(state, culture);
+    if (culture.key === 'library') state.libraries = Math.min(state.libraries, allowed);
+    else state.theatres = Math.min(state.theatres, allowed);
+  }
   // One berth of each kind per *coastal* district, which is the clamp v8's
   // water actually needs: a v7 save has no terminals to lose, but a v8 one
   // whose district count was trimmed above may have had berths on land it no
