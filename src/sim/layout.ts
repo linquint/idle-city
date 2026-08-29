@@ -14,15 +14,22 @@ import {
 } from './config.ts';
 
 /**
- * How many types share the 2x2 civic sites: hospital, police, fire, school and
- * the transit depot.
+ * How many types share the 2x2 civic sites: hospital, police, fire, school, the
+ * transit depot and the waste depot.
  *
  * A number rather than an import of CIVIC_SERVICES, because `layout.ts` is the
  * bottom of the simulation and `economy.ts` already depends on it — taking the
  * list from config here would work, but the count is the only part of it this
  * file needs and `civicSiteFor` is called with the offset anyway.
+ *
+ * Six since the waste depot, and it has to move with `CIVIC_SERVICES.length` or
+ * the two halves of the interleave disagree: `siteCapacity` divides by the
+ * table's length to say how many sites a type may have, and this multiplies to
+ * say which square the i-th of them stands on. At five here and six there, two
+ * types are handed the same square — which is exactly what
+ * `test/services.test.ts` caught.
  */
-const CIVIC_TYPES = 5;
+const CIVIC_TYPES = 6;
 
 /**
  * How many types share the 2x2 culture sites: the library and the theatre.
@@ -2317,8 +2324,9 @@ export class CityLayout {
   }
 
   /**
-   * Which site each 2x2 type draws on: hospitals take 5k, police 5k+1, fire
-   * 5k+2, schools 5k+3 and depots 5k+4, out of one fixed city-wide list.
+   * Which site each 2x2 type draws on: hospitals take 6k, police 6k+1, fire
+   * 6k+2, schools 6k+3, transit depots 6k+4 and waste depots 6k+5, out of one
+   * fixed city-wide list.
    *
    * A fixed interleave, not "whichever district is worst covered". Assigning
    * greedily against coverage would make the i-th hospital's position depend on
@@ -2326,10 +2334,11 @@ export class CityLayout {
    * — so the city would rearrange itself on the next refresh. Indexing is the
    * only rule that survives a reload.
    *
-   * Five types over six sites a district: the university took a 3x3 out of the
-   * land before the 2x2 pass ran, and schools and then transit joined the pool
-   * that was left. The first district gets 2/1/1/1/1, so a young city can open
-   * one of everything and a second hospital before it needs more land.
+   * Six types over six sites a district, so every type gets exactly one a
+   * district and the first district gets 1/1/1/1/1/1. It was five over six —
+   * 2/1/1/1/1, a young city's second hospital — until the waste depot joined
+   * them, and that divisor change is the expensive half of its cycle: see
+   * SERVICES, which carries what it costs a save that already exists.
    */
   civicSiteFor(offset: number, i: number): Coord {
     return this.civicSiteCell(i * CIVIC_TYPES + offset);

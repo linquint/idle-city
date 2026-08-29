@@ -213,6 +213,17 @@ export interface GameState {
    */
   depots: number;
   /**
+   * Waste depots. The sixth type on the 2x2 interleave, and the one that made
+   * it a six.
+   *
+   * It does not collect: `garbageCollection` is a plot count clamped at 1 and
+   * one finished collector already covers the city, so a second at the same
+   * reach would be a second button buying one number. It lowers `garbageRate`
+   * at source instead, which stacks with the bus rather than competing with it.
+   * See WASTE_RECYCLING.
+   */
+  wasteDepots: number;
+  /**
    * Landmarks, on the squares FRONTAGE_TARGET reserves for them: one 2x2 and
    * one 3x3 a district.
    *
@@ -335,6 +346,7 @@ export interface GameState {
   schoolStaff: number;
   universityStaff: number;
   depotStaff: number;
+  wasteStaff: number;
   /**
    * Happiness, lagged behind the coverage it is chasing. Same reasoning as the
    * demand signals: the lag is the mechanic, so it has to survive a reload.
@@ -581,12 +593,14 @@ export function createState(now = Date.now()): GameState {
     schools: 0,
     universities: 0,
     depots: 0,
+    wasteDepots: 0,
     hospitalStaff: 0,
     policeStaff: 0,
     fireStaff: 0,
     schoolStaff: 0,
     universityStaff: 0,
     depotStaff: 0,
+    wasteStaff: 0,
     // An empty city has nobody to be unhappy: coverage is a share of residents,
     // and the share of nobody is everybody. It lags down as the first homes fill.
     happiness: 1,

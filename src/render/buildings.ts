@@ -1859,7 +1859,22 @@ function fireStationSet(scene: THREE.Scene, capacity: number): CivicMeshes {
  *
  * Thirty-two pieces, nine meshes.
  */
-function busDepotSet(scene: THREE.Scene, capacity: number): CivicMeshes {
+function busDepotSet(
+  scene: THREE.Scene,
+  capacity: number,
+  /**
+   * Which type's meshes these are.
+   *
+   * The waste depot draws the bus depot's model, and that is a statement rather
+   * than a saving: `garbageCollection`'s own comment calls the depot "the
+   * municipal yard — where the city keeps the vehicles that go out on a round",
+   * and a waste depot is that yard with different lorries in it. What it cannot
+   * share is the mesh *names*: a `CivicMeshes` set is one instance list per
+   * material per type, so two types on one set would draw one type's buildings
+   * on the other's sites. The prefix is what keeps them apart.
+   */
+  prefix = 'transit',
+): CivicMeshes {
   // The bay lights strung under the canopy, and the only lit surface here. A
   // low floor for the reason the fire station's beacon has one: a depot at
   // night is a lit yard with the fleet in it, and that only reads if the lights
@@ -1870,21 +1885,21 @@ function busDepotSet(scene: THREE.Scene, capacity: number): CivicMeshes {
     BUS_DEPOT_PARTS,
     new Map<string, Finish>([
       // The shed and the fuel pump standing on the yard's far corner.
-      ['depot-teal', { name: 'transit:walls', tint: true, receiveShadow: true }],
+      ['depot-teal', { name: `${prefix}:walls`, tint: true, receiveShadow: true }],
       // The shed's clerestory band and the coaches' windows: one material,
       // because at this distance a bus window and a shed window are the same
       // dark glass. Proud of what they sit on, so never shadow-casting.
-      ['glazing', { name: 'transit:glazing', castShadow: false }],
-      ['livery-lime', { name: 'transit:livery', receiveShadow: true }],
-      ['bus-green', { name: 'transit:buses', receiveShadow: true }],
+      ['glazing', { name: `${prefix}:glazing`, castShadow: false }],
+      ['livery-lime', { name: `${prefix}:livery`, receiveShadow: true }],
+      ['bus-green', { name: `${prefix}:buses`, receiveShadow: true }],
       // The yard: made ground, so it receives the shed's shadow and casts none.
-      ['apron-asphalt', { name: 'transit:apron', castShadow: false, receiveShadow: true }],
-      ['marking-white', { name: 'transit:markings', castShadow: false }],
+      ['apron-asphalt', { name: `${prefix}:apron`, castShadow: false, receiveShadow: true }],
+      ['marking-white', { name: `${prefix}:markings`, castShadow: false }],
       // The canopy over the bays, the one over the pump, and the roof plant.
-      ['plant-grey', { name: 'transit:canopies', receiveShadow: true }],
+      ['plant-grey', { name: `${prefix}:canopies`, receiveShadow: true }],
       // What holds those up, and the sign pylon on the street corner.
-      ['trim-concrete', { name: 'transit:columns' }],
-      ['bay-light', { name: 'transit:lights', glow: bays, castShadow: false }],
+      ['trim-concrete', { name: `${prefix}:columns` }],
+      ['bay-light', { name: `${prefix}:lights`, glow: bays, castShadow: false }],
     ]),
     capacity,
   );
@@ -2164,6 +2179,10 @@ function civicSet(scene: THREE.Scene, service: Service, capacity: number): Civic
   if (service.key === 'fire') return fireStationSet(scene, capacity);
   if (service.key === 'school') return schoolSet(scene, capacity);
   if (service.key === 'transit') return busDepotSet(scene, capacity);
+  // The waste depot draws the bus depot's yard under its own names — see
+  // `busDepotSet`, which carries why that is the honest model rather than a
+  // placeholder.
+  if (service.key === 'waste') return busDepotSet(scene, capacity, 'waste');
   return universitySet(scene, capacity);
 }
 
@@ -2403,6 +2422,7 @@ export class Buildings {
       : service.key === 'fire' ? state.fire
       : service.key === 'school' ? state.schools
       : service.key === 'transit' ? state.depots
+      : service.key === 'waste' ? state.wasteDepots
       : state.universities;
   }
 

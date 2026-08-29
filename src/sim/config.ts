@@ -1624,7 +1624,7 @@ export const PRICE_SURCHARGE_MAX = 0.6;
 
 export interface Service {
   /** Matches the GameState counter, the staffing scalar and the coverage key. */
-  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university' | 'transit';
+  readonly key: 'hospital' | 'police' | 'fire' | 'school' | 'university' | 'transit' | 'waste';
   readonly name: string;
   readonly buildLabel: string;
   /** How the HUD names this service's coverage when it is the binding one. */
@@ -1671,10 +1671,10 @@ export interface Service {
  * outright below HAPPINESS_MIN_BUILD — or, for the two education types, it
  * decides how tall the city is allowed to build.
  *
- * Five of the six stand on a 2x2 site, of which a district has six, so those
- * types share 1.2 buildings a district. The university is the exception: its own
- * 3x3 site, exactly one to a district, which is what makes it a landmark rather
- * than another row in the panel.
+ * Six of the seven stand on a 2x2 site, of which a district has six, so those
+ * types get one building a district each. The university is the exception: its
+ * own 3x3 site, exactly one to a district, which is what makes it a landmark
+ * rather than another row in the panel.
  *
  * A city that never builds one still works, it just runs at the floor and never
  * gets past detached housing — neglect reads as a ceiling on what the city can
@@ -1682,21 +1682,38 @@ export interface Service {
  *
  * ---
  *
- * The `plots` column is what Part 0 of this cycle re-derived, and it is derived
- * rather than picked. Two numbers set it: 1.2 sites of each 2x2 type per
- * district, against 24 housing plots per district. A type whose every allowed
- * building is standing therefore covers `1.2 x plots / 24` of the city, so
- * `plots = 20` is exactly full coverage and exactly half coverage at half the
- * buildings. That is the hospital, and it is the anchor.
+ * The `plots` column is derived rather than picked, and it re-derives whenever
+ * the divisor moves. Two numbers set it: the sites of each 2x2 type a district
+ * gets, against 24 housing plots per district. A type whose every allowed
+ * building is standing covers `sites x plots / 24` of the city, so the anchor
+ * is `24 / sites` — and `sites` is `FRONTAGE_TARGET.civicSites / n`, six over
+ * the length of this table.
+ *
+ * At five types that was 1.2 sites and an anchor of 20. **It is six types now**
+ * — the waste depot — so it is 1.0 sites and an anchor of 24, and every 2x2 row
+ * moved with it: 20 -> 24, 26 -> 31, 31 -> 37, 15 -> 18, 24 -> 29. The
+ * university did not move and could not: it stands on its own 3x3 list, one to
+ * a district, and the interleave never reaches it.
+ *
+ * That divisor change is the expensive half of this cycle and it was costed
+ * before it was made. `siteCapacity` divides by this table's length, so a sixth
+ * entry moves every hospital, police station, fire station, school and depot in
+ * every existing save onto a different square: measured, 53 of a 12-district
+ * city's 64 civic buildings, with six left over that the new interleave has no
+ * site for. `migrate` refunds those rather than deleting them silently. See
+ * NOTES.md section 11 for the table, and tools/phase7.calibrate.mjs 0a for the
+ * two guards it had to clear — no integer keeps schools inside
+ * LEVEL_EDUCATION's window past six types, and the transit row starts losing
+ * sites at small district counts and takes the happiness ceiling under 0.95.
  *
  * The other two happiness services come off the weight ordering rather than
- * being chosen: `plots_i = 20 x w_hospital / w_i`, so a service worth less to
- * happiness needs less of the city's civic land to satisfy. That reproduces the
- * ordering the old `capacity` column had — 900 / 1200 / 1500 is within 8% of
- * inverse-proportional to 0.34 / 0.26 / 0.22 — and the slack it leaves police
- * and fire is what the one-district city needs: the six sites interleave
- * 2/1/1/1/1, so at one district police and fire have a single building each
- * against 24 plots and would read 83% and 87% at the hospital's 20.
+ * being chosen: `plots_i = anchor x w_hospital / w_i`, so a service worth less
+ * to happiness needs less of the city's civic land to satisfy. That reproduces
+ * the ordering the old `capacity` column had — 900 / 1200 / 1500 is within 8%
+ * of inverse-proportional to 0.34 / 0.26 / 0.22 — and the slack it leaves
+ * police and fire is what the one-district city needs. At six types the six
+ * sites interleave 1/1/1/1/1/1, so every type has exactly one building at one
+ * district rather than the hospital having two.
  *
  * `serviceAllowed` then does the rest of the work, and it is why the three do
  * not have to be equal to read alike: the allowance is `need + 1` clamped by the
@@ -1708,7 +1725,7 @@ export interface Service {
  * site interleave cannot quietly reopen the ceiling.
  */
 export const SERVICES: readonly Service[] = [
-  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 20, base: 130,    growth: 1.35, weight: 0.46, span: 2 },
+  { key: 'hospital',   name: 'Hospitals',   buildLabel: 'Open hospital',       coverLabel: 'Health coverage',    plots: 24, base: 130,    growth: 1.35, weight: 0.46, span: 2 },
   /**
    * Police carry no happiness weight any more, and that is the whole of the
    * crime re-calibration rather than a side effect of it.
@@ -1729,19 +1746,29 @@ export const SERVICES: readonly Service[] = [
    * is 0.26: what a maximally pressured city with no police loses is exactly
    * what this weight used to take off it.
    */
-  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 26, base: 210,    growth: 1.35, weight: 0,    span: 2 },
-  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 31, base: 320,    growth: 1.35, weight: 0.30, span: 2 },
+  { key: 'police',     name: 'Police',      buildLabel: 'Open police station', coverLabel: 'Police coverage',    plots: 31, base: 210,    growth: 1.35, weight: 0,    span: 2 },
+  { key: 'fire',       name: 'Fire',        buildLabel: 'Open fire station',   coverLabel: 'Fire coverage',      plots: 37, base: 320,    growth: 1.35, weight: 0.30, span: 2 },
   /**
-   * Schools take the fourth slot in the 2x2 interleave, and 15 is the only
-   * integer that keeps LEVEL_EDUCATION's design intact at both ends of the map.
-   * Schools alone have to clear the 0.60 rung and miss the 0.85 one, at one
-   * district (a single school against 24 plots, so plots/24) and at scale (1.2
-   * schools against 24, so 1.2 x plots/24). That is plots in [14.4, 20.4) and
-   * [12, 17): 15 or 16, and 15 leaves the wider margin under 0.85.
+   * Schools take the fourth slot in the 2x2 interleave, and this is the one 2x2
+   * row that does *not* come off the anchor: what sets it is LEVEL_EDUCATION's
+   * window, not the weight ordering, because a school carries no weight.
    *
-   * Measured: schools alone read 62.5% at 1 district, 62.5% at 2 and 3, 78% at
-   * 4 and 75% from 10 up — through the middle of LEVEL_EDUCATION everywhere,
-   * and never at its top.
+   * Schools alone have to clear the 0.60 rung and miss the 0.85 one at every
+   * city size. At six types that is one school a district against 24 housing
+   * plots, so `plots / 24`, and the window is `plots` in [14.4, 20.4) — every
+   * integer from 15 to 20, swept over all 49 district counts in
+   * tools/phase7.calibrate.mjs.
+   *
+   * **15 did not have to move, and that is the point of stating the window
+   * rather than the number.** The anchor would have put it at 18, which is
+   * exactly the university's 18 — and a university that reached no further than
+   * a school would be a school at forty times the price on a 3x3 site. Staying
+   * at 15 keeps the two education types a rung apart.
+   *
+   * Measured: schools alone read 62.5% at every district count from 1 to 49 —
+   * flat now rather than the 62.5-78% band the five-type interleave gave,
+   * because every type gets exactly one site a district instead of a shared
+   * 1.2. Through the middle of LEVEL_EDUCATION everywhere, and never at its top.
    */
   { key: 'school',     name: 'Schools',     buildLabel: 'Open school',         coverLabel: 'School coverage',    plots: 15, base: 180,    growth: 1.35, weight: 0,    span: 2 },
   /**
@@ -1757,13 +1784,46 @@ export const SERVICES: readonly Service[] = [
    * exactly 1 two cycles ago, and a fifth would re-open that calibration to buy
    * something transport already has two better routes to.
    *
-   * 24 against a hospital's 20: a network reaches further than a building, and
-   * "a district that has bought one depot should feel covered by it" is now
-   * exactly what the number says — one depot, 24 plots, the 24 plots of a
-   * district. The 2,200 residents this used to read stated the same intent
-   * against a denominator that moved 75x under it.
+   * 24, and like the school's 15 it did not move when the divisor did — but for
+   * the opposite reason. The school's is held by a window; this one is held by
+   * what it means. "A district that has bought one depot should feel covered by
+   * it" is exactly 24 plots, the 24 plots of a district, and at six types a
+   * depot gets exactly one site a district — so the number that used to
+   * over-cover by 1.2x now says precisely what it always meant. The 2,200
+   * residents this read two cycles ago stated the same intent against a
+   * denominator that moved 75x under it.
+   *
+   * It equals the hospital's anchor now, and that is arithmetic rather than
+   * coincidence: at one site a district, "cover the district's housing" is 24
+   * plots for anything that should be exactly covered.
    */
   { key: 'transit',    name: 'Transit',     buildLabel: 'Open depot',          coverLabel: 'Transit coverage',   plots: 24, base: 260,    growth: 1.35, weight: 0,    span: 2 },
+  /**
+   * The waste depot: the sixth 2x2 type, and the one this cycle spent the
+   * divisor on.
+   *
+   * It does not collect. `GARBAGE_COLLECTORS` was shaped to take a second
+   * entry and the measurement said not to use it: `garbageCollection` is a plot
+   * count over the housing land clamped at 1, and one finished collector
+   * already covers the city — so a second at the same reach is worth everything
+   * to a city halfway through its first and *nothing* to one that has finished
+   * it. Two collectors would be two buttons buying one number, and the player
+   * would press whichever was cheaper. See NOTES.md section 12, which carries
+   * the table.
+   *
+   * So it lowers `garbageRate` at source instead, which stacks with the depot
+   * rather than competing with it: `garbage` is load times uncollected share,
+   * and the two move different factors. That is the recycling centre's job
+   * under the waste depot's name, and it is why this cycle bought *one* new
+   * civic type rather than two — the difference between six types, which works
+   * on every guard, and seven, which fails on both.
+   *
+   * `weight: 0`, like the depot and the two education types: the three
+   * happiness weights sum to exactly 1 and a fourth would re-open a calibration
+   * that has held for four cycles to buy something `garbageMood` already
+   * reaches. See WASTE_RECYCLING.
+   */
+  { key: 'waste',      name: 'Recycling',   buildLabel: 'Open waste depot',    coverLabel: 'Recycling coverage', plots: 24, base: 240,    growth: 1.35, weight: 0,    span: 2 },
   /**
    * Three quarters of a district's housing taught by one building, on nine
    * plots, one to a district, at forty times a school's opening price and
@@ -3361,6 +3421,41 @@ export const GARBAGE_PER_WORKS = 12;
  */
 export const GARBAGE_SATURATION = 220;
 export const GARBAGE_CURVE = 0.5;
+
+/**
+ * How much of the city's rubbish a complete recycling network stops it making.
+ *
+ * At *source*, on `garbageRate`, rather than as a second entry in
+ * GARBAGE_COLLECTORS — and that is the whole of why the waste depot was worth a
+ * civic type. `garbageCollection` is a plot count over the housing land clamped
+ * at 1, and one finished collector already covers the city: TRANSIT.plots is 29
+ * against a district's 24 housing plots. Measured on a 12-district city at the
+ * top of the ladder, by how much of each is built:
+ *
+ *   built    bus only   waste only   both, as collectors
+ *     25%       0.731        0.731                 0.487
+ *     50%       0.487        0.487                 0.000
+ *    100%       0.000        0.000                 0.000
+ *
+ * So two collectors are two buttons buying one number, and past half-built the
+ * second is worth nothing at all. A rate cut stacks instead, because `garbage`
+ * is load times uncollected share and the two move different factors — a city
+ * with both makes less rubbish *and* collects more of what it makes.
+ *
+ * The bus keeps the bins. Taking `transit` out of GARBAGE_COLLECTORS was the
+ * other half of the question and the worst case decides it: a city with a full
+ * bus network and no waste depot, because there was none to build, reads 0.000
+ * the night before and 0.974 the morning after — 9.7 points of mood taken from
+ * the player who bought the building that was answering it, and no migration
+ * softens it because there is no count to carry across.
+ *
+ * 0.45, so a complete network takes just under half the rubbish out of the
+ * stream. Under half deliberately: the rate has three sources — residents,
+ * trading premises and working industry — and a building that took most of it
+ * away would make GARBAGE_SATURATION's whole measured ladder, 0.17 at detached
+ * houses to 0.97 at arcologies, stop being a curve the city climbs.
+ */
+export const WASTE_RECYCLING = 0.45;
 
 // ---------------------------------------------------------- the rival city
 

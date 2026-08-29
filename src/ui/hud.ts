@@ -67,6 +67,7 @@ import {
   TRANSIT_LINES,
   CULTURE,
   CRIME_FROM_IDLENESS,
+  WASTE_RECYCLING,
   LIBRARY_CRIME_RELIEF,
   THEATRE_VISITORS,
   NETWORK_EXPORT_LIFT,
@@ -100,6 +101,8 @@ import {
   canBuildTerminal,
   canBuildLine,
   canBuildCulture,
+  garbageRate,
+  recyclingCoverage,
   cultureBlocker,
   cultureReadings,
   libraryCoverage,
@@ -656,6 +659,8 @@ export class Hud {
     fireOutcome: el('fire-outcome'),
     garbageRate: el('garbage-rate'),
     garbageMood: el('garbage-mood'),
+    wasteCut: el('waste-cut'),
+    wasteEffect: el('waste-effect'),
     culture: el('culture'),
     cultureLibrary: el('culture-library'),
     cultureIdleness: el('culture-idleness'),
@@ -2170,6 +2175,17 @@ export class Hud {
       bins <= 0
         ? 'no effect on mood'
         : `−${(GARBAGE_MOOD * bins * 100).toFixed(1)} points of mood`;
+    // What recycling keeps out of the stream, which is the waste depot's whole
+    // job — it is not a second collector. Stated as bags a second rather than
+    // as a share, because the share is on the row above it and what a player
+    // wants from this one is the size of the thing it is cutting.
+    const kept = WASTE_RECYCLING * recyclingCoverage(s);
+    n.wasteCut.textContent = pct(kept);
+    n.wasteEffect.textContent =
+      kept <= 0
+        ? 'nothing kept out of the stream'
+        : `${fmt((garbageRate(s) * kept) / Math.max(1e-9, 1 - kept))} bags a second kept out`;
+
     // And the network above it. Two numbers rather than one, because
     // `networkService` is the *lesser* of reach and capacity and a single
     // figure would leave the player unable to tell which line to lay next.

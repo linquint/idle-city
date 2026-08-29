@@ -31,6 +31,7 @@ import {
   GARBAGE_PER_WORKS,
   GARBAGE_CURVE,
   GARBAGE_SATURATION,
+  WASTE_RECYCLING,
   LEGACY_YIELD,
   RANKS,
   RANK_GATES,
@@ -909,6 +910,7 @@ export const serviceCount = (s: GameState, key: ServiceKey): number =>
   : key === 'fire' ? s.fire
   : key === 'school' ? s.schools
   : key === 'transit' ? s.depots
+  : key === 'waste' ? s.wasteDepots
   : s.universities;
 
 /** How much of a type's payroll is actually filled, in [0, 1]. See `staffStep`. */
@@ -918,6 +920,7 @@ export const staffing = (s: GameState, key: ServiceKey): number =>
   : key === 'fire' ? s.fireStaff
   : key === 'school' ? s.schoolStaff
   : key === 'transit' ? s.depotStaff
+  : key === 'waste' ? s.wasteStaff
   : s.universityStaff;
 
 /**
@@ -1369,9 +1372,20 @@ export const crimeMood = (s: GameState): number => -CRIME_MOOD * crime(s);
  * putting bins out.
  */
 export const garbageRate = (s: GameState): number =>
-  residents(s) * GARBAGE_PER_RESIDENT +
-  effectiveOf(s, 'shop') * GARBAGE_PER_SHOP +
-  activeOf(s, 'industry') * GARBAGE_PER_WORKS;
+  (residents(s) * GARBAGE_PER_RESIDENT +
+    effectiveOf(s, 'shop') * GARBAGE_PER_SHOP +
+    activeOf(s, 'industry') * GARBAGE_PER_WORKS) *
+  // Less whatever the recycling network keeps out of the stream. At *source*
+  // rather than as a second collector, which is what makes the waste depot
+  // stack with the bus rather than compete with it — see WASTE_RECYCLING.
+  (1 - WASTE_RECYCLING * recyclingCoverage(s));
+
+/** The waste service, or undefined if the table is ever built without one. */
+export const WASTE = SERVICES.find((service) => service.key === 'waste');
+
+/** Share of the city's housing land a recycling network reaches, in [0, 1]. */
+export const recyclingCoverage = (s: GameState): number =>
+  WASTE && housingPlots(s) > 0 ? Math.min(1, covered(s, WASTE) / housingPlots(s)) : 0;
 
 /**
  * How much rubbish there is to shift, per housing plot, in [0, 1].
@@ -1399,11 +1413,18 @@ export const garbageLoad = (s: GameState): number => {
  * because TRANSIT carries `weight: 0` — the building was already the least
  * motivated of the five and this is the first happiness argument it has.
  *
- * A list of one rather than a single read, and that is the wiring the brief
- * asks for: a recycling centre is blocked on land — there is no sixth
- * CIVIC_SERVICES entry to be had, and `siteCapacity` divides by that list's
- * length — so when the land question is answered, a second collector joins this
- * sum and nothing else in the model moves.
+ * A list of one, and it stayed a list of one when the land question was
+ * answered. The sixth CIVIC_SERVICES entry exists now — the waste depot — and
+ * it deliberately does *not* join this sum: `garbageCollection` is a plot count
+ * over the housing land clamped at 1, and one finished collector already covers
+ * the city, so a second at the same reach is worth everything at half-built and
+ * nothing at all once the first is done. Two collectors would be two buttons
+ * buying one number. The waste depot lowers `garbageRate` at source instead,
+ * which stacks rather than competes — see WASTE_RECYCLING, and NOTES.md section
+ * 12 for the table that decided it.
+ *
+ * So the list is still the shape a second collector would slot into, and the
+ * measurement is why nothing did.
  *
  * Plots-covered rather than a radius, and that is the trap avoided rather than
  * a shortcut taken. `covered(s, service)` is a plot *count*; nothing anywhere

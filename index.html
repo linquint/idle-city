@@ -212,6 +212,17 @@
       </button>
     </div>
 
+    <!-- The sixth 2x2 type, on a row of its own because the two above it are
+         already four buttons wide. "Waste" rather than "Recycling": the button
+         is a quarter of the panel and every other one here is a short form of
+         its service's name, so the title carries the rest. -->
+    <div class="civic-row">
+      <button class="civic transit" id="build-waste" type="button" title="Open waste depot">
+        <span>Waste</span><span class="built" id="build-waste-built">0/1</span>
+        <span class="cost" id="build-waste-cost">240</span>
+      </button>
+    </div>
+
     <button id="annex" class="annex" type="button">
       <span id="annex-label">Annex district</span><span class="cost" id="annex-cost">60.0K</span>
     </button>
@@ -345,6 +356,16 @@
       <div class="svc"><span class="k">Rubbish</span>
         <span class="built" id="garbage-rate">0%</span>
         <span class="covers" id="garbage-mood">no effect on mood</span></div>
+      <!-- The waste depot does not collect: one finished collector already
+           covers the city, so a second at the same reach buys nothing. It cuts
+           what the city puts out instead, which stacks with the bus rather than
+           competing with it. See WASTE_RECYCLING. -->
+      <div class="svc"><span class="k">Recycling</span>
+        <span class="built" id="svc-waste-built">0/0</span>
+        <span class="covers" id="svc-waste-covers">0 of 0</span></div>
+      <div class="svc"><span class="k">Kept out</span>
+        <span class="built" id="waste-cut">0%</span>
+        <span class="covers" id="waste-effect">nothing kept out of the stream</span></div>
     </div>
 
     <!-- The network above the depot. A depot covers plots inside a district;

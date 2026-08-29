@@ -212,6 +212,7 @@ describe('migration', () => {
       schools: 1e9,
       universities: 1e9,
       depots: 1e9,
+      wasteDepots: 1e9,
       homes: 1e9,
       industry: 1e9,
     })!;
@@ -695,8 +696,15 @@ describe('the v6 migration', () => {
       savedAt: 1_000,
     };
     const back = migrate(v5, 2_000)!;
+    // The cash is *not* 4,321, and that is v15's refund rather than a leak. The
+    // sixth civic type moved the hospital's `plots` from 20 to 24, so a city of
+    // twenty housing plots is allowed one hospital where it was allowed two —
+    // `serviceAllowed` is `floor(plots / 24) + 1` — and the second is handed
+    // back at what it cost. 130 x 1.35 is 175.50, and 4,321 + 175.50 is
+    // 4,496.50. See the clamp in `migrate`, which refunds rather than deleting.
+    expect(back.hospitals).toBe(1);
+    expect(back.cash).toBeCloseTo(4_321 + 130 * 1.35, 6);
     expect(back).toMatchObject({
-      cash: 4_321,
       homes: 20,
       shops: 12,
       industry: 5,

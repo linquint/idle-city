@@ -18,7 +18,7 @@ import {
 import { coverage, homeCost } from '../src/sim/economy';
 import { Game } from '../src/sim/game';
 import { createState, type GameState } from '../src/sim/state';
-import { built, cohort, housed, served, trading } from './levels';
+import { built, cohort, housed, served, trading, zoning } from './levels';
 
 /**
  * The ticker's feed, and the three things it must not do: grow without bound,
@@ -253,7 +253,17 @@ describe('what the city emits', () => {
     // One hospital reaches `plots` housing plots, so a city holding exactly that
     // many reads a full 1 and every home past it dilutes the share.
     const reach = (hospital as { plots: number }).plots;
-    const game = at({ ...housed(reach), hospitals: 1, hospitalStaff: 1, cash: 1e9, happiness: 1 });
+    // Four districts of land, because the fixture has to be able to *build*
+    // past `reach` and a hospital now reaches a whole district's housing — one
+    // district of opening zoning has nowhere to put the twenty-fifth home.
+    const game = at({
+      ...zoning(4),
+      ...housed(reach),
+      hospitals: 1,
+      hospitalStaff: 1,
+      cash: 1e9,
+      happiness: 1,
+    });
     play(game, 1);
     expect(coverage(game.state, hospital as never)).toBe(1);
     game.drainEvents();

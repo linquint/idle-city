@@ -65,6 +65,7 @@ import {
   OCCUPANCY_FULL,
   CULTURE,
   CRIME_FROM_IDLENESS,
+  WASTE_RECYCLING,
   LANDMARKS,
   LIBRARY_CRIME_RELIEF,
   THEATRE_VISITORS,
@@ -114,7 +115,12 @@ import {
   effectiveOf,
   faresWaived,
   garbageLoad,
+  garbage,
   garbageRate,
+  garbageCollection,
+  recyclingCoverage,
+  serviceCount,
+  siteCapacity,
   happinessTarget,
   housingPlots,
   jobs,
@@ -1421,5 +1427,123 @@ console.log('the price of the tier, against the museum it sits under\n');
   console.log('  Under the museum at every rung, which is what "the cheap tier" has to mean,');
   console.log('  and growing at 1.5 against its 1.6 because there are half as many sites to');
   console.log('  fill — the curve has fewer rungs to climb.');
+  console.log('');
+}
+
+// ==================================================================== 2b
+
+console.log('='.repeat(78));
+console.log('2b  the waste depot, as built');
+console.log('='.repeat(78));
+console.log('');
+
+console.log('the divisor, after the fact\n');
+{
+  console.log(`  CIVIC_SERVICES.length ${CIVIC_SERVICES.length}: ${CIVIC_SERVICES.map((x) => x.key).join(', ')}`);
+  console.log('');
+  console.log('  sites each type gets, which is 0a\'s six-type row now that it is the build');
+  console.log('  districts   ' + CIVIC_SERVICES.map((x) => pad(x.key.slice(0, 5), 8)).join(''));
+  for (const d of [1, 4, 12, MAX_DISTRICTS]) {
+    const s = { ...city(d, 2, 0), districts: d };
+    console.log(`  ${pad(d, 9)}   ` + CIVIC_SERVICES.map((x) => pad(siteCapacity(s, x.key), 8)).join(''));
+  }
+  console.log('');
+  console.log('  and the re-derived plots column, against 0a\'s prediction of 24/31/37/-/-');
+  console.log('  ' + SERVICES.map((x) => `${x.key} ${x.plots}`).join(', '));
+  console.log('');
+  console.log('  School and transit did *not* take the anchor, and that is the one place 0a');
+  console.log('  was too coarse. A school\'s plots is held by LEVEL_EDUCATION\'s window, not by');
+  console.log('  the weight ordering — it carries no weight — and the anchor would have put');
+  console.log("  it at 18, which is exactly the university's 18. A university reaching no");
+  console.log('  further than a school is a school at forty times the price. Transit is held');
+  console.log('  by what it means: one depot, one district, 24 plots.');
+  console.log('');
+}
+
+console.log('what the depot is worth, and that it stacks\n');
+{
+  console.log(`  WASTE_RECYCLING ${WASTE_RECYCLING} on garbageRate, and GARBAGE_COLLECTORS is still ['transit'].`);
+  console.log('');
+  console.log('  12 districts        nothing   every bus   every depot   both');
+  for (let level = 0; level < LEVELS; level++) {
+    const bare = city(12, level, 0);
+    const transit = SERVICES.find((x) => x.key === 'transit');
+    const waste = SERVICES.find((x) => x.key === 'waste');
+    const bussed = { ...bare, depots: serviceAllowed(bare, transit), depotStaff: 1 };
+    const wasted = { ...bare, wasteDepots: serviceAllowed(bare, waste), wasteStaff: 1 };
+    const both = { ...bussed, wasteDepots: wasted.wasteDepots, wasteStaff: 1 };
+    console.log(
+      `    level ${level}` + fixed(garbage(bare), 15, 3) + fixed(garbage(bussed), 12, 3) +
+        fixed(garbage(wasted), 14, 3) + fixed(garbage(both), 7, 3),
+    );
+  }
+  console.log('');
+  console.log('  The bus alone takes it to zero, and so does the depot alone — because');
+  console.log('  `garbageCollection` is a plot count clamped at 1 and one finished collector');
+  console.log('  covers the city. What the pair is for is everything *before* that:');
+  console.log('');
+  console.log('  12 districts, level 4, half of each built');
+  console.log('    nothing   half the buses   half the depots   half of both');
+  {
+    const bare = city(12, LEVELS - 1, 0);
+    const transit = SERVICES.find((x) => x.key === 'transit');
+    const waste = SERVICES.find((x) => x.key === 'waste');
+    const halfBus = { ...bare, depots: Math.floor(serviceAllowed(bare, transit) / 2), depotStaff: 1 };
+    const halfWaste = { ...bare, wasteDepots: Math.floor(serviceAllowed(bare, waste) / 2), wasteStaff: 1 };
+    const both = { ...halfBus, wasteDepots: halfWaste.wasteDepots, wasteStaff: 1 };
+    console.log(
+      `  ${fixed(garbage(bare), 9, 3)}${fixed(garbage(halfBus), 17, 3)}` +
+        `${fixed(garbage(halfWaste), 18, 3)}${fixed(garbage(both), 15, 3)}`,
+    );
+    console.log('');
+    console.log('  Which is the whole argument for a rate cut over a second collector:');
+    console.log('  `garbage` is load times uncollected share, so the two move different');
+    console.log('  factors and the pair is the product. Two collectors would have been two');
+    console.log('  buttons buying one number — see NOTES.md section 12.');
+  }
+  console.log('');
+}
+
+console.log('what the divisor change costs a save, and what it hands back\n');
+{
+  console.log('  A 12-district v14 city with every 2x2 type at its old five-type allowance:');
+  console.log('');
+  console.log('  type        had   keeps   refunded');
+  const districts = 12;
+  const s = { ...city(districts, 2, 0), districts };
+  let total = 0;
+  let moved = 0;
+  let had = 0;
+  let kept = 0;
+  for (const service of CIVIC_SERVICES) {
+    const offset = CIVIC_SERVICES.findIndex((x) => x.key === service.key);
+    // The waste depot is the type that did not exist, so a v14 save has none.
+    const old =
+      service.key === 'waste'
+        ? 0
+        : Math.max(0, Math.ceil((districts * FRONTAGE_TARGET.civicSites - offset) / 5));
+    const keeps = Math.min(old, serviceAllowed(s, service));
+    let cash = 0;
+    for (let k = keeps; k < old; k++) cash += service.base * service.growth ** k;
+    total += cash;
+    had += old;
+    kept += keeps;
+    // A building moves when its square changes, which is every ordinal past the
+    // first: the old site was `i * 5 + offset` and the new one is `i * 6 +
+    // offset`, and those agree only at i = 0.
+    for (let i = 1; i < keeps; i++) moved++;
+    console.log(
+      `  ${pad(service.key, 10)}${pad(old, 6)}${pad(keeps, 8)}${fixed(cash, 11, 0)}`,
+    );
+  }
+  console.log(`  ${pad('total', 10)}${pad(had, 6)}${pad(kept, 8)}${fixed(total, 11, 0)}`);
+  console.log('');
+  console.log(`  ${moved} of the ${kept} buildings it keeps stand on a different square, which is`);
+  console.log('  the part no migration can undo:');
+  console.log('  `siteCapacity` divides by the table length and a position falls out of the');
+  console.log('  ordinal, so a returning player watches the city rearrange itself. What a');
+  console.log('  migration *can* do is refuse to take a building away in silence, and that');
+  console.log('  is what the refund is for — see `abandonedR`, which settled what permanent');
+  console.log('  loss does to an idle game.');
   console.log('');
 }

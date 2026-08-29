@@ -1057,6 +1057,7 @@ export class Game {
     s.schoolStaff = fill(s.schoolStaff, s.schools);
     s.universityStaff = fill(s.universityStaff, s.universities);
     s.depotStaff = fill(s.depotStaff, s.depots);
+    s.wasteStaff = fill(s.wasteStaff, s.wasteDepots);
     // Plants ramp like everything else on the payroll, so a plant opened this
     // instant is not yet carrying the grid — and an unpaid wage bill takes it
     // back the same way. See `powerSupply`, which reads this.
@@ -1618,6 +1619,9 @@ export class Game {
     } else if (service.key === 'transit') {
       s.depotStaff = staffAfterBuild(s.depotStaff, s.depots);
       s.depots++;
+    } else if (service.key === 'waste') {
+      s.wasteStaff = staffAfterBuild(s.wasteStaff, s.wasteDepots);
+      s.wasteDepots++;
     } else {
       s.universityStaff = staffAfterBuild(s.universityStaff, s.universities);
       s.universities++;
