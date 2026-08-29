@@ -6,7 +6,8 @@ import { countOf } from '../sim/economy.ts';
 import type { GameState } from '../sim/state.ts';
 import { Buildings, type BuildingRef } from './buildings.ts';
 import { Collapse, COLLAPSE_SECONDS } from './collapse.ts';
-import { CameraRig } from './cameraRig.ts';
+import { tourStops, type TourStop } from './tour.ts';
+import { CameraRig, TOUR_CALM } from './cameraRig.ts';
 import { Cars } from './cars.ts';
 import { createSkyReading, dayPhase, RESTING_PHASE, sampleSky } from './daylight.ts';
 import { Fires } from './fires.ts';
@@ -98,6 +99,11 @@ export class View {
    * so. Same shape as `onZoneMode`: the view owns the state and announces it.
    */
   onStreet: ((street: boolean) => void) | null = null;
+  /**
+   * Told where the tour is, and told null when it ends. Same shape again: the
+   * view owns the state and the HUD is a subscriber.
+   */
+  onTour: ((stop: TourStop | null) => void) | null = null;
   /** Reused across clicks. A raycast must not allocate, per frame or otherwise. */
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
@@ -143,6 +149,12 @@ export class View {
     this.cycling = !reducedMotion;
 
     this.rig.onClick = (x, y) => this.pick(x, y);
+    // Straight through: the rig knows where the tour is and this knows who
+    // wants telling. Nothing about it reaches the simulation.
+    this.rig.onTour = (stop) => {
+      this.onTour?.(stop);
+      this.onStreet?.(this.rig.street);
+    };
 
     window.addEventListener('resize', this.onResize);
     window.addEventListener('keydown', this.onKey);
@@ -212,6 +224,18 @@ export class View {
     if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target as HTMLElement | null;
     if (target?.isContentEditable || target instanceof HTMLInputElement) return;
+    // Any key ends the tour, which is the whole of its interaction contract: a
+    // tour the player has to go and find a button to stop is a tour they
+    // resent. T is the exception only in that it is also what starts one, so
+    // pressing it twice reads as a toggle rather than as start-then-nothing.
+    if (this.rig.touring) {
+      this.rig.stopTour();
+      return;
+    }
+    if (event.key === 't' || event.key === 'T') {
+      this.toggleTour();
+      return;
+    }
     // Escape clears the selection, which is the one thing every panel in every
     // application agrees it should do.
     if (event.key === 'Escape') {
@@ -247,6 +271,35 @@ export class View {
   /** Whether the camera is at street level. */
   get street(): boolean {
     return this.rig.street;
+  }
+
+  /** Whether the tour is running. What the HUD's switch marks. */
+  get touring(): boolean {
+    return this.rig.touring;
+  }
+
+  /**
+   * Starts the tour, or stops it if it is already running.
+   *
+   * The stops are derived here rather than held, and derived *again* every time
+   * it starts: the city is a pure function of its counts and the seed, so the
+   * tour is too, and a list built once at construction would fly a
+   * forty-nine-district city around the one district it opened on.
+   *
+   * Nothing is written. `tourStops` is handed a `Readonly<GameState>` and
+   * returns positions; the rig holds them and forgets them when the tour ends.
+   * A tour is a camera path and a camera is view state, exactly as the overlay
+   * and the selection are.
+   */
+  toggleTour(): boolean {
+    if (this.rig.touring) {
+      this.rig.stopTour();
+      return false;
+    }
+    if (!this.lastState) return false;
+    const reduced = !this.cycling;
+    this.rig.startTour(tourStops(this.lastState, !reduced), reduced ? TOUR_CALM : 1);
+    return this.rig.touring;
   }
 
   /**
@@ -285,6 +338,10 @@ export class View {
     // Anything already falling stops falling, rather than finishing under a
     // preference that has just said not to.
     if (reduced) this.collapse.clear();
+    // And a tour that is mid-flight ends, rather than carrying on at a pace the
+    // player has just said is too much. Starting one again gets the calm
+    // version — see TOUR_CALM.
+    if (reduced && this.rig.touring) this.rig.stopTour();
   }
 
   /**

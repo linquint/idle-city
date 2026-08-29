@@ -35,7 +35,7 @@
   <p>every purchase is a building</p>
 </header>
 
-<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z steps the overlay, Shift-Z steps back<br>V goes down to street level</p>
+<p class="hint">Drag to orbit · scroll to zoom<br>Shift-drag or WASD to pan<br>Z steps the overlay, Shift-Z steps back<br>V goes down to street level<br>T flies the city on its own</p>
 
 <!-- The overlay picker. Out of the dock and next to the hint on purpose: it is
      a control over the *map* rather than over the city, and it is the one
@@ -50,7 +50,15 @@
   <div class="camera-pick">
     <button type="button" class="overlay" id="street-view" aria-pressed="false"
       title="Drop the camera to street level. V.">Street level</button>
+    <!-- The tour, beside the street switch because it is the same kind of
+         thing: a control over the *camera*, not over the city. Nothing it does
+         reaches `GameState`, and there is no T key on a phone. -->
+    <button type="button" class="overlay" id="tour" aria-pressed="false"
+      title="Fly the city on its own. Any input stops it. T.">Tour</button>
   </div>
+  <!-- Where the tour is, while it is running. Empty and hidden otherwise, like
+       the overlay note above it. -->
+  <p class="overlay-note" id="tour-note"></p>
   <div class="overlays" id="overlays" role="radiogroup" aria-label="Map overlay"></div>
   <p class="overlay-note" id="overlay-note"></p>
 

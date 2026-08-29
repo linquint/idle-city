@@ -65,6 +65,9 @@ const hud = new Hud(game, layout, {
   // The camera is the view's in exactly the way the overlay is.
   onStreet: () => view.toggleStreet(),
   street: () => view.street,
+  // And the tour, which is a camera in exactly the way street level is.
+  onTour: () => view.toggleTour(),
+  touring: () => view.touring,
   // Not a hook, because it is not a request: the panel reads the store to mark
   // its controls and writes to it, and this module is subscribed to the same
   // store. Nothing about it reaches `game`.
@@ -75,6 +78,9 @@ const hud = new Hud(game, layout, {
 // to move the picker or the two controls would disagree about what is showing.
 view.onZoneMode = (mode) => hud.markOverlay(mode);
 view.onStreet = (street) => hud.markStreet(street);
+// The tour ends on any input, most of which the view sees and the HUD does not,
+// so the switch follows what the view reports rather than what was clicked.
+view.onTour = (stop) => hud.markTour(stop !== null, stop?.name ?? '');
 
 // Selection is view state and stays there: the view owns what was clicked, the
 // HUD owns what is said about it, and neither writes it anywhere.

@@ -220,6 +220,14 @@ export interface HudHooks {
   onStreet?: () => boolean;
   /** Whether the camera is at street level, so the switch opens marked right. */
   street?: () => boolean;
+  /**
+   * Starts the camera tour, or stops it, and reports what it settled on. Same
+   * contract again: the camera is view state and the HUD asks rather than
+   * deciding.
+   */
+  onTour?: () => boolean;
+  /** Whether the tour is running, so the switch opens marked correctly. */
+  touring?: () => boolean;
   /** Dev-only time travel, wired to a button that only exists in dev builds. */
   onSkip?: (seconds: number) => void;
   /** Told when the card is dismissed, so the outline goes with it. */
@@ -538,6 +546,8 @@ export class Hud {
     overlays: el('overlays'),
     overlayNote: el('overlay-note'),
     streetView: el('street-view'),
+    tour: el('tour'),
+    tourNote: el('tour-note'),
     settings: el('settings'),
     settingsBody: el('settings-body'),
     corner: el('corner'),
@@ -801,6 +811,8 @@ export class Hud {
   private readonly settingNotes = new Map<keyof Settings, HTMLElement>();
   /** The mode the picker is marking, so the note can be repainted live. */
   private overlayShown: ZoneMode = 'off';
+  /** What the tour note last said, so an unchanged one is left alone. */
+  private tourNoteShown = '';
   /** What that note last said, so an unchanged one is left alone. */
   private overlayNoteShown = '';
   /** What the rank strip last said, so a repaint a frame is a string compare. */
@@ -952,6 +964,7 @@ export class Hud {
     this.wireSheet();
     this.buildOverlays();
     this.buildStreetView();
+    this.buildTour();
     this.buildSettings();
     this.buildGraphs();
     this.buildAwards();
@@ -1439,6 +1452,36 @@ export class Hud {
    */
   markStreet(street: boolean): void {
     this.nodes.streetView.setAttribute('aria-pressed', String(street));
+  }
+
+  /** Wires the tour switch, if the view offered one. Same shape as the street one. */
+  private buildTour(): void {
+    const button = this.nodes.tour;
+    if (!this.hooks.onTour) {
+      button.hidden = true;
+      return;
+    }
+    button.addEventListener('click', () => this.markTour(this.hooks.onTour?.() ?? false));
+    this.markTour(this.hooks.touring?.() ?? false);
+  }
+
+  /**
+   * Marks whether the tour is running, and says where it has got to.
+   *
+   * Public for the reason `markStreet` is: the T key belongs to the view, and
+   * so does *every other key* — any input ends the tour — so the view reports
+   * what happened and the switch follows rather than the two disagreeing.
+   */
+  markTour(running: boolean, where?: string): void {
+    this.nodes.tour.setAttribute('aria-pressed', String(running));
+    // `where` left out means "the switch moved and nobody said where" — which
+    // is the click handler, firing after the view has already announced the
+    // first stop. Clearing the note there would wipe the name a moment after
+    // writing it.
+    const text = !running ? '' : (where ?? this.tourNoteShown);
+    if (text === this.tourNoteShown) return;
+    this.tourNoteShown = text;
+    this.nodes.tourNote.textContent = text;
   }
 
   /**
