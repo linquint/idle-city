@@ -28,6 +28,7 @@ import {
   NETWORK_WORKFORCE,
   RANKS,
   RANK_GATES,
+  RAIL_VISITORS,
   TRANSIT_LINES,
   TRANSIT_MAX_SHARE,
   CIVIC_SERVICES,
@@ -68,6 +69,10 @@ import {
   networkCapacity,
   networkReach,
   networkService,
+  income,
+  exportMarket,
+  visitorSources,
+  visitors,
   cityScale,
   congestion,
   coverage,
@@ -79,6 +84,7 @@ import {
   faresWaived,
   garbageLoad,
   garbageRate,
+  happinessTarget,
   housingPlots,
   jobs,
   landmarkCoverage,
@@ -646,6 +652,16 @@ console.log('1   rail and tram');
 console.log('='.repeat(78));
 console.log('');
 
+/**
+ * The same city with its happiness settled where the model would put it.
+ *
+ * `city` pins happiness at 1 so a coverage reading is a coverage reading. Every
+ * *income* reading has to undo that, because a modifier in the happiness
+ * bracket — which is where congestion is, and where the network reaches the
+ * ledger — does nothing at all to a city held at the top.
+ */
+const settled = (s) => ({ ...s, happiness: happinessTarget(s) });
+
 /** The same city, with `tram` tram lines and `rail` rail lines laid. */
 const wired = (districts, level, serve, tram, rail) => {
   const s = city(districts, level, serve);
@@ -782,8 +798,9 @@ console.log('congestion, with the network and without\n');
 
 console.log('what a network is worth to commercial and industrial demand\n');
 {
-  console.log(`  NETWORK_WORKFORCE ${NETWORK_WORKFORCE} (the commerce channel),` +
-    ` NETWORK_EXPORT_LIFT ${NETWORK_EXPORT_LIFT} (the freight one)`);
+  console.log(`  NETWORK_EXPORT_LIFT ${NETWORK_EXPORT_LIFT} (freight),` +
+    ` RAIL_VISITORS ${RAIL_VISITORS} berths (shoppers),` +
+    ` NETWORK_WORKFORCE ${NETWORK_WORKFORCE} (labour, measured out)`);
   console.log('');
   console.log('  districts   level   depots   network      C before    C after     I before     I after');
   for (const d of [4, 12, 25, MAX_DISTRICTS]) {
@@ -811,5 +828,60 @@ console.log('what a network is worth to commercial and industrial demand\n');
         fixed(a.c, 13, 3) + fixed(b.c, 11, 3) + fixed(a.i, 13, 3) + fixed(b.i, 12, 3),
     );
   }
+  console.log('');
+}
+
+console.log('the freight lift where it is legible: against demandScale, not clamped\n');
+{
+  console.log('  `demandTargets.i` divides by `demandScale`, which climbs the level ladder');
+  console.log('  faster than `exportMarket` does — so the whole export family is small at');
+  console.log('  the top and worth something in the middle, which is where a city plays.');
+  console.log('');
+  console.log('  districts   level   export/scale   network lift   one cargo berth');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [1, 2, 4]) {
+      const bare = city(d, level, 0);
+      const full = wired(d, level, 0, 0, d);
+      const berth = { ...bare, cargoTerminals: 1 };
+      const scale = demandScale(bare);
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${fixed(exportMarket(bare) / scale, 15, 4)}` +
+          fixed((exportMarket(full) - exportMarket(bare)) / scale, 15, 4) +
+          fixed((exportMarket(berth) - exportMarket(bare)) / scale, 18, 4),
+      );
+    }
+  }
+  console.log('');
+}
+
+console.log('the shoppers, and what the whole network is worth to the ledger\n');
+{
+  console.log('  Every city here is settled at its own happiness target rather than pinned');
+  console.log('  at 1, which is the whole point: most of what a network is worth arrives');
+  console.log('  through the mood, and a city held at 1 cannot show it.');
+  console.log('');
+  console.log('  districts   level   berths by rail   visitors by rail   mood   income');
+  for (const d of [4, 12, 25, MAX_DISTRICTS]) {
+    for (const level of [2, 4]) {
+      const bare = settled(city(d, level, 1));
+      const full = settled(wired(d, level, 1, 0, d));
+      const from = visitorSources(full);
+      console.log(
+        `  ${pad(d, 9)}${pad(level, 8)}${fixed(RAIL_VISITORS * networkService(full), 15, 2)}` +
+          `${fixed(from.rail, 19, 0)}` +
+          `${fixed(full.happiness - bare.happiness, 7, 3)}` +
+          `${pct((income(full) - income(bare)) / Math.max(1e-9, income(bare)), 9, 2)}`,
+      );
+    }
+  }
+  console.log('');
+  console.log('  So the network is worth +0.034 of mood and +1.56% of income at the top of');
+  console.log('  the ladder, at every district count — and almost all of it arrives through');
+  console.log('  congestion rather than through the two demand channels. That is size-');
+  console.log('  invariant, which the trade lines are not: a whole waterfront is about half');
+  console.log("  a percent of a mature ledger and falls with the city's size, where this");
+  console.log('  holds because congestion holds. A played run agrees: 100% happiness at 6h');
+  console.log('  with the network against 98% without (tools/economy.calibrate.mjs,');
+  console.log('  "disciplined + network"), for a district\'s worth of capital.');
   console.log('');
 }
