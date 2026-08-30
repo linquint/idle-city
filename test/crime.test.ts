@@ -84,7 +84,22 @@ describe('crime is a quantity, not an absence of police', () => {
     expect(CRIME_FROM_CROWDING + CRIME_FROM_IDLENESS).toBeCloseTo(1, 12);
     // A maximally crowded, wholly idle city reads exactly 1, which is what
     // makes CRIME_MOOD mean what its comment says it means.
-    const pinned = { ...city(25, LEVELS - 1), police: 0, policeStaff: 0 };
+    //
+    // Wholly idle means *no employers*, and it has to be said out loud now.
+    // `city` trades and makes on every district, so this fixture was never
+    // actually idle — it held 18,425 jobs against 396,000 workers and read 1
+    // only because `unemployment` divided by `demandScale`, which a level-4
+    // city of twenty-five districts dwarfed. Since the ratio became the honest
+    // one (see `unemployment`), the same fixture reads 0.95, which is the
+    // correct answer to a question this test is not asking. So the shops and
+    // the works come out, and the claim in the line above is the one measured.
+    const pinned = {
+      ...city(25, LEVELS - 1),
+      ...trading(0),
+      ...making(0),
+      police: 0,
+      policeStaff: 0,
+    };
     expect(crimeCrowding(pinned)).toBe(1);
     expect(unemployment(pinned)).toBe(1);
     expect(crimePressure(pinned)).toBe(1);

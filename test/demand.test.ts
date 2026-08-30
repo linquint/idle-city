@@ -8,6 +8,7 @@ import {
   INDUSTRY_GROWTH,
   INDUSTRY_JOBS,
   INDUSTRY_OUTPUT,
+  JOBS_LADDER,
   JOBS_PER_COMMERCIAL,
   JOBS_PER_INDUSTRIAL,
   FRONTAGE_TARGET,
@@ -381,28 +382,72 @@ describe('the cycle', () => {
 /**
  * What levels do to commerce and industry.
  *
- * The claim the per-level ladders make: jobs, trips, supply and output are
- * constant *per plot* at every level, so ZONE_SHARE's tier-0 equilibrium
- * 14R = 8C + 20I is the equilibrium at every level rather than only the first.
- * Income is the thing a level moves, and it moves it by LEVEL_SCALE.
+ * Three ladders, and the whole design is that they climb at different speeds.
+ * Capacity is the fastest (LEVEL_CAPACITY, 300x a plot), trade is next
+ * (TRADE_LADDER, exponent 0.65), jobs are the slowest (JOBS_LADDER, exponent
+ * 0.5) and income takes capacity whole (LEVEL_SCALE). So a shop that climbs a
+ * rung serves more people than it hires, and a housing plot that climbs one
+ * gains residents faster than the city gains work for them — which is the arc
+ * WORKING_SHARE describes, and the thing every assertion below is protecting.
  */
 describe('commercial and industrial levels', () => {
   const perPlot = (s: GameState, kind: 'shop' | 'industry', ladder: readonly number[]): number =>
     cohortAgainst(kind === 'shop' ? s.shopLevels : s.industryLevels, ladder) /
     cohortFootprint(kind === 'shop' ? s.shopLevels : s.industryLevels);
 
-  it('employ the same per plot at every level', () => {
-    // The half of the old claim that is still the design. Jobs are what the
-    // ZONE_SHARE equilibrium is solved against, and a ladder on them freezes the
-    // job/worker arc at level 0 — see SHOP_JOBS for the measurement that killed
-    // the attempt. Flat, at every rung, forever.
+  it('employ more per plot as they climb, more slowly than they trade', () => {
+    // Jobs used to be flat at every rung, and the arc that justified it is
+    // still the design — but flat is not what delivers it. Flat delivered it by
+    // *decay*: workers climb 300x a plot while jobs stand still, so by
+    // megastructures a district held 15,840 workers against 584 jobs and the
+    // employment term was 0.6% of the residential signal. Commerce had stopped
+    // being an answer to housing demand at all — doubling every shop in a
+    // settled city moved residential demand by 0.026 — so "a mature city has to
+    // go and find them work" was a sentence the game said and the player could
+    // not act on. See JOBS_LADDER for the sweep that set the exponent.
+    //
+    // What replaces it is the middle TRADE_LADDER already found for trade: jobs
+    // climb, strictly slower than capacity, so the arc survives as a *slope*
+    // rather than as a decay to nothing.
+    let previous = 0;
     for (let level = 0; level < LEVELS; level++) {
-      const shops = state({ ...trading(8, level), occupancyC: 1 });
-      expect(perPlot(shops, 'shop', SHOP_JOBS)).toBeCloseTo(JOBS_PER_COMMERCIAL, 9);
+      const capacity = (LEVEL_CAPACITY[level] as number) / (LEVEL_CAPACITY[0] as number);
+      const ladder = JOBS_LADDER[level] as number;
 
+      const shops = state({ ...trading(8, level), occupancyC: 1 });
+      const employs = perPlot(shops, 'shop', SHOP_JOBS);
+      expect(employs).toBeCloseTo(JOBS_PER_COMMERCIAL * ladder, 9);
+      expect(employs).toBeGreaterThan(previous);
+      previous = employs;
+
+      // Industry takes the same ladder, as a matched pair — the labour market
+      // has one shape, not one per zone.
       const works = state({ ...making(6, level), occupancyI: 1 });
-      expect(perPlot(works, 'industry', INDUSTRY_JOBS)).toBeCloseTo(JOBS_PER_INDUSTRIAL, 9);
+      expect(perPlot(works, 'industry', INDUSTRY_JOBS)).toBeCloseTo(
+        JOBS_PER_INDUSTRIAL * ladder,
+        9,
+      );
+
+      // Strictly under capacity, which is what keeps the arc: a proportional
+      // ladder freezes the job/worker ratio at whatever it is at level 0 and
+      // the city is job-rich for its whole life. That is the second of the two
+      // failures LEVEL_SCALE's comment records and it is still exactly as fatal.
+      expect(ladder).toBeLessThanOrEqual(capacity + 1e-9);
+      if (level > 0) expect(ladder).toBeLessThan(capacity);
+
+      // And strictly under trade above the first rung, which is what a level
+      // *is*: a bigger shop serves more people than it hires.
+      if (level > 0) expect(ladder).toBeLessThan(TRADE_LADDER[level] as number);
     }
+  });
+
+  it('leaves the first rung of the jobs ladder at exactly 1', () => {
+    // The same compatibility claim TRADE_LADDER makes below. A city with
+    // nothing above level 0 employs exactly what it employed before
+    // JOBS_LADDER existed, so the opening minute is untouched by any of this.
+    expect(JOBS_LADDER[0]).toBe(1);
+    expect(SHOP_JOBS[0]).toBeCloseTo(JOBS_PER_COMMERCIAL, 12);
+    expect(INDUSTRY_JOBS[0]).toBeCloseTo(JOBS_PER_INDUSTRIAL, 12);
   });
 
   it('serve and make more per plot as they climb, sub-linearly', () => {
@@ -450,16 +495,21 @@ describe('commercial and industrial levels', () => {
     expect(INDUSTRY_OUTPUT[0]).toBeCloseTo(INDUSTRIAL_OUTPUT, 12);
   });
 
-  it('leave the labour market where ZONE_SHARE put it, at every level', () => {
+  it('carry the labour market from job-rich to worker-rich, at ZONE_SHARE\'s split', () => {
     // The zoning budget solves 14 workers a housing plot against 8 jobs a
-    // commercial one and 20 an industrial one. Building a district out on that
-    // split at each level has to leave the job side of the balance untouched:
-    // only the worker side moves, which is the arc WORKING_SHARE describes.
+    // commercial one and 29 an industrial one. What a level does to that
+    // balance is the arc: both sides climb now, the worker side climbs faster,
+    // and the city crosses from job-rich to worker-rich somewhere in the middle
+    // of the ladder rather than at its first rung or never.
     const split = { r: 48, c: 31, i: 21 };
-    let previous = -1;
+    let previousWorkers = -1;
+    let previousJobs = -1;
+    let previousRatio = -1;
+    let crossings = 0;
     for (let level = 0; level < LEVELS; level++) {
       // Plot counts, not building counts: a merged level covers two plots each.
       const plots = LEVEL_FOOTPRINT[level] ?? 1;
+      const ladder = JOBS_LADDER[level] as number;
       const s = state({
         ...housed(split.r / plots, level),
         ...trading(split.c / plots, level),
@@ -468,12 +518,26 @@ describe('commercial and industrial levels', () => {
         occupancyC: 1,
         occupancyI: 1,
       });
-      expect(jobs(s)).toBeCloseTo(split.c * JOBS_PER_COMMERCIAL + split.i * JOBS_PER_INDUSTRIAL, 6);
-      // And the worker side climbs, which is what carries the city from
-      // job-rich to worker-rich rather than pinning it at one or the other.
-      expect(workers(s)).toBeGreaterThan(previous);
-      previous = workers(s);
+      expect(jobs(s)).toBeCloseTo(
+        (split.c * JOBS_PER_COMMERCIAL + split.i * JOBS_PER_INDUSTRIAL) * ladder,
+        6,
+      );
+      // Both sides climb...
+      expect(jobs(s)).toBeGreaterThan(previousJobs);
+      expect(workers(s)).toBeGreaterThan(previousWorkers);
+      // ...and the worker side climbs faster, which is the whole arc. A ratio
+      // that stood still would be the job ladder deleting it.
+      const ratio = workers(s) / jobs(s);
+      expect(ratio).toBeGreaterThan(previousRatio);
+      if (previousRatio < 1 && ratio >= 1) crossings++;
+      previousJobs = jobs(s);
+      previousWorkers = workers(s);
+      previousRatio = ratio;
     }
+    // And it crosses exactly once: a young city pulls people in, a mature one
+    // has to go and find them work, and it is one city rather than two.
+    expect(crossings).toBe(1);
+    expect(previousRatio).toBeGreaterThan(1);
   });
 
   it('raise what a plot earns even though they leave what it employs alone', () => {

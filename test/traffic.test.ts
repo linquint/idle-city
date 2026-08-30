@@ -104,10 +104,20 @@ describe('trips', () => {
       const s = city(4, level);
       expect(trips(s)).toBeCloseTo(residents(s) * TRIPS_PER_RESIDENT, 9);
     }
-    // The measurement that forces it: a finished city is enormously worker-rich,
-    // so matched pairs would read a mature city as having almost no traffic.
+    // The measurement that forces it: a finished city is worker-rich, so
+    // matched pairs would under-read its commute — and would miss its shopping
+    // trips altogether, which is the larger half of the argument and the half
+    // no job ladder can touch.
+    //
+    // It used to be worker-rich by 14.7x and this line asserted a tenfold gap.
+    // That gap was the labour market having decayed rather than the arc working
+    // — jobs stood still per plot while residents climbed 300x — and JOBS_LADDER
+    // has closed it to about 1.2x. The *sign* is what the arc is, and it is
+    // what this asserts now: still worker-rich at the top of the ladder, and
+    // still under-read by matched pairs.
     const finished = city(MAX_DISTRICTS, LEVELS - 1);
-    expect(workers(finished)).toBeGreaterThan(jobs(finished) * 10);
+    expect(workers(finished)).toBeGreaterThan(jobs(finished));
+    expect(trips(finished)).toBeGreaterThan(Math.min(workers(finished), jobs(finished)));
   });
 
   it('go to nothing when nobody lives there', () => {

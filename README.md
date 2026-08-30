@@ -563,14 +563,12 @@ so the order you build in decides which button is cheap next. A positive signal
 discounts that type's price and a negative one surcharges it, which is what
 stops "press whichever button is cheapest" from being the dominant strategy.
 
-**A bigger shop serves a bigger crowd, sub-linearly.** Jobs are flat per plot at
-every level and always will be — that is the arc `WORKING_SHARE` describes, and
-a ladder on them freezes it — but trips, goods drawn and goods made climb with
-capacity to the power 0.65. Flat, they made the city want 0.29 commercial plots
-per housing plot at the bottom of the ladder and 85.71 at the top, against the
-1.88 a district sells: 45.7x short of commerce with nothing a player could do
-about it, which is what pinned commerce at +1 and housing at -1 the moment the
-two drifted apart.
+**A bigger shop serves a bigger crowd, sub-linearly.** Trips, goods drawn and
+goods made climb with capacity to the power 0.65. Flat, they made the city want
+0.29 commercial plots per housing plot at the bottom of the ladder and 85.71 at
+the top, against the 1.88 a district sells: 45.7x short of commerce with nothing
+a player could do about it, which is what pinned commerce at +1 and housing at
+-1 the moment the two drifted apart.
 
 The exponent is set by where the ask *ends*, not where it crosses the land. At
 the square root it ended at 4.95 commercial plots per housing plot — still 2.6x
@@ -580,6 +578,36 @@ residential against 57 commercial one parcel at a time. At 0.65 the top rung ask
 for 2.10, or 12% more than a district already sells, which is a couple of parcels
 of surveying. Higher than about 0.7 and the top rung wants *less* commerce than
 the land offers, and the zone stops being something the city has to argue for.
+
+**A bigger shop also hires a bigger staff, more slowly still.** Jobs climb at the
+power 0.5 — the square root of capacity — so the three ladders run capacity,
+trade, jobs at 1, 0.65, 0.5, fastest to slowest. A plot that houses 300x the
+people employs 17x as many, and a shop that climbs a rung serves more people than
+it hires, which is what a level *is*.
+
+Jobs used to be flat, to protect the arc `WORKING_SHARE` describes: young cities
+are job-rich and pull people in, mature ones are worker-rich and have to go and
+find them work. Flat did deliver that arc, but by *decay* — a district of
+megastructures held 15,840 workers and 584 jobs, so the employment half of
+residential demand was 0.6% of the signal. Doubling every shop and every works in
+a settled city moved it by 0.03. The game said "go and find them work" and had no
+button that did it. A slope keeps the arc as a slope: the same district now holds
+15,840 workers against 10,115 jobs, the sign still turns exactly once on the way
+up the ladder, and building commerce is finally an answer to housing demand.
+`npm run demand:calibrate` prints the sweep the exponent was set from.
+
+**Demand is a ratio, so it reads the same at every size.** The signals are
+city-wide totals — every worker, every shopper, every trip — divided by
+`demandScale`, and that scale has to grow with the city or the panel is a
+district counter. It did not, for a long time: it was one district's labour pool
+whatever the city's size, so a city in *perfect* proportion read -0.30 at one
+district, -0.97 at five and pinned at -1.00 by eight, with forty-one districts
+still to annex. A thirteen-district city showed R -97% / C +43% / I +49% while
+holding more commerce per housing plot than its own frontage calls for. Past
+three districts the scale is the city's own population instead, floored below
+that at the old constant so the opening minute is untouched — the two arms cross
+at 75 housing plots. A signal now says what the city is short *of*, not how big
+it is.
 
 **Services reach demand directly, not only through mood.** Until `DEMAND_TERMS`
 existed, everything the player built reached the demand loop through exactly one
@@ -812,8 +840,13 @@ Crime used to be an abstraction: police coverage fed the mood directly, so "how
 safe is the city" meant "how many police stations did you buy". It is a quantity
 now, with sources the city can act on — crowding, which is residents per housing
 plot, and idleness, which is the labour imbalance `demandTargets` already reads,
-normalised by `demandScale` because this game is structurally worker-rich and a
-naive jobs-over-workers ratio reads 96% at every size.
+as a plain share of the workforce. That reading used to be impossible: with jobs
+flat per plot, `1 - jobs/workers` read 96% at every size and would have been a
+level term wearing an unemployment label, so it had to divide by `demandScale`
+instead. `JOBS_LADDER` is what made the honest ratio honest. A floor at
+`DEMAND_SCALE` is all that survives of the old denominator, and it is there so a
+one-house city with no shops yet reads under a percent idle rather than wholly
+idle — crime should not charge a village for being a village.
 
 That made the weight a decision rather than an addition, and it was taken the
 way the brief framed it. Police carried 0.26 in a weighted sum of four; charging

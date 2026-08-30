@@ -1304,7 +1304,7 @@ sites across `economy.ts`, `game.ts` and `save.ts`:
 | the labour market, `WORKING_SHARE` | a *share* of residents becomes a share of the working-age bucket, and `ZONE_SHARE` solves `14R = 8C + 20I` against the old one |
 | every coverage denominator | already housing *plots*, so untouched — the one part of this that is free |
 | all three `demandTargets` | `demandScale`, `SPEND_PER_RESIDENT`, `labourReach` |
-| `crime` | both halves: `crimeCrowding` is residents per plot, `unemployment` is workers over `demandScale` |
+| `crime` | both halves: `crimeCrowding` is residents per plot, `unemployment` is workers less jobs over the workforce, floored at `DEMAND_SCALE` |
 | `garbageRate` | per resident |
 | `TRIPS_PER_RESIDENT`, `congestion` | per resident |
 | `visitors` and every tourism line | `VISITORS_PER_RESIDENT` |

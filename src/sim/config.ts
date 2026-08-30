@@ -244,15 +244,24 @@ export const FRONTAGE_TARGET = {
  *   arcologies        6.39       -0.14  +0.13  +0.01  -0.14  +0.04  +0.03
  *   megastructures   25.55       -0.16  +0.14   0.00  -0.16  +0.09  +0.01
  *
- * The residential column does not move at all, and that is the whole of the
- * split TRADE_LADDER is: jobs stay flat, so the labour market this budget
- * solves is untouched at every rung. What moves is commerce, from a curve that
+ * The residential column does not move at all, and that was the whole of the
+ * split TRADE_LADDER is: jobs stayed flat, so the labour market this budget
+ * solves was untouched at every rung. What moved is commerce, from a curve that
  * ran -0.82 to +0.14 to one that runs -0.82 to +0.09 through a shallower
  * middle — and, far more importantly, the *land* those numbers imply. See
  * TRADE_LADDER for the ratio the flat ladder was asking the district for.
  *
- * The right-hand column is the ladder as it stood at exponent 0.5, kept because
- * what this table is about is the residential column standing still. The
+ * That table is history now and is kept as one: JOBS_LADDER has since put a
+ * slope on jobs too, so the w/j column runs 0.09 to 1.57 rather than 0.09 to
+ * 25.55 and the residential column with it. Read `npm run demand:calibrate` for
+ * the arc as it stands. What survives of the paragraph above is the part this
+ * budget is about, and it survives exactly: JOBS_PER_COMMERCIAL and
+ * JOBS_PER_INDUSTRIAL do not move, so 14R = 8C + 29I is still the equilibrium
+ * this split solves and it is still solved at level 0. Every rung above it
+ * walks away from that solution more slowly than it used to, which is a
+ * statement about the ladders and not about the budget.
+ *
+ * The right-hand column is the trade ladder as it stood at exponent 0.5. The
  * exponent has since gone to 0.65 and commerce's column with it — flatter again
  * through the middle and lower at the top — for reasons that are entirely about
  * the land and not about this budget. TRADE_LADDER carries them.
@@ -366,18 +375,22 @@ export const LEVEL_HOUSING = LEVEL_CAPACITY.map(
  *     have to go and find them work.
  *
  * Both are still true, and they are true about *different ladders*, which is
- * what the flat answer missed. The first is an argument about how fast trade
- * may climb, not about whether it may: at exponent 1 the land can never be
- * filled and at exponent 0 the city wants 45.7x the commercial land a district
- * holds. TRADE_LADDER is the middle, and its exponent is set by where the
- * wanted ratio crosses the land rather than by either failure. The second is an
- * argument about jobs and admits no middle at all — SHOP_JOBS and INDUSTRY_JOBS
- * stay flat, and the arc survives at every rung.
+ * what the flat answer missed. Each is an argument about how fast its ladder
+ * may climb rather than about whether it may, and each is answered by an
+ * exponent set from where its own failure begins. At trade exponent 1 the land
+ * can never be filled and at 0 the city wants 45.7x the commercial land a
+ * district holds; TRADE_LADDER is the middle, set by where the wanted ratio
+ * crosses the land. At jobs exponent 1 the arc is deleted and at 0 it is
+ * delivered by decay — the employment term falls to 0.6% of the residential
+ * signal, so commerce stops being an answer to housing demand and the arc is a
+ * sentence the player cannot act on; JOBS_LADDER is that middle, set by where
+ * the arc still turns and the lever still moves.
  *
- * So levels raise what a building is worth to the ledger, leave the number of
- * people it employs per plot alone, and raise the trade it carries sub-linearly.
- * A district still needs more shops as its towers fill, which is what fills the
- * land, and the land filling is what makes annexation reachable.
+ * So levels raise what a building is worth to the ledger in full, and raise the
+ * trade it carries and the people it employs sub-linearly — trade faster than
+ * jobs, so a bigger shop serves more people than it hires. A district still
+ * needs more shops as its towers fill, which is what fills the land, and the
+ * land filling is what makes annexation reachable.
  *
  * Derived from LEVEL_CAPACITY rather than typed out, so the two can never drift,
  * and multiplied by the footprint for the same reason LEVEL_HOUSING is: this is
@@ -1015,27 +1028,36 @@ export const CATCHUP_MAX_STEPS = 1_024;
 export const DEMAND_TAU = 25;
 
 /**
- * The imbalance, in people or trips, at which a demand signal saturates.
+ * The imbalance, in people or trips, at which a demand signal saturates — for a
+ * city too small to measure against itself.
  *
  * The labour pool of one district built out at ZONE_SHARE's own design point:
  * 43 residential plots x 14 workers. "Saturated" therefore means "a whole
  * district out of balance" rather than an arbitrary number, and the constant
  * stays derived from the same equilibrium the zoning budget is.
  *
- * Measured over 24 hours: nothing pins under idle or auto-develop, and
- * auto-develop ends at R +0.57 / C -0.02 / I -0.02 — lively, and well short of
- * the bounds.
- *
  * Not a constant scale, and this is the constant it is built out of rather than
- * the scale itself: `demandScale` multiplies it by `cityScale`, the mean
- * LEVEL_SCALE a housing plot carries. The imbalance a built city can reach
- * scales with the level ladder, which now spans 4 to 1,200 residents a plot —
- * 300x — and no single constant covers that: a scale set for megastructures
- * would leave the opening hour flat, and one set for the opening pins
- * everything above towers. Dividing by the size term is what keeps one number
- * meaningful at both ends, and it is why the fifth rung moved a built-out
- * district's demand by 0.01. See ZONE_SHARE for the measurement, and
- * tools/economy.calibrate.mjs for the runs.
+ * the scale itself. `demandScale` multiplies it by `cityScale`, the mean
+ * LEVEL_SCALE a housing plot carries, because the imbalance a built city can
+ * reach scales with the level ladder — 4 to 1,200 residents a plot, 300x — and
+ * no single constant covers that: a scale set for megastructures would leave
+ * the opening hour flat, and one set for the opening pins everything above
+ * towers.
+ *
+ * And it is the *floor* rather than the scale, which is the half that was
+ * missing. This is one district's pool whether the city has one district or
+ * forty-nine, and every quantity the model divides is a city-wide total, so on
+ * its own it measured an absolute imbalance against a fixed yardstick and every
+ * signal diverged with the district count. `demandScale` measures a city past
+ * three districts against its own population instead and takes this as the
+ * floor under it; the two arms cross at 75 housing plots, which is why the
+ * opening minute is untouched by any of it. See `demandScale` for the table
+ * that forced the change, and `npm run demand:calibrate` for the runs.
+ *
+ * Measured over 48 hours with both arms in place: nothing pins under any of the
+ * five policies, and a settled city ends at R -0.05 to -0.13 / C +0.33 to +0.46
+ * / I +0.13 to +0.15 — lively, and well short of the bounds. See
+ * tools/economy.calibrate.mjs.
  */
 export const DEMAND_SCALE = 300;
 
@@ -1048,6 +1070,14 @@ export const DEMAND_SCALE = 300;
  * Below it the city is job-rich and residential demand runs positive; above it
  * worker-rich and it runs negative. That arc is deliberate: young cities pull
  * people in, mature ones have to go and find them work.
+ *
+ * The clearing point is the level-0 reading and JOBS_LADDER moves where the arc
+ * actually turns, since the job side of it now climbs too — measured, a
+ * district built out at its own frontage crosses from job-rich to worker-rich
+ * between arcologies and megastructures, at 1.57 workers a job at the top. What
+ * does not move is this share or the equation above it: the ladder multiplies
+ * both sides of 8C + 29I and leaves 14R alone, so the solution is the same
+ * solution.
  */
 export const WORKING_SHARE = 0.55;
 
@@ -1077,29 +1107,80 @@ export const JOBS_PER_COMMERCIAL = 8;
 export const JOBS_PER_INDUSTRIAL = 29;
 
 /**
- * What one commercial or industrial *building* is worth to the labour market at
- * each level. The footprint, and nothing else.
+ * How many more people a plot employs at each level than a level-0 plot does.
  *
- * Jobs are the ladder that must not move, and the reason is the arc
- * WORKING_SHARE is built around: workers per housing plot climb 300x while jobs
- * per commercial plot stand still, so a young city is job-rich and pulls people
- * in and a mature one is worker-rich and has to go and find them work. Put a
- * ladder on jobs and that arc is deleted — the job/worker ratio freezes at
- * whatever it is at level 0 and the city is job-rich for its whole life.
+ * The third of the three ladders, and the last one to be given a slope. It used
+ * to be flat, and the argument for flat was the arc WORKING_SHARE is built
+ * around: workers per housing plot climb 300x, so if jobs per commercial plot
+ * stand still a young city is job-rich and pulls people in and a mature one is
+ * worker-rich and has to go and find them work. That arc is still the design.
+ * What flat got wrong is that it delivered the arc by *decay*.
  *
- * Measured, because it was tried. With a [1, 2.5, 7, 20, 55] ladder on jobs, a
- * district built out at one level reads residential demand +1.00 at detached
- * housing, *+1.00 again* at apartments, then +0.60 / +0.35 / +0.19. Pinned
- * positive for two rungs and never once negative: the city never becomes
- * worker-rich and residential demand never turns. That is the second of the two
- * failures LEVEL_SCALE's comment records, and it is still exactly as fatal.
+ * A district built out at megastructures holds 15,840 workers. Flat jobs gave
+ * it 584 of them somewhere to go — 3.7% — so the employment half of
+ * `demandTargets.r` was 0.6% of the signal and residential demand was, to three
+ * decimal places, minus the worker term. Nothing a player built could touch it:
+ * doubling every shop and every works in a settled city moved residential
+ * demand by 0.032 and 0.028. The city said "go and find them work" and had no
+ * button that did. Worse, the same decay is what `unemployment` had to divide
+ * around, because `1 - jobs/workers` read 96% at every rung and would have been
+ * a level term wearing an unemployment label.
  *
- * Trips, supply and output are a different question with a different partner —
- * see TRADE_LADDER, which is the one that moved.
+ * So jobs take the middle TRADE_LADDER already found for trade, and for the
+ * same reason: the failure at one end is not an argument for the other end.
+ * Measured, on the level arc in one district and on a settled 24-hour
+ * disciplined city — `npm run demand:calibrate`:
+ *
+ *   exp   residential demand up the ladder      settled   commerce lever   idle
+ *         L0     L1     L2     L3     L4                  half -> double
+ *   0.00  +1.00  +0.22  -0.19  -0.28  -0.30      -0.32    -0.33 -> -0.30   91.3%
+ *   0.25  +1.00  +0.43  -0.07  -0.23  -0.27      -0.21    -0.25 -> -0.13   65.8%
+ *   0.35  +1.00  +0.54  +0.00  -0.18  -0.25      -0.11    -0.18 -> +0.03   43.7%
+ *   0.50  +1.00  +0.73  +0.16  -0.08  -0.19      -0.08    -0.15 -> +0.06   37.5%
+ *   0.65  +1.00  +0.97  +0.41  +0.13  -0.04      +0.15    +0.04 -> +0.37    0.0%
+ *
+ * Two columns decide it. The **arc** has to turn, and turn once: at 0.65 the
+ * city is still job-rich at arcologies and reads no idleness at all at the top,
+ * which is the proportional failure arriving early — the same one
+ * LEVEL_SCALE's comment records, where a job ladder freezes the ratio at level
+ * 0 and the city is job-rich for its whole life. The **lever** has to exist: at
+ * 0.00 the whole commercial stock of a settled city is worth 0.03 of the
+ * signal, which is a mechanic the player cannot feel.
+ *
+ * 0.5 is where both are true with the most room either side, and it is the
+ * exponent with a statement behind it as well as a measurement: jobs climb as
+ * the *square root* of capacity, so a plot holding 300x the people employs 17x
+ * as many, and the imbalance between them widens 17x up the ladder rather than
+ * 300x (flat) or not at all (proportional). It sits below TRADE_EXPONENT's 0.65
+ * by design and `test/demand.test.ts` asserts it stays there: a shop that
+ * climbs a rung has to serve more people than it hires, which is what a level
+ * *is*. Capacity, trade, jobs — 1, 0.65, 0.5 — fastest to slowest.
+ *
+ * What it does not touch is JOBS_PER_COMMERCIAL and JOBS_PER_INDUSTRIAL, so
+ * ZONE_SHARE's tier-0 equilibrium is solved against the same two numbers it
+ * always was, and the first rung is exactly 1: a city with nothing above level
+ * 0 employs precisely what it employed before this ladder existed.
  */
-export const SHOP_JOBS = LEVEL_FOOTPRINT.map((f) => JOBS_PER_COMMERCIAL * f) as readonly number[];
+export const JOBS_EXPONENT = 0.5;
+
+export const JOBS_LADDER = LEVEL_CAPACITY.map(
+  (capacity) => (capacity / (LEVEL_CAPACITY[0] ?? 1)) ** JOBS_EXPONENT,
+) as readonly number[];
+
+/**
+ * What one commercial or industrial *building* is worth to the labour market at
+ * each level: the ladder above, times the footprint.
+ *
+ * The footprint for the reason LEVEL_HOUSING carries it — this is per
+ * *building* and a merged one stands on two plots — so per *plot* these are
+ * JOBS_PER_COMMERCIAL and JOBS_PER_INDUSTRIAL times JOBS_LADDER, which is the
+ * form every derivation above is written in.
+ */
+export const SHOP_JOBS = LEVEL_FOOTPRINT.map(
+  (f, l) => JOBS_PER_COMMERCIAL * (JOBS_LADDER[l] ?? 1) * f,
+) as readonly number[];
 export const INDUSTRY_JOBS = LEVEL_FOOTPRINT.map(
-  (f) => JOBS_PER_INDUSTRIAL * f,
+  (f, l) => JOBS_PER_INDUSTRIAL * (JOBS_LADDER[l] ?? 1) * f,
 ) as readonly number[];
 
 /**
@@ -1510,9 +1591,22 @@ export const INDUSTRY_RESERVE = FRONTAGE_TARGET.industrial - ZONE_FLOOR.industry
  * The demand a zone needs before the surveyor will zone it more land.
  *
  * Above the noise a settled city sits at — the disciplined policy ends a day at
- * R -0.36 / C +0.53 / I +0.30 — so a city drifting near balance does not slowly
+ * R -0.08 / C +0.39 / I +0.15 — so a city drifting near balance does not slowly
  * rezone itself into whatever it happened to want last. It has to actually be
  * short.
+ *
+ * Still 0.35, and it is worth saying why it did not move when the readings
+ * under it did. The quoted settled figures used to be R -0.36 / C +0.53 /
+ * I +0.30, which looks like the same relationship to this gate; it was not. Those
+ * were taken while `demandScale` ignored the city's size, so a settled city's
+ * signals were a function of its district count and the gate opened constantly
+ * — the surveyor spent a 48-hour run driving districts to *zero* residential
+ * land against 29 commercial, because commerce was pinned at +1 and housing at
+ * -1 for reasons that had nothing to do with either. What the gate reads now is
+ * a real imbalance, and it clears on one: twelve districts holding a quarter of
+ * their land in commerce read R -0.62 against it, and every building policy
+ * opens it inside three hours. See `demandScale`, and the third table of
+ * `npm run demand:calibrate` for the sweep that says where the signal travels.
  */
 export const SURVEY_DEMAND = 0.35;
 
