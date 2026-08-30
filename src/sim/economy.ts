@@ -1275,14 +1275,28 @@ export const crimeCrowding = (s: GameState): number => {
 /**
  * Share of the city's workforce with nowhere to go, in [0, 1].
  *
- * Against `demandScale` rather than against the workforce, and that is the one
- * thing this could not be got wrong: this game is *structurally* worker-rich —
- * jobs are per plot and workers are per resident, so a built-out level-4
- * district has 14,573 workers against 2,646 jobs and `1 - jobs/workers` reads
- * 96% at every city size. It would have been a level term wearing an
- * unemployment label. `demandScale` is the imbalance the whole demand model is
- * normalised by — DEMAND_SCALE times `cityScale` — so this is the same reading
- * `demandTargets` takes for housing, with the sign the other way up.
+ * Against the workforce, which is the reading the name promises and the one
+ * this could not have until JOBS_LADDER existed. The objection it used to carry
+ * was real: with jobs flat per plot and workers per resident, a built-out
+ * level-4 district held 14,573 workers against 2,646 jobs, so `1 - jobs/workers`
+ * read 96% at every city size and would have been a level term wearing an
+ * unemployment label. The ladder is what answers it — the same district now
+ * holds 15,840 against 10,115 — so the honest ratio is finally an honest ratio.
+ *
+ * It could not stay on `demandScale` in any case, and that is the other half of
+ * why this moved. Once the scale grew with the city (see `demandScale`), a
+ * jobless city read `workers / population`, which is WORKING_SHARE and nothing
+ * else: idleness capped at 0.55 however idle the city was, and
+ * `crimePressure`'s whole invariant — CRIME_FROM_CROWDING and
+ * CRIME_FROM_IDLENESS summing to 1 so a maximally crowded, wholly idle city
+ * reads exactly 1 — became unreachable. A quantity that cannot reach its own
+ * bound is not the quantity the constants above it were solved against.
+ *
+ * The floor is the grace, and it is the only thing left of the old denominator.
+ * A city with fewer workers than DEMAND_SCALE is measured against DEMAND_SCALE
+ * instead, so a one-house city with no shops yet reads under a percent idle
+ * rather than wholly idle, and crime does not charge a village for being a
+ * village. Above it the floor never binds and the reading is the plain ratio.
  *
  * `workers` rather than `reachableWorkers`, and the difference is worth
  * stating: a bus route delivers a worker to a job that exists, and it does not
@@ -1292,8 +1306,11 @@ export const crimeCrowding = (s: GameState): number => {
  *
  * Zero for a city with nobody in it, so a fresh save is not idle — it is empty.
  */
-export const unemployment = (s: GameState): number =>
-  Math.max(0, Math.min(1, (workers(s) - jobs(s)) / demandScale(s)));
+export const unemployment = (s: GameState): number => {
+  const force = workers(s);
+  if (force <= 0) return 0;
+  return Math.max(0, Math.min(1, (force - jobs(s)) / Math.max(force, DEMAND_SCALE)));
+};
 
 /**
  * How much crime the city would have with no police at all, in [0, 1].
@@ -2615,19 +2632,81 @@ export const jobs = (s: GameState): number =>
   estateJobs(s);
 
 /**
- * The imbalance that counts as "saturated", at the city's current level mix.
+ * The imbalance that counts as "saturated", at the city's current level mix
+ * *and* at its current size.
  *
  * DEMAND_SCALE on its own is a constant, and a constant could only ever be
- * right at one level: residents span 4 to 300 a plot, so a scale set for
+ * right at one level: residents span 4 to 1,200 a plot, so a scale set for
  * detached housing pins every signal the moment the city has towers in it —
  * which is exactly what the old build did, for about 21 hours of any 24 spent
  * playing it, and what its own comment said could only be fixed by dividing by
- * a size term rather than a constant. This is that size term. It measures the
- * imbalance in level-0 buildings, so a district out of balance reads the same
- * whatever is standing on it — and the arc survives it, because jobs are per
- * plot while workers are per resident.
+ * a size term rather than a constant. `cityScale` is that size term. It
+ * measures the imbalance in level-0 buildings, so a district out of balance
+ * reads the same whatever is standing on it — and the arc survives it, because
+ * workers climb with a plot's capacity and jobs climb with its square root.
+ *
+ * It is the wrong *kind* of size term on its own, and that was the bug that
+ * made the demand panel unreadable past the first few districts. Every quantity
+ * this divides is a city-wide total: `jobs` walks the whole commercial and
+ * industrial stock, `reachableWorkers` the whole population, `openOf` every shop
+ * in every district. All of them grow with the city. `DEMAND_SCALE * cityScale`
+ * does not — it is one district's labour pool whether the city has one district
+ * or forty-nine — so the signal measured an absolute imbalance against a fixed
+ * yardstick, and an absolute imbalance grows with the city by construction.
+ *
+ * Measured, on land split at FRONTAGE_TARGET's own ratio and built out
+ * uniformly at megastructures — a city in perfect proportion at every size,
+ * differing only in how much of it there is:
+ *
+ *   districts   R plots     jobs     workers    scale       R       C       I
+ *           1        24      584      15,840   90,000  -0.295  -0.070  -0.067
+ *           3        72    1,826      47,520   90,000  -0.633  -0.046  -0.009
+ *           5       120    3,068      79,200   90,000  -0.971  -0.010  +0.048
+ *           8       192    4,968     126,720   90,000  -1.000  +0.047  +0.130
+ *          12       288    7,452     190,080   90,000  -1.000  +0.111  +0.245
+ *          49     1,176   30,392     776,160   90,000  -1.000  +0.790  +1.000
+ *
+ * The scale column is the finding. Nothing about that city's *proportions*
+ * changes down the table and every signal diverges anyway: residential pins at
+ * the floor by the eighth district with forty-one still to annex, and industry
+ * reaches the ceiling by the last. A player reading the demand panel in a
+ * twelve-district city was reading their district count. It is also what the
+ * screenshots that opened this pass show — thirteen districts, R -97%, C +43%,
+ * I +49% — and what ZONE_SHARE's comment recorded as 990 pinned minutes of
+ * 1,440 and blamed on the land supply. The land was not the problem: that city
+ * held 2.40 commercial plots per housing plot against the 1.88 its own frontage
+ * calls for, so it was over-supplied with commerce and still read C +1.
+ *
+ * So the yardstick has to grow with the city, and `population` is the one to
+ * grow it by: every term here is ultimately a count of people or of what people
+ * do — workers, shoppers, trips — so the imbalance that saturates a signal is
+ * one whole city's worth of them. A signal now reads the city's *proportions*,
+ * which is what a demand panel is for, and every row of that table collapses
+ * onto the first.
+ *
+ * The `max` is the floor, and it is what keeps the opening exactly where it was.
+ * The two arms cross at 75 housing plots — three districts' residential
+ * frontage — so every reading the opening minute was calibrated against, RENT
+ * and HOME_BASE and the ten-minute commercial surcharge among them, is taken on
+ * the left arm and cannot move. Without it a two-house city would divide by
+ * eight people and read every signal pinned, which is this same bug standing on
+ * its head. Measured, the anchor is also where the band wants to be: at a floor
+ * of one district a settled city reads R +0.10 / C +0.28 / I +0.11 and doubling
+ * its commerce moves residential demand by 0.03, which is a mechanic the player
+ * cannot feel; at five districts' worth the first five districts drift by 0.22
+ * before the term engages. Three is where both stop being true.
+ *
+ * `population` rather than `residents`, so the yardstick is the housing the city
+ * has *built* rather than the people currently in it. A scale that shrank as a
+ * city emptied would amplify every signal exactly when the city could least
+ * answer it, which is the shape of a death spiral rather than of a measurement.
+ *
+ * `unemployment` divides by this too, and had the same bug for the same reason:
+ * a twelve-district city read 86% of its workforce idle where the same city one
+ * district wide read 13%.
  */
-export const demandScale = (s: GameState): number => DEMAND_SCALE * cityScale(s);
+export const demandScale = (s: GameState): number =>
+  Math.max(DEMAND_SCALE * cityScale(s), population(s));
 
 export const workers = (s: GameState): number => residents(s) * WORKING_SHARE;
 
@@ -3344,9 +3423,11 @@ export const income = (s: GameState): number => {
  *
  * The footprint times the level's own capacity ratio raised to POWER_EXPONENT.
  * The footprint is there for the reason SHOP_JOBS carries it — a merged building
- * stands on two plots and draws for both — and the exponent is what makes power
- * different from every other per-plot ladder in this file: jobs, trips, supply
- * and output are all flat per plot at every level, and this one is not.
+ * stands on two plots and draws for both — and the exponent puts it among the
+ * sub-linear ladders rather than beside the flat ones: JOBS_LADDER climbs at
+ * 0.5 and TRADE_LADDER at 0.65, and this at POWER_EXPONENT. A taller plot draws
+ * more, employs more and trades more, each at its own rate, and none of them as
+ * fast as it houses.
  *
  * Derived from LEVEL_CAPACITY rather than typed, so the two can never drift.
  */
