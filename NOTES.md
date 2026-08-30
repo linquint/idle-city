@@ -55,7 +55,7 @@ The rest of the cost, for completeness:
 | | today | with a fourth zone |
 | --- | --- | --- |
 | frontage numbers rejection-sampled | 4 (24/45/13/9) at 2.63% acceptance | 5, at a joint acceptance the sampler has not been measured for |
-| zone body meshes | 8, +8 shared parts, +35 models = 51 (asserted, plus the cage) | 12, +8, +40 = **60**, over `BUILDING_MESH_BUDGET` |
+| zone body meshes | 4, +8 shared parts, +55 models = 67 (asserted, plus the cage) | 8, +8, +60 = **76**, over `BUILDING_MESH_BUDGET` |
 | `ParcelBook`s | 3 | 4 |
 | demand signals | 3 | 4 |
 | per-zone save fields | 7 families × 3 | 7 families × 4 |
@@ -114,8 +114,8 @@ clothes.
 > measured for. The mesh row is the smallest of Option A's problems and it is
 > the only one this note has ever been able to price.
 >
-> A seventh and last, after housing's *fifth*: eight bodies and thirty-five
-> models, 48 -> 52, floor for a fourth zone now 60. Housing is finished — every
+> A seventh, after housing's *fifth*: eight bodies and thirty-five models,
+> 48 -> 52, floor for a fourth zone now 60. Housing is finished — every
 > rung modelled, no body mesh at any of them — so this row stops moving for
 > that reason and the next thing to move it would be a decision rather than a
 > continuation.
@@ -128,6 +128,107 @@ clothes.
 > in its **first** rung, where the buildings are. That is bad news for Option A
 > rather than good: a fourth zone's unavoidable spend is precisely the
 > expensive one, and it buys a rung nobody has asked to look at.
+>
+> An eighth, and the entry above called it: the next thing to move this row was
+> a decision rather than a continuation, and the decision was commerce's
+> *second* rung. Seven bodies and forty models, 52 -> 56, floor for a fourth
+> zone now 64. What is worth recording is that it did **not** move the argument
+> the way six continuations of housing did, because it sharpened the precedent
+> rather than extending it. The test was "a rung earns models by being a rung
+> players look at", which is loose enough that a fourth zone could have claimed
+> it; the high streets narrowed it to "a rung earns models by being the far side
+> of a promotion a player *watches happen*". A fourth zone fails the narrow test
+> more clearly than the loose one: there is no promotion to watch, because there
+> is no first rung yet. It still arrives owing five models on a rung nobody has
+> seen, and now against 64.
+>
+> The measurement came in cheaper than the row would predict, which is recorded
+> because it cuts the other way and this file is not a case for the budget being
+> soft: commerce's promotion is +13.7% on the commercial geometry and +4.7% on
+> the whole scene (`lod:calibrate` part 1g), against the walk-ups' +11.3% on the
+> scene — smaller in absolute terms despite a district carrying 45 commercial
+> plots to 24 residential, because the high street models are simpler than the
+> walk-ups. That is a fact about these five models rather than about commerce,
+> and it does not generalise to commerce's remaining rungs.
+>
+> A ninth, after commerce's *third*: six bodies and forty-five models, 56 -> 60,
+> floor for a fourth zone now 68. This is the last entry that can be written
+> without a new argument, and that is the thing worth recording rather than the
+> number. Two arguments have ever carried a rung above a first — the far side of
+> a promotion a player watches happen, which reaches a second, and the merge,
+> which reaches a third — and commerce's third was the second and final use of
+> the merge. Everything still massed is either an upper rung nobody has argued
+> for or a first rung nobody has seen, and Option A is squarely the latter.
+>
+> The measurement is recorded because it cuts against the budget's scarcity
+> rather than for it, and this row is not a case for the budget being soft:
+> commerce's merge came in at **-214,548 triangles**, 0.67x the rung below it
+> (`lod:calibrate` part 1h) — the same payback part 1e found for the arcologies,
+> because a merged rung halves the building count and a retail park is only
+> 1.33x the model a high street is. So commerce's ladder peaks at rung 2 where
+> housing's peaks at rung 3. That makes the geometry cheaper than this row has
+> ever assumed and the *draw calls* the whole of the cost, which is precisely
+> the part a fourth zone would pay in full: four bodies and five models, none of
+> it recoverable by a merge, on a rung nobody has seen.
+>
+> A tenth, after commerce's *fourth*: five bodies and fifty models, 60 -> 64,
+> floor for a fourth zone now 72. **The entry above is wrong and is corrected
+> here rather than edited, because being able to see a wrong call is the point
+> of keeping this row.** It said both arguments were spent and that nothing
+> further could be built without a new one. There were three, not two: the
+> far-side-of-a-promotion test, the merge, and the *measurement* — which carried
+> housing's fourth and fifth and which that entry failed to count while
+> declaring the shelf bare. Commerce's fourth is the measurement applied where
+> it always applied, so no new argument was needed and none was found.
+>
+> The measurement itself came back worse than it ever has, and that is the part
+> that matters for Option A rather than the correction. Housing's fourth rung
+> was -14,304 triangles; commerce's is **+50,832**, +11.9% on the commercial
+> geometry and +3.9% on the whole scene (`lod:calibrate` part 1i). An arcology
+> is simpler than a tower and an exchange is not simpler than a retail park, so
+> "a rung above the merge is free" was one outcome rather than a rule. What the
+> pinned parcel count actually guarantees is that a rung costs the difference
+> between two models — and the difference has a sign. Applied three times the
+> argument has returned -14,304, -429,876 and +50,832; the sign has now turned
+> once, which is the whole of what this correction adds.
+>
+> That leaves this row saying something sharper than it did four entries ago.
+> The measurement is the only one of the three arguments still live, it now
+> *prices* a rung rather than licensing one, and it does not reach Option A at
+> all: a fourth zone's first rung has no rung below it to differ from, so the
+> whole of its five models is new geometry on land the city has never drawn.
+> Against 72, and still owing a generator change and a fifth frontage number the
+> sampler has never been measured for.
+>
+> An eleventh, after commerce's *fifth*: four bodies and fifty-five models,
+> 64 -> 68, floor for a fourth zone now 76. Commerce is finished — every rung
+> modelled, no body mesh at any of them — so this row goes quiet for the same
+> reason it went quiet after housing. Not "last": the seventh entry said that
+> and was wrong four entries later. The only thing that can move it again is
+> industry, and see below for why that is a smaller door than it looks.
+>
+> Two things this entry settles that eight previous ones argued about. The
+> first: **all three arguments reach industry.** Its second rung is a second
+> rung, its third is the merge, its fourth and fifth sit above that merge — the
+> far-side test, the merge and the measurement each apply exactly where they
+> applied to the other two zones. This row should stop implying the arguments
+> themselves are what is holding the line, because they are not; the *value* is,
+> and industry's upper rungs are the least-looked-at surfaces in the game.
+>
+> The second: **the measurement argument has a direction, and it is the wrong
+> one.** Applied four times it has returned -14,304, -429,876, +50,832 and
+> +155,436 (`lod:calibrate` parts 1e, 1f, 1i, 1j). Housing's models got simpler
+> as they climbed and commerce's did not, so the same argument paid for
+> housing's top two rungs and charged progressively more for commerce's. Part 1k
+> is the ladder that shows it: commerce ends at 633k against its own peak of
+> 641k, where housing ends at 396k against 840k. Anyone reaching for this
+> argument on industry should measure industry rather than cite commerce.
+>
+> None of which helps Option A, and the reason is unchanged and now unarguable:
+> a fourth zone's first rung has no rung below it to differ from, so the whole
+> of its five models is new geometry on land the city has never drawn, and none
+> of the three arguments is even *about* a first rung. Against 76, a generator
+> change, and a fifth frontage number the sampler has never been measured for.
 
 ### Option B — a second building type on the commercial frontage
 

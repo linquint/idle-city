@@ -234,22 +234,25 @@ were away says nothing; anything still wrong when you look says so once.
 looks in all — and a style is a parameter set rather than a mesh: proportions, a
 colour band, how many lit window bands, and which of the shared unit-geometry
 detail parts it wears. Which one a building gets is `hash(slot, SEED)`, so it is
-stable forever, identical on every device, and nowhere in the save. **Every
-zone's first rung is the exception, and so is housing's second**, and they are a
-different kind of variety: each is drawn from five *models* rather than massed,
-and the same hash picks which. Those are the rungs the city is mostly made of
-and the ones a player looks at longest, so each gets five silhouettes instead of
-three parameter sets on a box — housing a cottage, a terrace with a bay, a
-veranda house with a dormer, a semi under a shared chimney and a flat-roofed
-modern with a carport; commerce a glazed parade shop under an awning, a corner
-unit with a projecting fin sign, an arcade on columns, a market shop with a
-striped canopy and crates on the pavement, and a cafe with a forecourt of tables
-and planters; industry a ribbed shed with roller doors, a works with silos and
-flues under the tallest stack, a loading dock with pallets on a marked apron, a
-tank farm behind a bund wall, and a mill under a sawtooth of north lights. Same
-contract: pure function of the slot and the seed, nothing stored — and the same
-hash across both of housing's modelled rungs, so the plot that was the terrace
-is the deck block when it climbs.
+stable forever, identical on every device, and nowhere in the save. **Eleven of
+the fifteen rungs are the exception — every rung of housing and of commerce, and
+industry's first** — and they are a different kind of variety: each is drawn
+from five *models* rather than massed, and the same hash picks which. Those are
+the rungs the city is mostly made of and the ones a player looks at longest, so
+each gets five silhouettes instead of three parameter sets on a box. The three
+**first** rungs, which every district starts on, are housing a cottage, a
+terrace with a bay, a veranda house with a dormer, a semi under a shared chimney
+and a flat-roofed modern with a carport; commerce a glazed parade shop under an
+awning, a corner unit with a projecting fin sign, an arcade on columns, a market
+shop with a striped canopy and crates on the pavement, and a cafe with a
+forecourt of tables and planters; industry a ribbed shed with roller doors, a
+works with silos and flues under the tallest stack, a loading dock with pallets
+on a marked apron, a tank farm behind a bund wall, and a mill under a sawtooth
+of north lights. Same contract: pure function of the slot and the seed, nothing
+stored — and the same hash across every modelled rung a zone has, so the plot
+that was the terrace is the deck block when it climbs, and the parade shop is
+the corniced block, then the pilastered parade, then the curtain wall, and
+finally the banded crown — one plot's character held across five promotions.
 
 **Housing is modelled at every rung because that is where the cliffs were.** A
 player's first promotion turned a street of five house silhouettes into
@@ -277,13 +280,63 @@ five meet the pavement at the same lit entrance portal, which is the only part
 of a megastructure a street-level camera ever sees — the variety is above, where
 it can be read from across the city.
 
-**Housing is therefore modelled at every rung, and is the only zone in the city
-with no body mesh at all.** Commerce and industry climb too, but a district
-climbs housing first and climbs it most, so their rungs above the first are
-still massed — and the honest reading is that they are worth *less* than
-housing's were rather than that they are next: a district carries 45 commercial
-plots to 24 residential, so commerce is where a rung of models would cost the
-most, and it is also the zone a player promotes last.
+**Commerce's second rung is modelled for the same reason housing's is**, and it
+is the one rung outside housing to have earned it. The cliff was identical: five
+shop silhouettes along a kerb became copies of one 3.0 x 3.2 box, in the hour
+after the one the shops were built for — so the high street is five models too,
+a corniced block under a two-step cornice, a shop with a canvas blind on arms
+below a railed roof terrace, a stepped gable climbing to a gable window, a
+corbelled oriel bay projecting over the street, and a loft floor glazed the full
+width between two lintels. All five share the *same* ground floor — the same
+piers, shopfront, door, light and pavement — and vary only above the fascia,
+because a real high street is a repeated ground-floor rhythm under upper floors
+that never match, and the variety belongs where the eye reads it.
+
+**Commerce's third is the merge, and it is modelled for the reason housing's
+third was.** Two plots become one building, which is the most consequential
+thing a player does to a district and massed it read as the same shop stretched
+to twice the width. So the retail park is five models on a 6.8 x 3.1 parcel:
+three units behind full-height pilasters under one cornice, two shopfronts set
+back behind a six-column colonnade, a department store with one sign the whole
+way along and its floors returning around both ends, a clerestory-lit market
+hall with no upper floor at all, and two units and their offices under a glazed
+stair tower standing a storey clear at one end. Four of the five run *several
+shopfronts* along one frontage under a single continuous upper block, which is
+what two plots knocked together should look like — the units legible at the
+kerb, the building above them not.
+
+**Commerce's fourth is the first modelled rung above a merge outside housing.**
+The parcel does not change from the rung below, so an exchange can only grow
+upward — and at three storeys over a shopfront the only thing that makes height
+legible is a repeated element counting the floors off. So each of the five
+commits to one: bands of curtain glazing between spandrels, a full-height glazed
+slot between two wings, a tower set back on a podium, four giant piers under one
+entablature, or every floor slab expressed as a horizontal. All three commercial
+rungs above the first still meet the kerb identically, with `transom` at 1.76 as
+the constant line where the shop stops, so a district climbs without its street
+changing.
+
+**Commerce's top rung finishes its ladder**, and it is the first thing outside
+housing to carry a beacon — `ZONE_SHAPES.shop[4].beacon` is the only true flag
+in the commercial row, and `writeModelParts` puts the lamp on the model's own
+top rather than the model carrying it. At 8.0 units these have stopped being
+buildings with countable floors and started being shapes against the sky, the
+same thing that happened to housing two rungs above its merge, so each carries
+one full-height idea: a shaft under a crown of three bands, three setback tiers
+with the roofs they free railed as terraces, three masses split by two recessed
+glazed slots, a block with a finned marker standing three storeys past it, and a
+shaft under an open louvred lantern on four piers.
+
+**So housing and commerce are both modelled at every rung, and industry at its
+first only.** Three arguments carried the eight rungs above a first. A second
+earns models by being the far side of a promotion a player watches happen; a
+third only by being the merge; and anything above that only on the measurement
+— above a merge the parcel count is pinned, so a rung is worth the difference
+between two models and the draw calls are the whole of the cost. All three would
+reach industry, whose second rung is a second and whose third is the merge. What
+has not been argued for it is the value: industry's upper rungs are the
+least-looked-at surfaces in the game. It is also the only zone still holding a
+body mesh, which is what keeps the shared part bank's roofs in use at all.
 
 A tower is the first modelled building that stands on a **merged parcel**, and
 that is a different footprint rather than a bigger one — oblong, 6.8 by 2.8, and
@@ -296,23 +349,25 @@ can end up across the frontage.
 
 ### Rendering notes
 
-The city is a handful of `InstancedMesh` draw calls — 8 bodies, one per (zone,
-level) the ladder masses, 8 shared detail parts and 35 models, plus roads, kerbs
+The city is a handful of `InstancedMesh` draw calls — 4 bodies, one per (zone,
+level) the ladder masses, 8 shared detail parts and 55 models, plus roads, kerbs
 and land tiles — so a city of four thousand buildings costs about the same as a
-city of forty. The 52 is a budget rather than an accident, and
+city of forty. The 68 is a budget rather than an accident, and
 `test/skyline.test.ts` asserts it: the naive version of the same variety is 45
-draw calls for what is fundamentally the same box. The 8 bodies are commerce and
-industry only; housing has none.
+draw calls for what is fundamentally the same box. All 4 bodies are industry's;
+housing and commerce have none.
 
-- The thirty-five models are merged by **vertex colour**, one mesh each, which
+- The fifty-five models are merged by **vertex colour**, one mesh each, which
   is the choice the bus makes and for the mirror of the bus's reason: a mesh per
   material would be 42, 44 and 43 draw calls for the three most numerous
   buildings in the city. The one thing that merge cannot carry is a light, so
   each model's lit pieces — a house's window band, a walk-up's one per floor, a
   tower's warning beacon, an arcology's eight, a pinnacle's lit entrance portal,
-  a shop's shopfront and sign, a works's bay lights and its sawtooth of north
+  a shop's shopfront and sign, a high street's the same two, a retail park's one
+  soffit light and sign per unit, a works's bay lights and its sawtooth of north
   lights — are handed to the shared band mesh that every other building already
-  wears, and the night ramp comes back for nothing. The notched shafts' eight is
+  wears, and the night ramp comes back for nothing.
+  The notched shafts' eight is
   the most any model carries and is what sizes the reserved part stride.
   Modelling housing's first rung also retired the hipped roof from the part
   bank, which had no other wearer.
@@ -344,8 +399,22 @@ industry only; housing has none.
   between two models — and the models get simpler as they climb, because a
   pinnacle is read as a shape against the sky rather than as something with
   countable floors. The expensive half of the ladder is the bottom half, which
-  is also the half a player looks at longest. `npm run lod:calibrate` parts 1b
-  to 1f are the measurements, and the note on `ModelMeshes` sets out the two
+  is also the half a player looks at longest. **Commerce climbs the same curve
+  and turns over at the same place**: 2,205 shops at 256 triangles become 2,205
+  high streets at 291 (+13.7% on the commerce, +4.7% on the whole scene — a
+  smaller step than the walk-ups' because the models are), and then the merge
+  halves the count, so 1,102 retail parks at 387 each come to *less* than the
+  rung below them: 0.67x, or -214,548 triangles. Commerce peaks at rung 2 where
+  housing peaks at rung 3, one rung earlier because commerce merges out of a
+  cheaper rung. **Above the merge the two ladders part company**, and that is
+  the thing worth carrying away: housing falls and keeps falling (-14,304 then
+  -429,876) because its models get simpler as they climb, and commerce climbs
+  back (+50,832 then +155,436) because its do not. "Free above the merge" was
+  one outcome rather than a rule — what the pinned parcel count guarantees is
+  only that a rung costs the *difference between two models*, and the difference
+  has a sign. Commerce ends at 633k against its own peak of 641k and housing at
+  396k against 840k. `npm run lod:calibrate` parts 1b to 1k are the
+  measurements, and the note on `ModelMeshes` sets out the two
   optimisations — a casting/flat split, and a silhouette geometry driven by
   `DetailMask` — that are deliberately not made until a GPU says which is
   needed. The balcony slab, 120 of whose 241 boxes are sub-pixel balcony rails,
@@ -428,8 +497,8 @@ industry only; housing has none.
   a planted quad with a campanile on the back corner, which is the shape that
   stops it reading as the city hall at a bigger footprint. All eight are
   generated from the models in `models/` — see `npm run model:parts`, which is
-  also where the five houses, walk-ups, towers, arcologies and pinnacles come
-  from.
+  also where the five houses, walk-ups, towers, arcologies, pinnacles, shops,
+  high streets, retail parks, exchanges, trade towers and works come from.
 - Two modelled things are not buildings. A **park** is a plot-sized lawn with
   paths, planting, a pond, three trees, benches and a lit lamp, drawn by `Parks`
   rather than `Buildings`; its trees used to be scattered per park by `hash01`,
@@ -448,9 +517,9 @@ industry only; housing has none.
   re-run. Every refusal so far has been that ring — the police station's yard
   wall, the stadium's stands and its seating tiers, an L of two house wings, a
   stepped shopfront, a stack of pallets, a walk-up's stair rails, the corner of
-  a deck rail and a tower's setback tiers — and the fix each time is a group per
-  segment, which leaves
-  the geometry untouched. `npm run model:solids` does exactly that split and
+  a deck rail, a tower's setback tiers and an exchange's podium terrace rail —
+  and the fix each time is a group per segment, which leaves the geometry
+  untouched. `npm run model:solids` does exactly that split and
   only where it is provably free, so re-exporting a model does not mean redoing
   it by hand: it cuts a welded lump apart only when the lump is consecutive runs
   of twelve triangles that are each an axis-aligned box, and copies everything

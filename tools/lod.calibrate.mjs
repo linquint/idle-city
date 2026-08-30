@@ -141,21 +141,34 @@ const totals = (rows) => ({
 /**
  * The whole city, standing in one scene, exactly as `View` assembles it.
  *
- * `housingAt` moves the housing cohort off `level` without moving the other two
- * zones, which is what part 1c needs to measure the promotion in isolation. It
- * is only legal between levels of the same footprint — the count `city` fitted
- * is a count of *buildings*, and a rung that stands on two plots would need
- * half as many — so it is used for 0 -> 1 and asserted rather than trusted.
+ * `at` moves one zone's cohort off `level` without moving the other two, which
+ * is what parts 1c and 1g need to measure a promotion in isolation:
+ * `{ home: 1 }` climbs housing alone, `{ shop: 1 }` climbs commerce alone. It is
+ * only legal between levels of the same footprint — the count `city` fitted is
+ * a count of *buildings*, and a rung that stands on two plots would need half
+ * as many — so it is used for 0 -> 1 and asserted rather than trusted.
+ *
+ * All three zones are listed even though only two are asked for today: a name
+ * this loop does not know would move nothing and report nothing, which is the
+ * one way a calibration can quietly measure the wrong city.
  */
-function stand(districts, level, housingAt = level) {
+const COHORTS = {
+  home: ['homes', 'homeLevels'],
+  shop: ['shops', 'shopLevels'],
+  industry: ['industry', 'industryLevels'],
+};
+
+function stand(districts, level, at = {}) {
   const state = city(districts, level);
-  if (housingAt !== level) {
-    if ((LEVEL_FOOTPRINT[housingAt] ?? 1) !== (LEVEL_FOOTPRINT[level] ?? 1)) {
-      throw new Error(`levels ${level} and ${housingAt} have different footprints`);
+  for (const [zone, [count, cohort]] of Object.entries(COHORTS)) {
+    const to = at[zone];
+    if (to === undefined || to === level) continue;
+    if ((LEVEL_FOOTPRINT[to] ?? 1) !== (LEVEL_FOOTPRINT[level] ?? 1)) {
+      throw new Error(`levels ${level} and ${to} have different footprints`);
     }
     const levels = new Array(LEVELS).fill(0);
-    levels[housingAt] = state.homes;
-    state.homeLevels = levels;
+    levels[to] = state[count];
+    state[cohort] = levels;
   }
   const root = new THREE.Scene();
   const layout = new CityLayout();
@@ -195,10 +208,12 @@ const big = stand(MAX_DISTRICTS, LEVELS - 1);
   console.log(`  instances submitted                ${thou(t.instances, 8)}`);
   console.log(`  triangles submitted                ${thou(t.tris, 8)}`);
   console.log('');
-  console.log(`  BUILDING_MESH_BUDGET is ${BUILDING_MESH_BUDGET}: the three zone ladders, the`);
-  console.log('  shared part bank and the five house models. A massed style is a parameter');
-  console.log('  set rather than a mesh and the detail parts are shared across every zone');
-  console.log('  and level, so 45 massed looks still cost fourteen bodies and eight parts.');
+  console.log(`  BUILDING_MESH_BUDGET is ${BUILDING_MESH_BUDGET}: the three zone ladders, the shared`);
+  console.log('  part bank and the construction cage. A massed style is a parameter set');
+  console.log('  rather than a mesh and the detail parts are shared across every zone and');
+  console.log('  level, so what is left massed — 12 looks across four rungs, all of them');
+  console.log('  industry — costs four bodies and eight parts, against 55 meshes for the');
+  console.log('  eleven modelled rungs.');
   console.log('');
   console.log('  the ten largest, by triangles submitted\n');
   console.log('    mesh                     instances     triangles   shadow');
@@ -290,7 +305,7 @@ console.log('');
 console.log("what modelling housing's second rung costs\n");
 {
   const houses = stand(MAX_DISTRICTS, 0);
-  const walkups = stand(MAX_DISTRICTS, 0, 1);
+  const walkups = stand(MAX_DISTRICTS, 0, { home: 1 });
   const homeRows = (root, level) =>
     submitted(root).filter((r) => r.name.startsWith(`model:home:${level}:`));
   const sum = (rows, key) => rows.reduce((n, r) => n + r[key], 0);
@@ -345,7 +360,7 @@ console.log('');
  */
 console.log('what the towers cost, and what the merge pays back\n');
 {
-  const walkups = stand(MAX_DISTRICTS, 0, 1);
+  const walkups = stand(MAX_DISTRICTS, 0, { home: 1 });
   const towers = stand(MAX_DISTRICTS, 2);
   const rows = (root, level) =>
     submitted(root).filter((r) => r.name.startsWith(`model:home:${level}:`));
@@ -460,7 +475,7 @@ console.log('');
 console.log('the whole housing ladder, rung by rung\n');
 {
   const rung = (level) => {
-    const scene = level <= 1 ? stand(MAX_DISTRICTS, 0, level) : stand(MAX_DISTRICTS, level);
+    const scene = level <= 1 ? stand(MAX_DISTRICTS, 0, { home: level }) : stand(MAX_DISTRICTS, level);
     const rows = submitted(scene.root).filter((r) => r.name.startsWith(`model:home:${level}:`));
     return {
       n: rows.reduce((a, r) => a + r.count, 0),
@@ -491,6 +506,241 @@ console.log('the whole housing ladder, rung by rung\n');
   console.log('  expensive half of this ladder is the bottom half, which is also the half');
   console.log('  a player spends the most time looking at — the spend and the value line');
   console.log('  up, which is not something that had to be true.');
+}
+console.log('');
+
+// ------------------------------------------------------- part 1g
+
+/**
+ * What modelling *commerce's* second rung costs, on the same terms as 1c.
+ *
+ * The measurement the seventh +4 on BUILDING_MESH_BUDGET has to be argued
+ * against, and the reason it is a separate part rather than a line in 1c: the
+ * note on that budget priced commerce as the expensive zone, because a district
+ * carries 45 commercial plots against 24 residential. So the same +5 -1 buys
+ * fewer buildings' worth of promotion here per triangle spent, and the number
+ * that settles whether it was worth it is this one rather than housing's.
+ *
+ * Commerce alone moves, housing and industry left on their first rung, for the
+ * reason 1c gives.
+ */
+console.log("what modelling commerce's second rung costs\n");
+{
+  const shops = stand(MAX_DISTRICTS, 0);
+  const streets = stand(MAX_DISTRICTS, 0, { shop: 1 });
+  const shopRows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:shop:${level}:`));
+  const sum = (rows, key) => rows.reduce((n, r) => n + r[key], 0);
+
+  const before = shopRows(shops.root, 0);
+  const after = shopRows(streets.root, 1);
+  const nBefore = sum(before, 'count');
+  const nAfter = sum(after, 'count');
+  const tBefore = sum(before, 'tris');
+  const tAfter = sum(after, 'tris');
+  const whole = totals(submitted(shops.root)).tris;
+  const wholeAfter = totals(submitted(streets.root)).tris;
+
+  console.log(`  districts ${MAX_DISTRICTS}, housing and industry at level 1 throughout`);
+  console.log('');
+  console.log('    commerce              buildings     triangles      each');
+  console.log(
+    `    ${'level 1, shops'.padEnd(22)}${thou(nBefore, 9)}${thou(tBefore, 14)}${thou(tBefore / Math.max(1, nBefore), 10)}`,
+  );
+  console.log(
+    `    ${'level 2, high streets'.padEnd(22)}${thou(nAfter, 9)}${thou(tAfter, 14)}${thou(tAfter / Math.max(1, nAfter), 10)}`,
+  );
+  console.log('');
+  console.log(`  The same ${nBefore.toLocaleString('en-GB')} plots, so the promotion is a swap and not an addition:`);
+  console.log(`  ${thou(tAfter - tBefore, 1)} triangles more, which is ${fixed((100 * tAfter) / tBefore - 100, 1, 1)}% on the commerce and`);
+  console.log(`  ${fixed((100 * wholeAfter) / whole - 100, 1, 1)}% on the whole scene — ${thou(whole, 1)} to ${thou(wholeAfter, 1)}.`);
+  console.log('');
+  console.log('  Massed, this rung was a box and a roof: 24 triangles a building, so the');
+  console.log(`  rung the player promotes to went from ${thou(nAfter * 24, 1)} triangles to`);
+  console.log(`  ${thou(tAfter, 1)} for five silhouettes and 4 draw calls.`);
+}
+console.log('');
+
+// ------------------------------------------------------- part 1h
+
+/**
+ * What commerce's *merge* costs, which part 1g's shape cannot measure.
+ *
+ * 1g could subtract two rungs directly because both stood on one plot and the
+ * building count was pinned. This rung is the merge — `LEVEL_FOOTPRINT` goes
+ * 1 -> 2 — so the count halves, and the question is the one part 1d asked of
+ * the towers: whether the halving covers a model that got bigger. `city` is
+ * asked for a level-2 city directly rather than patched, because it is what
+ * knows how to fit a cohort to the land when the footprint changes.
+ *
+ * Only the commercial rows are read, so the two scenes differing in what their
+ * housing is doing does not enter the comparison — which is also why there is
+ * no whole-scene percentage here and there is one in 1g.
+ */
+console.log("what commerce's merge costs, and what it pays back\n");
+{
+  const streets = stand(MAX_DISTRICTS, 0, { shop: 1 });
+  const parks = stand(MAX_DISTRICTS, 2);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:shop:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(streets.root, 1);
+  const after = rows(parks.root, 2);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce alone climbing`);
+  console.log('');
+  console.log('    commerce              buildings     triangles      each');
+  console.log(
+    `    ${'level 2, high streets'.padEnd(22)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 3, retail parks'.padEnd(22)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log('    retail park               instances     triangles');
+  for (const r of after) {
+    console.log(`    ${r.name.padEnd(25)}${thou(r.count, 10)}${thou(r.tris, 14)}`);
+  }
+  console.log('');
+  const ratio = tA / Math.max(1, tB);
+  console.log(`  A retail park is ${fixed(tA / Math.max(1, nA) / (tB / Math.max(1, nB)), 1, 2)}x the model a high street is, and the`);
+  console.log(`  merge halves the count: ${nB.toLocaleString('en-GB')} high streets become ${nA.toLocaleString('en-GB')} retail`);
+  console.log(`  parks. Net, the rung costs ${fixed(ratio, 1, 2)}x what the one below it does —`);
+  console.log(`  ${thou(tA - tB, 1)} triangles.`);
+}
+console.log('');
+
+// ------------------------------------------------------- part 1i
+
+/**
+ * What commerce's rung *above* its merge costs, on part 1e's terms.
+ *
+ * Both rungs stand on the same parcels, so the count is pinned and the reading
+ * is the two models and nothing else — the question part 1e answered for
+ * housing, asked again where the answer might differ. It does: housing's fourth
+ * rung came back *negative* because an arcology is simpler than a tower, and
+ * that is a fact about those two models rather than about merged rungs. Whether
+ * a rung above a merge is free depends entirely on which way the models go.
+ */
+console.log("what commerce's rung above the merge costs\n");
+{
+  const parks = stand(MAX_DISTRICTS, 2);
+  const exchanges = stand(MAX_DISTRICTS, 3);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:shop:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(parks.root, 2);
+  const after = rows(exchanges.root, 3);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+  const wholeB = totals(submitted(parks.root)).tris;
+  const wholeA = totals(submitted(exchanges.root)).tris;
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce alone climbing`);
+  console.log('');
+  console.log('    commerce              buildings     triangles      each');
+  console.log(
+    `    ${'level 3, retail parks'.padEnd(22)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 4, exchanges'.padEnd(22)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log(`  Same ${nA.toLocaleString('en-GB')} parcels either way — both rungs merge — so this is the models`);
+  console.log(`  and nothing else: ${thou(tA - tB, 1)} triangles, ${fixed((100 * tA) / Math.max(1, tB) - 100, 1, 1)}% on the commerce and`);
+  console.log(`  ${fixed((100 * wholeA) / Math.max(1, wholeB) - 100, 1, 1)}% on the whole scene, ${thou(wholeB, 1)} to ${thou(wholeA, 1)}.`);
+}
+console.log('');
+
+// ------------------------------------------------------- part 1j
+
+/**
+ * What commerce's *top* rung costs, on part 1i's terms.
+ *
+ * The third and last application of the pinned-parcel argument to commerce, and
+ * the one that finishes the ladder. Same parcels either way, so this is the two
+ * models and nothing else.
+ */
+console.log("what commerce's top rung costs\n");
+{
+  const exchanges = stand(MAX_DISTRICTS, 3);
+  const towers = stand(MAX_DISTRICTS, 4);
+  const rows = (root, level) =>
+    submitted(root).filter((r) => r.name.startsWith(`model:shop:${level}:`));
+  const sum = (list, key) => list.reduce((n, r) => n + r[key], 0);
+
+  const before = rows(exchanges.root, 3);
+  const after = rows(towers.root, 4);
+  const nB = sum(before, 'count');
+  const nA = sum(after, 'count');
+  const tB = sum(before, 'tris');
+  const tA = sum(after, 'tris');
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce alone climbing`);
+  console.log('');
+  console.log('    commerce              buildings     triangles      each');
+  console.log(
+    `    ${'level 4, exchanges'.padEnd(22)}${thou(nB, 9)}${thou(tB, 14)}${thou(tB / Math.max(1, nB), 10)}`,
+  );
+  console.log(
+    `    ${'level 5, trade towers'.padEnd(22)}${thou(nA, 9)}${thou(tA, 14)}${thou(tA / Math.max(1, nA), 10)}`,
+  );
+  console.log('');
+  console.log(`  Same ${nA.toLocaleString('en-GB')} parcels either way: ${thou(tA - tB, 1)} triangles, ${fixed((100 * tA) / Math.max(1, tB) - 100, 1, 1)}% on`);
+  console.log('  the commerce.');
+}
+console.log('');
+
+// ------------------------------------------------------- part 1k
+
+/**
+ * The whole commerce ladder, now that every rung of it is modelled.
+ *
+ * Part 1f's twin, and the number to quote when someone asks what modelling
+ * commerce cost. Worth reading beside it rather than alone, because the two
+ * ladders do *not* have the same shape and the difference is the useful part:
+ * housing's turns over after the merge and keeps falling, commerce's turns over
+ * at the merge and then climbs again.
+ */
+console.log('the whole commerce ladder, rung by rung\n');
+{
+  const rung = (level) => {
+    const scene = level <= 1 ? stand(MAX_DISTRICTS, 0, { shop: level }) : stand(MAX_DISTRICTS, level);
+    const rows = submitted(scene.root).filter((r) => r.name.startsWith(`model:shop:${level}:`));
+    return {
+      n: rows.reduce((a, r) => a + r.count, 0),
+      tris: rows.reduce((a, r) => a + r.tris, 0),
+    };
+  };
+  const names = ['shops', 'high streets', 'retail parks', 'exchanges', 'trade towers'];
+  const all = names.map((_, l) => rung(l));
+
+  console.log(`  districts ${MAX_DISTRICTS}, commerce alone climbing, housing and industry at level 1`);
+  console.log('');
+  console.log('    rung                   buildings     triangles      each      massed');
+  all.forEach((r, l) => {
+    console.log(
+      `    ${`${l + 1}. ${names[l]}`.padEnd(23)}${thou(r.n, 9)}${thou(r.tris, 14)}${thou(r.tris / Math.max(1, r.n), 10)}${thou(r.n * 24, 12)}`,
+    );
+  });
+  console.log('');
+  const peak = all.reduce((best, r, l) => (r.tris > all[best].tris ? l : best), 0);
+  console.log(`  Peak is rung ${peak + 1} at ${thou(all[peak].tris, 1)}, and the merge at rung 3 is what`);
+  console.log(`  turns it over: the parcel count halves there and never recovers, so the`);
+  console.log(`  top rung stands on ${all[4].n.toLocaleString('en-GB')} buildings against rung 2's ${all[1].n.toLocaleString('en-GB')}.`);
+  console.log('');
+  console.log('  Read beside part 1f: housing falls away after its merge because its models');
+  console.log('  get simpler as they climb, and commerce climbs back because its do not.');
+  console.log('  Both ladders are affordable and only one of them is affordable for the');
+  console.log('  reason the note on BUILDING_MESH_BUDGET used to give.');
 }
 console.log('');
 
